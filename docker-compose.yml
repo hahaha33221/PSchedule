@@ -1,0 +1,26 @@
+# PSchedule API — 다른 서비스와 같은 VPS에서 겹치지 않게 구성
+#   API는 127.0.0.1:${API_PORT} 에만 열고, 호스트 nginx 가 전용 주소로 넘겨줍니다 (80/443 은 건드리지 않음)
+name: pschedule
+
+services:
+  api:
+    build: .
+    image: pschedule-api:latest
+    container_name: pschedule-api
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${API_PORT:-18807}:8787" # 외부 공개 X, 같은 서버의 프록시만 접근
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-} # 첫 실행 때만 사용 (master 계정)
+    volumes:
+      - ./data:/app/data # SQLite DB
+    networks: [pschedule]
+    mem_limit: 256m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+networks:
+  pschedule:
+    name: pschedule
