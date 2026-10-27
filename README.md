@@ -53,9 +53,13 @@ ssh root@srv1809055.hstgr.cloud 'cd /opt/pschedule && docker compose logs api | 
 
 ### 프론트 (Vercel)
 
+https://pschedule.vercel.app — Vercel 프로젝트 `pschedule` (GitHub 연결 안 됨, 화면을 고치면 직접 배포). `.vercelignore` 로 `public/` 과 `vercel.json` 만 올라갑니다.
+
 ```bash
 npx --yes vercel@62 --prod --yes
 ```
+
+(폴더 이름에 대문자·점이 있어 처음 한 번은 `npx --yes vercel@62 link --yes --project pschedule` 로 연결해야 했어요.)
 
 ## 관리자 명령 (VPS)
 

@@ -1,0 +1,4 @@
+# Vercel 에는 화면(public/)만 올림 — 서버 코드·Dockerfile·요청서 원본은 올리지 않음
+/*
+!public
+!vercel.json
