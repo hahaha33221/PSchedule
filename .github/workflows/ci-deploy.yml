@@ -48,6 +48,10 @@ jobs:
           curl -fs -H "$H" -XPOST -d '{"title":"테스트","startDate":"2026-01-10"}' $B/events | grep -q '"id":1'
           curl -fs -H "$H" -XPOST -d '{"body":"댓글"}' $B/events/1/comments | grep -q '댓글'
           curl -fs -H "$H" "$B/events?from=2026-01-01&to=2026-01-31" | grep -q '"comments":1'
+          curl -fs -H "$H" -XPOST -d '{"title":"준비","meetingId":1,"phase":"before","dueDate":"2026-01-10"}' $B/tasks | grep -q '"phase":"before"'
+          curl -fs -H "$H" -XPOST -d '{"body":"메모","date":"2026-01-10","meetingId":1,"important":true}' $B/memos | grep -q '"important":true'
+          curl -fs -H "$H" -XPOST -d '{}' $B/memos/1/task | grep -q '"meetingId":1'
+          curl -fs -H "$H" "$B/tasks?date=2026-01-10&today=2026-01-10" | grep -q '준비'
           curl -fs -H "$H" -XPOST -d '{"title":"공지","body":"내용"}' $B/notices | grep -q '"id":1'
           curl -fs -H "$H" -XPOST -d '{"login":"member1","name":"멤버"}' $B/admin/users | grep -q '"password"'
 

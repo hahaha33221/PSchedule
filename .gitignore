@@ -9,3 +9,8 @@ private/
 .vercel
 *.db
 *.db-*
+
+# 요청서·초안 원본 — 커밋하지 않음
+*.xlsx
+*.xls
+*.pdf
