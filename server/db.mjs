@@ -36,6 +36,15 @@ export function openDb(file) {
       sort  INTEGER NOT NULL DEFAULT 0
     );
 
+    -- 분류: 대분류 › 중분류 › 소분류 (parent_id 로 3단계까지, 관리자가 관리). 회의·할 일·메모에 하나씩
+    CREATE TABLE IF NOT EXISTS categories (
+      id        INTEGER PRIMARY KEY,
+      parent_id INTEGER REFERENCES categories(id) ON DELETE CASCADE,
+      name      TEXT NOT NULL,
+      sort      INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS categories_parent ON categories (parent_id);
+
     -- 일정: kind 'meeting'(회의) | 'event'(일반 일정). 날짜 'YYYY-MM-DD', 시간 'HH:MM' (없으면 종일)
     CREATE TABLE IF NOT EXISTS events (
       id          INTEGER PRIMARY KEY,
@@ -133,8 +142,20 @@ export function openDb(file) {
     );
     CREATE INDEX IF NOT EXISTS comments_target ON comments (target_type, target_id);
   `);
+  addCategoryColumns(db);
   seedTags(db);
   return db;
+}
+
+// 분류가 생기기 전에 만든 DB 에 category_id 열 붙이기
+function addCategoryColumns(db) {
+  for (const table of ["events", "tasks", "memos"]) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+    if (!cols.some((c) => c.name === "category_id")) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL`);
+    }
+    db.exec(`CREATE INDEX IF NOT EXISTS ${table}_category ON ${table} (category_id)`);
+  }
 }
 
 // 처음 한 번, 자주 쓰는 태그 몇 개 (태그 관리에서 바꿀 수 있음)

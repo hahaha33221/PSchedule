@@ -25,10 +25,11 @@ const PASSWORD_MIN = 6, PASSWORD_MAX = 64;
 const MAX_BODY = 64 * 1024;
 const LIMITS = {
   title: 80, location: 80, description: 3000, agendaItem: 200, agendaItems: 30, notice: 5000,
-  comment: 1000, name: 20, userTitle: 20, memo: 3000, tag: 20, taskNote: 2000, linkTitle: 80, url: 1000
+  comment: 1000, name: 20, userTitle: 20, memo: 3000, tag: 20, category: 30, taskNote: 2000, linkTitle: 80, url: 1000
 };
 const COLORS = 6; // 태그 색 개수 (public/styles.css 의 --c0 ~ --c5)
 const STATUSES = ["todo", "doing", "done"];
+const CATEGORY_DEPTH = 3; // 대분류 › 중분류 › 소분류
 
 const db = openDb(join(DATA_DIR, "pschedule.db"));
 const created = ensureAdmin(db);
@@ -60,6 +61,18 @@ const q = {
   setTag: db.prepare("UPDATE tags SET name = ?, color = ? WHERE id = ?"),
   delTag: db.prepare("DELETE FROM tags WHERE id = ?"),
 
+  // 분류
+  categories: db.prepare("SELECT id, parent_id, name FROM categories ORDER BY sort, id"),
+  category: db.prepare("SELECT * FROM categories WHERE id = ?"),
+  categoryByName: db.prepare("SELECT * FROM categories WHERE name = ? AND parent_id IS ?"),
+  siblings: db.prepare("SELECT * FROM categories WHERE parent_id IS ? ORDER BY sort, id"),
+  addCategory: db.prepare("INSERT INTO categories (parent_id, name, sort) VALUES (?, ?, (SELECT coalesce(max(sort), 0) + 1 FROM categories WHERE parent_id IS ?))"),
+  setCategoryName: db.prepare("UPDATE categories SET name = ? WHERE id = ?"),
+  setCategorySort: db.prepare("UPDATE categories SET sort = ? WHERE id = ?"),
+  delCategory: db.prepare("DELETE FROM categories WHERE id = ?"),
+  // 지우는 분류(와 그 아래)에 붙어 있던 회의·할 일·메모는 한 단계 위 분류로
+  moveCategoryItems: ["events", "tasks", "memos"].map((t) => db.prepare(`UPDATE ${t} SET category_id = ? WHERE category_id IN (SELECT value FROM json_each(?))`)),
+
   // 일정 (기간이 겹치는 것)
   events: db.prepare(`
     SELECT e.*, u.name AS author,
@@ -80,10 +93,10 @@ const q = {
     SELECT id, title, start_date, start_time FROM events
     WHERE kind = 'meeting' AND end_date >= ? AND start_date <= ?
     ORDER BY abs(julianday(start_date) - julianday(?)), start_time, id LIMIT 40`),
-  addEvent: db.prepare(`INSERT INTO events (kind, title, start_date, end_date, start_time, end_time, location, description, agenda, created_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
+  addEvent: db.prepare(`INSERT INTO events (kind, title, start_date, end_date, start_time, end_time, location, description, agenda, category_id, created_by)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
   setEvent: db.prepare(`UPDATE events SET kind = ?, title = ?, start_date = ?, end_date = ?, start_time = ?, end_time = ?,
-    location = ?, description = ?, agenda = ?, updated_at = datetime('now') WHERE id = ?`),
+    location = ?, description = ?, agenda = ?, category_id = ?, updated_at = datetime('now') WHERE id = ?`),
   delEvent: db.prepare("DELETE FROM events WHERE id = ?"),
   eventTags: db.prepare("SELECT event_id AS id, tag_id FROM event_tags WHERE event_id IN (SELECT value FROM json_each(?))"),
   eventAttendees: db.prepare("SELECT event_id AS id, user_id FROM event_attendees WHERE event_id IN (SELECT value FROM json_each(?))"),
@@ -99,9 +112,9 @@ const q = {
   // 할 일
   taskCols: `t.*, e.title AS meeting_title, e.start_date AS meeting_date, e.start_time AS meeting_time`,
   task: null, // 아래에서
-  addTask: db.prepare(`INSERT INTO tasks (title, due_date, status, assignee_id, meeting_id, phase, note, created_by, done_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'done' THEN datetime('now') END)`),
-  setTask: db.prepare(`UPDATE tasks SET title = ?, due_date = ?, status = ?, assignee_id = ?, meeting_id = ?, phase = ?, note = ?,
+  addTask: db.prepare(`INSERT INTO tasks (title, due_date, status, assignee_id, meeting_id, phase, note, category_id, created_by, done_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'done' THEN datetime('now') END)`),
+  setTask: db.prepare(`UPDATE tasks SET title = ?, due_date = ?, status = ?, assignee_id = ?, meeting_id = ?, phase = ?, note = ?, category_id = ?,
     done_at = CASE WHEN ? = 'done' THEN coalesce(done_at, datetime('now')) END, updated_at = datetime('now') WHERE id = ?`),
   delTask: db.prepare("DELETE FROM tasks WHERE id = ?"),
   taskTags: db.prepare("SELECT task_id AS id, tag_id FROM task_tags WHERE task_id IN (SELECT value FROM json_each(?))"),
@@ -110,8 +123,8 @@ const q = {
 
   // 메모
   memoCols: `m.*, u.name AS author, e.title AS meeting_title, e.start_date AS meeting_date`,
-  addMemo: db.prepare("INSERT INTO memos (body, memo_date, meeting_id, important, created_by) VALUES (?, ?, ?, ?, ?)"),
-  setMemo: db.prepare("UPDATE memos SET body = ?, memo_date = ?, meeting_id = ?, important = ?, updated_at = datetime('now') WHERE id = ?"),
+  addMemo: db.prepare("INSERT INTO memos (body, memo_date, meeting_id, important, category_id, created_by) VALUES (?, ?, ?, ?, ?, ?)"),
+  setMemo: db.prepare("UPDATE memos SET body = ?, memo_date = ?, meeting_id = ?, important = ?, category_id = ?, updated_at = datetime('now') WHERE id = ?"),
   setMemoTask: db.prepare("UPDATE memos SET task_id = ? WHERE id = ?"),
   delMemo: db.prepare("DELETE FROM memos WHERE id = ?"),
 
@@ -268,6 +281,34 @@ function inTx(fn) {
   try { const r = fn(); db.exec("COMMIT"); return r; } catch (e) { db.exec("ROLLBACK"); throw e; }
 }
 
+/* ----- 분류 ----- */
+const categoriesOut = () => q.categories.all().map((c) => ({ id: c.id, parentId: c.parent_id, name: c.name }));
+function categoryDepth(id) {
+  let n = 0;
+  for (let c = q.category.get(id); c; c = c.parent_id ? q.category.get(c.parent_id) : null) n++;
+  return n;
+}
+function subtreeIds(id) {
+  const all = q.categories.all(), out = [id];
+  for (let i = 0; i < out.length; i++) for (const c of all) if (c.parent_id === out[i]) out.push(c.id);
+  return out;
+}
+function addCategory(parentId, raw) {
+  const name = text(raw, LIMITS.category, "분류 이름", true);
+  if (parentId && !q.category.get(parentId)) throw bad("위 분류를 찾을 수 없어요.");
+  if (parentId && categoryDepth(parentId) >= CATEGORY_DEPTH) throw bad("분류는 대분류 › 중분류 › 소분류 3단계까지 만들 수 있어요.");
+  const same = q.categoryByName.get(name, parentId);
+  if (same) return { id: same.id, created: false };
+  return { id: Number(q.addCategory.run(parentId, name, parentId).lastInsertRowid), created: true };
+}
+// 회의·할 일·메모의 분류: 안 보냈으면 고칠 땐 그대로, 새로 만들 땐 fallback (연결한 회의의 분류)
+function categoryOf(b, cur, fallback) {
+  if (!has(b, "categoryId")) return cur ? cur.category_id : fallback ?? null;
+  const id = idOrNull(b.categoryId);
+  if (id && !q.category.get(id)) throw bad("분류를 찾을 수 없어요. 지워졌을 수 있어요.");
+  return id;
+}
+
 /* ----- 일정 ----- */
 // PATCH 는 기존 값에 바뀐 값만 덮어써서 전체를 다시 검사
 function eventInput(b, cur) {
@@ -290,7 +331,7 @@ function eventInput(b, cur) {
   return [kind, title, start, end, st, et,
     text(get("location", cur?.location), LIMITS.location, "장소"),
     text(get("description", cur?.description), LIMITS.description, "개요"),
-    JSON.stringify(agenda)];
+    JSON.stringify(agenda), categoryOf(b, cur)];
 }
 function saveEventRelations(id, b) {
   if (has(b, "tagIds")) { q.clearEventTags.run(id); for (const t of ids(b.tagIds)) q.addEventTag.run(id, t); }
@@ -301,7 +342,7 @@ function eventsOut(rows, user) {
   const att = groupBy(q.eventAttendees, rows, "user_id");
   return rows.map((e) => ({
     id: e.id, kind: e.kind, title: e.title, startDate: e.start_date, endDate: e.end_date, startTime: e.start_time, endTime: e.end_time,
-    location: e.location, tagIds: tags.get(e.id), attendeeIds: att.get(e.id), author: e.author, createdBy: e.created_by,
+    location: e.location, categoryId: e.category_id, tagIds: tags.get(e.id), attendeeIds: att.get(e.id), author: e.author, createdBy: e.created_by,
     openTasks: e.open_tasks, importantMemos: e.important_memos, comments: e.comments,
     canDelete: user.role === "admin" || e.created_by === user.id
   }));
@@ -318,9 +359,10 @@ function taskInput(b, cur) {
   const assignee = idOrNull(get("assigneeId", cur?.assignee_id));
   if (assignee && !q.userExists.get(assignee)) throw bad("담당자를 찾을 수 없어요.");
   const meeting = idOrNull(get("meetingId", cur?.meeting_id));
-  if (meeting && !q.event.get(meeting)) throw bad("연결할 회의를 찾을 수 없어요.");
+  const ev = meeting && q.event.get(meeting);
+  if (meeting && !ev) throw bad("연결할 회의를 찾을 수 없어요.");
   const phase = meeting ? (get("phase", cur?.phase) === "before" ? "before" : "after") : null;
-  return [title, due, status, assignee, meeting, phase, text(get("note", cur?.note), LIMITS.taskNote, "메모")];
+  return [title, due, status, assignee, meeting, phase, text(get("note", cur?.note), LIMITS.taskNote, "메모"), categoryOf(b, cur, ev?.category_id)];
 }
 function saveTaskTags(id, b) {
   if (has(b, "tagIds")) { q.clearTaskTags.run(id); for (const t of ids(b.tagIds)) q.addTaskTag.run(id, t); }
@@ -330,7 +372,7 @@ function tasksOut(rows, user) {
   return rows.map((t) => ({
     id: t.id, title: t.title, dueDate: t.due_date, status: t.status, assigneeId: t.assignee_id,
     meetingId: t.meeting_id, meetingTitle: t.meeting_title, meetingDate: t.meeting_date, meetingTime: t.meeting_time,
-    phase: t.phase, note: t.note, tagIds: tags.get(t.id), doneAt: t.done_at, createdBy: t.created_by,
+    phase: t.phase, note: t.note, categoryId: t.category_id, tagIds: tags.get(t.id), doneAt: t.done_at, createdBy: t.created_by,
     canDelete: user.role === "admin" || t.created_by === user.id || t.assignee_id === user.id
   }));
 }
@@ -338,7 +380,7 @@ function tasksOut(rows, user) {
 /* ----- 메모 ----- */
 const memoOut = (m, user) => ({
   id: m.id, body: m.body, date: m.memo_date, meetingId: m.meeting_id, meetingTitle: m.meeting_title, meetingDate: m.meeting_date,
-  important: !!m.important, taskId: m.task_id, author: m.author || "(탈퇴한 멤버)", createdAt: m.created_at, updatedAt: m.updated_at,
+  important: !!m.important, categoryId: m.category_id, taskId: m.task_id, author: m.author || "(탈퇴한 멤버)", createdAt: m.created_at, updatedAt: m.updated_at,
   canEdit: user.role === "admin" || m.created_by === user.id
 });
 function memoInput(b, cur) {
@@ -347,8 +389,9 @@ function memoInput(b, cur) {
   const date = get("date", cur?.memo_date);
   if (!isDate(date)) throw bad("메모 날짜를 확인해 주세요.");
   const meeting = idOrNull(get("meetingId", cur?.meeting_id));
-  if (meeting && !q.event.get(meeting)) throw bad("연결할 회의를 찾을 수 없어요.");
-  return [body, date, meeting, get("important", !!cur?.important) ? 1 : 0];
+  const ev = meeting && q.event.get(meeting);
+  if (meeting && !ev) throw bad("연결할 회의를 찾을 수 없어요.");
+  return [body, date, meeting, get("important", !!cur?.important) ? 1 : 0, categoryOf(b, cur, ev?.category_id)];
 }
 
 const commentOut = (c, user) => ({
@@ -401,9 +444,9 @@ async function api(req, res, path) {
     return send(res, 204);
   }
 
-  // 화면을 그리는 데 늘 필요한 것: 나, 팀원, 태그
+  // 화면을 그리는 데 늘 필요한 것: 나, 팀원, 태그, 분류
   if (path === "/api/me" && method === "GET") {
-    return send(res, 200, { user: publicUser(user), team: q.team.all(), tags: q.tags.all() });
+    return send(res, 200, { user: publicUser(user), team: q.team.all(), tags: q.tags.all(), categories: categoriesOut() });
   }
 
   // 비밀번호 변경 (본인)
@@ -450,6 +493,66 @@ async function api(req, res, path) {
     if (method === "DELETE") {
       q.delTag.run(t.id); // 붙어 있던 곳에서도 빠짐
       return send(res, 200, { tags: q.tags.all() });
+    }
+    return send(res, 405, { error: "Method not allowed" });
+  }
+
+  /* ----- 분류 (관리자만 고침) ----- */
+  if (path.startsWith("/api/categories")) {
+    if (!isAdmin) return send(res, 403, { error: "분류는 관리자만 고칠 수 있어요." });
+    if (path === "/api/categories" && method === "POST") {
+      const b = await readJson(req);
+      const r = addCategory(idOrNull(b.parentId), b.name);
+      if (!r.created) throw bad("같은 자리에 이미 있는 분류예요.");
+      return send(res, 201, { id: r.id, categories: categoriesOut() });
+    }
+    // 여러 줄 한 번에: 한 줄에 '대분류 > 중분류 > 소분류', 없는 것만 만듦
+    if (path === "/api/categories/bulk" && method === "POST") {
+      const lines = String((await readJson(req)).text ?? "").split(/\n/).map((l) => l.trim()).filter(Boolean);
+      if (lines.length > 500) throw bad("한 번에 500줄까지 넣을 수 있어요.");
+      const added = inTx(() => {
+        let n = 0;
+        for (const line of lines) {
+          const parts = line.split(/\s*[>›]\s*/).filter(Boolean);
+          if (parts.length > CATEGORY_DEPTH) throw bad(`'${line}' — 분류는 3단계까지예요.`);
+          let parent = null;
+          for (const p of parts) { const r = addCategory(parent, p); parent = r.id; if (r.created) n++; }
+        }
+        return n;
+      });
+      return send(res, 200, { added, categories: categoriesOut() });
+    }
+    const cm = path.match(/^\/api\/categories\/(\d+)$/);
+    const c = cm && q.category.get(Number(cm[1]));
+    if (!c) return send(res, 404, { error: "분류를 찾을 수 없어요." });
+    if (method === "PATCH") {
+      const b = await readJson(req);
+      inTx(() => {
+        if (has(b, "name")) {
+          const name = text(b.name, LIMITS.category, "분류 이름", true);
+          const same = q.categoryByName.get(name, c.parent_id);
+          if (same && same.id !== c.id) throw bad("같은 자리에 이미 있는 분류예요.");
+          q.setCategoryName.run(name, c.id);
+        }
+        // 같은 단계 안에서 위·아래로
+        if (b.move === -1 || b.move === 1) {
+          const list = q.siblings.all(c.parent_id);
+          const i = list.findIndex((x) => x.id === c.id), j = i + b.move;
+          if (j >= 0 && j < list.length) {
+            [list[i], list[j]] = [list[j], list[i]];
+            list.forEach((x, k) => q.setCategorySort.run(k + 1, x.id));
+          }
+        }
+      });
+      return send(res, 200, { categories: categoriesOut() });
+    }
+    if (method === "DELETE") {
+      inTx(() => {
+        const ids = JSON.stringify(subtreeIds(c.id));
+        for (const s of q.moveCategoryItems) s.run(c.parent_id, ids);
+        q.delCategory.run(c.id); // 아래 분류도 함께 지워짐
+      });
+      return send(res, 200, { categories: categoriesOut() });
     }
     return send(res, 405, { error: "Method not allowed" });
   }
@@ -577,7 +680,7 @@ async function api(req, res, path) {
     if (mm[2]) {
       if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
       const b = await readJson(req);
-      const input = taskInput({ title: b.title || m.body.split("\n")[0].slice(0, LIMITS.title), dueDate: b.dueDate, assigneeId: b.assigneeId, meetingId: m.meeting_id, phase: "after", note: m.body.includes("\n") ? m.body : "" });
+      const input = taskInput({ title: b.title || m.body.split("\n")[0].slice(0, LIMITS.title), dueDate: b.dueDate, assigneeId: b.assigneeId, meetingId: m.meeting_id, phase: "after", note: m.body.includes("\n") ? m.body : "", categoryId: has(b, "categoryId") ? b.categoryId : m.category_id });
       const id = inTx(() => {
         const id = Number(q.addTask.run(...input, user.id, input[2]).lastInsertRowid);
         saveTaskTags(id, b);
