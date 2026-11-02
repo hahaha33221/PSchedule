@@ -36,7 +36,7 @@ export function openDb(file) {
       sort  INTEGER NOT NULL DEFAULT 0
     );
 
-    -- 조직도: 조직 단위 (3단계까지, 관리자가 관리). 멤버의 '소속' (users.unit_id) 이 됨. 분류(업무 주제)와는 따로
+    -- 조직도: 조직 단위 (위원회 › 본부 › 부 › 분과 › 팀, 5단계까지, 관리자가 관리). 멤버의 '소속' (users.unit_id) 이 됨. 분류(업무 주제)와는 따로
     CREATE TABLE IF NOT EXISTS org_units (
       id         INTEGER PRIMARY KEY,
       parent_id  INTEGER REFERENCES org_units(id) ON DELETE CASCADE,
@@ -46,6 +46,19 @@ export function openDb(file) {
       sort       INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS org_units_parent ON org_units (parent_id);
+    -- 조직도의 자리 (직함·이름). PSchedule 계정과는 따로 (대부분 계정 없음), user_id 로 골라서 연결
+    -- 한 사람이 여러 자리를 겸할 수 있음. name 이 비면 공석
+    CREATE TABLE IF NOT EXISTS org_positions (
+      id      INTEGER PRIMARY KEY,
+      unit_id INTEGER NOT NULL REFERENCES org_units(id) ON DELETE CASCADE,
+      title   TEXT NOT NULL DEFAULT '',
+      name    TEXT NOT NULL DEFAULT '',
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      note    TEXT NOT NULL DEFAULT '',
+      sort    INTEGER NOT NULL DEFAULT 0 -- 표의 순번
+    );
+    CREATE INDEX IF NOT EXISTS org_positions_unit ON org_positions (unit_id);
+    CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
     -- 분류: 대분류 › 중분류 › 소분류 (parent_id 로 3단계까지, 관리자가 관리). 회의·할 일·메모에 하나씩
     CREATE TABLE IF NOT EXISTS categories (

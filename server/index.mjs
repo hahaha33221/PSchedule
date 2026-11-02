@@ -32,12 +32,12 @@ const PASSWORD_MIN = 6, PASSWORD_MAX = 64;
 const MAX_BODY = 64 * 1024;
 const LIMITS = {
   title: 80, location: 80, description: 3000, agendaItem: 200, agendaItems: 30, notice: 5000,
-  comment: 1000, name: 20, userTitle: 20, memo: 3000, tag: 20, category: 30, calendarName: 30, unitName: 30, unitShort: 12, userNote: 200, taskNote: 2000, linkTitle: 80, url: 1000
+  comment: 1000, name: 20, userTitle: 20, memo: 3000, tag: 20, category: 30, calendarName: 30, unitName: 30, unitShort: 12, userNote: 200, posTitle: 30, posName: 30, posNote: 200, taskNote: 2000, linkTitle: 80, url: 1000
 };
 const COLORS = 6; // 태그 색 개수 (public/styles.css 의 --c0 ~ --c5)
 const STATUSES = ["todo", "doing", "done"];
 const CATEGORY_DEPTH = 3; // 대분류 › 중분류 › 소분류
-const UNIT_DEPTH = 3;     // 조직도도 3단계까지 (예: 조직위원회 › 운영총괄부 › 식음료팀)
+const UNIT_DEPTH = 5;     // 조직도는 5단계까지 (위원회 › 본부 › 부 › 분과 › 팀)
 
 const db = openDb(join(DATA_DIR, "pschedule.db"));
 const created = ensureAdmin(db);
@@ -65,7 +65,10 @@ const q = {
   userExists: db.prepare("SELECT 1 FROM users WHERE id = ?"),
 
   // 태그
-  tags: db.prepare("SELECT id, name, color FROM tags ORDER BY sort, id"),
+  // uses: 일정·할 일에 붙은 횟수 (사이드바 '자주 쓰는 태그' 순서)
+  tags: db.prepare(`SELECT t.id, t.name, t.color,
+    (SELECT count(*) FROM event_tags x WHERE x.tag_id = t.id) + (SELECT count(*) FROM task_tags x WHERE x.tag_id = t.id) AS uses
+    FROM tags t ORDER BY t.sort, t.id`),
   tag: db.prepare("SELECT * FROM tags WHERE id = ?"),
   tagByName: db.prepare("SELECT * FROM tags WHERE name = ?"),
   addTag: db.prepare("INSERT INTO tags (name, color, sort) VALUES (?, ?, (SELECT coalesce(max(sort), 0) + 1 FROM tags))"),
@@ -85,6 +88,19 @@ const q = {
   liftUnitChildren: db.prepare("UPDATE org_units SET parent_id = ? WHERE parent_id = ?"),
   liftUnitUsers: db.prepare("UPDATE users SET unit_id = ? WHERE unit_id = ?"),
   liftUnitCalendars: db.prepare("UPDATE calendars SET unit_id = ? WHERE unit_id = ?"),
+  liftUnitPositions: db.prepare("UPDATE org_positions SET unit_id = ? WHERE unit_id = ?"),
+  // 조직도 자리
+  positions: db.prepare("SELECT * FROM org_positions ORDER BY sort, id"),
+  position: db.prepare("SELECT * FROM org_positions WHERE id = ?"),
+  addPosition: db.prepare("INSERT INTO org_positions (unit_id, title, name, user_id, note, sort) VALUES (?, ?, ?, ?, ?, ?)"),
+  setPosition: db.prepare("UPDATE org_positions SET unit_id = ?, title = ?, name = ?, user_id = ?, note = ? WHERE id = ?"),
+  setPositionSort: db.prepare("UPDATE org_positions SET sort = ? WHERE id = ?"),
+  delPosition: db.prepare("DELETE FROM org_positions WHERE id = ?"),
+  maxPositionSort: db.prepare("SELECT coalesce(max(sort), 0) AS n FROM org_positions"),
+  linkedInUnits: db.prepare("SELECT DISTINCT user_id AS id FROM org_positions WHERE user_id IS NOT NULL AND unit_id IN (SELECT value FROM json_each(?))"),
+  setting: db.prepare("SELECT value FROM settings WHERE key = ?"),
+  setSetting: db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value"),
+  setUserUnitIfEmpty: db.prepare("UPDATE users SET unit_id = ? WHERE id = ? AND unit_id IS NULL"),
   setUserUnit: db.prepare("UPDATE users SET unit_id = ? WHERE id = ?"),
   usersInUnits: db.prepare("SELECT id FROM users WHERE unit_id IN (SELECT value FROM json_each(?)) ORDER BY name, id"),
   calendarsInUnits: db.prepare("SELECT count(*) AS n FROM calendars WHERE unit_id IN (SELECT value FROM json_each(?))"),
@@ -360,7 +376,7 @@ const unitIdOrNull = (v) => {
 function addUnit(parentId, raw, short = "", leadId = null) {
   const name = text(raw, LIMITS.unitName, "조직 이름", true);
   if (parentId && !q.unit.get(parentId)) throw bad("상위 조직을 찾을 수 없어요.");
-  if (parentId && unitDepth(parentId) >= UNIT_DEPTH) throw bad("조직은 3단계까지 만들 수 있어요.");
+  if (parentId && unitDepth(parentId) >= UNIT_DEPTH) throw bad(`조직은 ${UNIT_DEPTH}단계까지 만들 수 있어요.`);
   const same = q.unitByName.get(name, parentId);
   if (same) return { id: same.id, created: false };
   return { id: Number(q.addUnit.run(parentId, name, text(short, LIMITS.unitShort, "약칭"), leadId, parentId).lastInsertRowid), created: true };
@@ -369,12 +385,106 @@ function addUnit(parentId, raw, short = "", leadId = null) {
 function placeUnit(u, parentId, index) {
   if (parentId) {
     if (unitSubtree(u.id).includes(parentId)) throw bad("자기 아래 조직으로는 옮길 수 없어요.");
-    if (unitDepth(parentId) + unitHeight(u.id) > UNIT_DEPTH) throw bad("옮기면 3단계를 넘어요.");
+    if (unitDepth(parentId) + unitHeight(u.id) > UNIT_DEPTH) throw bad(`옮기면 ${UNIT_DEPTH}단계를 넘어요.`);
   }
   const sibs = q.unitSiblings.all(parentId).filter((x) => x.id !== u.id);
   const at = Number.isInteger(index) ? Math.max(0, Math.min(index, sibs.length)) : sibs.length;
   sibs.splice(at, 0, u);
   sibs.forEach((x, i) => q.setUnitPlace.run(parentId, i + 1, x.id));
+}
+
+// 조직의 사람: 소속(unit_id)으로 정한 계정 + 그 조직 자리에 연결한 계정
+function unitUserIds(scopeIds) {
+  const scope = JSON.stringify(scopeIds);
+  const set = new Set(q.usersInUnits.all(scope).map((x) => x.id));
+  for (const x of q.linkedInUnits.all(scope)) set.add(x.id);
+  return [...set];
+}
+
+/* ----- 조직도 자리 (엑셀 표: 본부 | 부서('부' 또는 '부 / 팀') | 직함 | 이름 | 비고) ----- */
+const positionsOut = () => q.positions.all().map((p) => ({ id: p.id, unitId: p.unit_id, title: p.title, name: p.name, userId: p.user_id, note: p.note, sort: p.sort }));
+const orgOut = () => ({ units: unitsOut(), positions: positionsOut(), baseDate: q.setting.get("org_base_date")?.value || "" });
+const cleanName = (v) => String(v ?? "").normalize("NFC").replace(/\s+/g, " ").trim();
+function rootUnit() {
+  const roots = q.unitSiblings.all(null);
+  return roots[0] ? roots[0].id : addUnit(null, "조직위원회").id;
+}
+function findDescendant(parentId, name) { // 분과 아래로 옮겨 둔 팀도 찾음 (가까운 것 먼저)
+  const queue = [parentId];
+  while (queue.length) {
+    const kids = q.unitSiblings.all(queue.shift());
+    const hit = kids.find((k) => k.name === name);
+    if (hit) return hit.id;
+    queue.push(...kids.map((k) => k.id));
+  }
+  return null;
+}
+// 본부·부·팀 이름 → 조직 id (없으면 만듦). '공통'·'위원회 직속' 은 위원회, '본부 직속' 은 본부
+function resolveUnit(hqRaw, deptRaw, teamRaw) {
+  const hq = cleanName(hqRaw), dept = cleanName(deptRaw), team = cleanName(teamRaw);
+  const root = rootUnit();
+  if (!hq || hq === "공통" || hq === q.unit.get(root).name) {
+    if (!dept || /직속$/.test(dept)) return root;
+  }
+  const hqId = !hq || hq === "공통" ? root : (q.unitByName.get(hq, root)?.id ?? addUnit(root, hq).id);
+  if (!dept || /직속$/.test(dept)) return hqId;
+  const deptId = q.unitByName.get(dept, hqId)?.id ?? addUnit(hqId, dept).id;
+  if (!team) return deptId;
+  return findDescendant(deptId, team) ?? addUnit(deptId, team).id;
+}
+// 엑셀 '부서' 칸: '재무부 / 재무관리팀'
+const splitDept = (v) => { const [d, ...t] = String(v ?? "").split("/").map((x) => x.trim()); return [d || "", t.join(" / ")]; };
+function positionInput(b, cur) {
+  const get = (k, c) => (has(b, k) ? b[k] : c);
+  let unit = cur?.unit_id;
+  if (has(b, "path")) { const [d, t] = has(b.path, "team") ? [b.path.dept, b.path.team] : splitDept(b.path.dept); unit = resolveUnit(b.path.hq, d, t); }
+  else if (has(b, "unitId")) unit = unitIdOrNull(b.unitId);
+  if (!unit) unit = rootUnit();
+  const user = idOrNull(get("userId", cur?.user_id));
+  if (user && !q.userExists.get(user)) throw bad("계정을 찾을 수 없어요.");
+  return [unit, text(get("title", cur?.title), LIMITS.posTitle, "직함"), cleanName(text(get("name", cur?.name), LIMITS.posName, "이름")), user, text(get("note", cur?.note), LIMITS.posNote, "비고")];
+}
+// 표의 순번 다시 매기기 (id 목록 순서대로)
+function renumber(ids) { ids.forEach((id, i) => q.setPositionSort.run((i + 1) * 10, id)); }
+
+// 엑셀 행과 지금 조직도 비교: 이름으로 맞추고, 조직·직함이 다르면 '이동', 없으면 '추가', 엑셀에 없는 이름은 '빠짐' (공석은 그대로 둠)
+function orgDiff(rowsRaw) {
+  if (!Array.isArray(rowsRaw) || !rowsRaw.length) throw bad("불러온 줄이 없어요.");
+  if (rowsRaw.length > 2000) throw bad("2000줄까지 불러올 수 있어요.");
+  const rows = rowsRaw.map((r, i) => {
+    const [dept, team] = splitDept(r.dept);
+    return { i, hq: cleanName(r.hq), dept: cleanName(dept), team: cleanName(team), title: cleanName(r.title).slice(0, LIMITS.posTitle), name: cleanName(r.name).slice(0, LIMITS.posName), note: String(r.note ?? "").trim().slice(0, LIMITS.posNote) };
+  }).filter((r) => r.name || r.title);
+  const units = q.units.all();
+  const byId = new Map(units.map((u) => [u.id, u]));
+  const pathOf = (id) => { const out = []; for (let u = byId.get(id); u; u = byId.get(u.parent_id)) out.unshift(u.name); return out; };
+  // 지금 자리의 '엑셀식' 위치 (본부 / 부 / 팀 이름)
+  const existing = q.positions.all().filter((p) => p.name);
+  const placeOf = (p) => { const path = pathOf(p.unit_id); return { hq: path[1] || "", dept: path[2] || "", team: path.length > 3 ? path[path.length - 1] : "" }; };
+  const label = (x) => [x.hq || "위원회", x.dept, x.team].filter(Boolean).join(" › ");
+  const used = new Set(), out = { same: [], add: [], move: [], remove: [] };
+  const samePlace = (p, r) => { const a = placeOf(p); return a.hq === (r.hq === "공통" ? "" : r.hq) && a.dept === (/직속$/.test(r.dept) ? "" : r.dept) && a.team === r.team; };
+  // 1차: 이름·위치·직함 모두 같은 것, 2차: 이름·위치, 3차: 이름만
+  const passes = [(p, r) => samePlace(p, r) && p.title === r.title, (p, r) => samePlace(p, r), () => true];
+  const match = new Map();
+  for (const test of passes) {
+    for (const r of rows) {
+      if (match.has(r.i) || !r.name) continue;
+      const p = existing.find((x) => !used.has(x.id) && x.name === r.name && test(x, r));
+      if (p) { match.set(r.i, p); used.add(p.id); }
+    }
+  }
+  for (const r of rows) {
+    const p = match.get(r.i);
+    const to = { hq: r.hq === "공통" ? "" : r.hq, dept: /직속$/.test(r.dept) ? "" : r.dept, team: r.team };
+    if (!p) out.add.push({ row: r.i, name: r.name || "(공석)", what: `${label(to)} ${r.title}`.trim() });
+    else if (!samePlace(p, r) || p.title !== r.title || (r.note && r.note !== p.note)) {
+      const from = placeOf(p);
+      out.move.push({ row: r.i, id: p.id, name: r.name, what: samePlace(p, r) ? `${p.title} → ${r.title}${r.note && r.note !== p.note ? " (비고)" : ""}` : `${label(from)} ${p.title} → ${label(to)} ${r.title}` });
+    } else out.same.push(r.i);
+  }
+  for (const p of existing) if (!used.has(p.id)) out.remove.push({ id: p.id, name: p.name, what: `${label(placeOf(p))} ${p.title}`.trim() });
+  return { rows, match, out };
 }
 
 /* ----- 외부 캘린더 ----- */
@@ -620,13 +730,30 @@ async function api(req, res, path) {
     return send(res, 405, { error: "Method not allowed" });
   }
 
+  /* ----- 조직도 보기 (모두) ----- */
+  if (path === "/api/org" && method === "GET") return send(res, 200, orgOut());
+  // 사람 한 명: 앞으로 참석하는 회의 · 맡은 남은 할 일 (조직도에서 이름을 누르면)
+  const pm = path.match(/^\/api\/people\/(\d+)$/);
+  if (pm && method === "GET") {
+    const target = q.userById.get(Number(pm[1]));
+    if (!target) return send(res, 404, { error: "계정을 찾을 수 없어요." });
+    const ids = JSON.stringify([target.id]);
+    const day = isDate(param("today")) ? param("today") : new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+    const until = new Date(Date.parse(day + "T00:00:00Z") + 30 * 86400e3).toISOString().slice(0, 10);
+    return send(res, 200, {
+      user: { id: target.id, name: target.name, unitId: target.unit_id },
+      meetings: eventsOut(q.unitMeetings.all({ from: day, to: until, ids }), user),
+      tasks: tasksOut(q.unitTasks.all(ids), user)
+    });
+  }
+
   /* ----- 소속 화면 (모두): 팀원이 참석하는 회의 · 맡은 할 일 · 쓴 메모 ----- */
   const om = path.match(/^\/api\/units\/(\d+)$/);
   if (om && method === "GET") {
     const u = q.unit.get(Number(om[1]));
     if (!u) return send(res, 404, { error: "조직을 찾을 수 없어요. 지워졌을 수 있어요." });
     const scope = param("sub") === "1" ? unitSubtree(u.id) : [u.id];
-    const memberIds = q.usersInUnits.all(JSON.stringify(scope)).map((x) => x.id);
+    const memberIds = unitUserIds(scope);
     const ids = JSON.stringify(memberIds);
     const day = isDate(param("today")) ? param("today") : new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
     const d = new Date(day + "T00:00:00Z");
@@ -986,6 +1113,81 @@ async function api(req, res, path) {
       return send(res, 200, { changed: list.length, team: teamOut() });
     }
 
+    /* 조직도 자리 (표로 편집) */
+    if (path === "/api/admin/org/settings" && method === "PUT") {
+      const b = await readJson(req);
+      if (b.baseDate && !isDate(b.baseDate)) throw bad("기준일을 확인해 주세요.");
+      q.setSetting.run("org_base_date", b.baseDate || "");
+      return send(res, 200, orgOut());
+    }
+    if (path === "/api/admin/org/positions" && method === "POST") {
+      const b = await readJson(req);
+      const id = inTx(() => {
+        const v = positionInput(b);
+        const after = idOrNull(b.afterId) && q.position.get(b.afterId);
+        const id = Number(q.addPosition.run(...v, q.maxPositionSort.get().n + 10).lastInsertRowid);
+        if (after) { const ids = q.positions.all().map((p) => p.id).filter((x) => x !== id); ids.splice(ids.indexOf(after.id) + 1, 0, id); renumber(ids); }
+        if (v[3]) q.setUserUnitIfEmpty.run(v[0], v[3]);
+        return id;
+      });
+      return send(res, 201, { id, ...orgOut() });
+    }
+    const posm = path.match(/^\/api\/admin\/org\/positions\/(\d+)$/);
+    if (posm) {
+      const p = q.position.get(Number(posm[1]));
+      if (!p) return send(res, 404, { error: "조직도에서 그 줄을 찾을 수 없어요." });
+      if (method === "PATCH") {
+        const b = await readJson(req);
+        inTx(() => {
+          const v = positionInput(b, p);
+          q.setPosition.run(...v, p.id);
+          if (v[3] && v[3] !== p.user_id) q.setUserUnitIfEmpty.run(v[0], v[3]); // 처음 연결하면 대표 소속으로
+          if (Number.isInteger(b.index)) { // 끌어서 순서 바꾸기
+            const ids = q.positions.all().map((x) => x.id).filter((x) => x !== p.id);
+            ids.splice(Math.max(0, Math.min(b.index, ids.length)), 0, p.id);
+            renumber(ids);
+          }
+        });
+        return send(res, 200, orgOut());
+      }
+      if (method === "DELETE") { q.delPosition.run(p.id); return send(res, 200, orgOut()); }
+      return send(res, 405, { error: "Method not allowed" });
+    }
+    // 엑셀 불러오기: 먼저 비교만 (preview), 확인하면 반영 (apply)
+    if (path === "/api/admin/org/preview" && method === "POST") {
+      const { out } = orgDiff((await readJson(req)).rows);
+      return send(res, 200, { same: out.same.length, add: out.add, move: out.move, remove: out.remove });
+    }
+    if (path === "/api/admin/org/apply" && method === "POST") {
+      const b = await readJson(req);
+      if (b.baseDate && !isDate(b.baseDate)) throw bad("기준일을 확인해 주세요.");
+      const result = inTx(() => {
+        const { rows, match, out } = orgDiff(b.rows);
+        const keep = b.removeIds === undefined ? null : new Set(ids(b.removeIds));
+        const order = [];
+        for (const r of rows) {
+          const unit = resolveUnit(r.hq, r.dept, r.team);
+          const p = match.get(r.i);
+          if (p) { q.setPosition.run(unit, r.title, r.name, p.user_id, r.note || p.note, p.id); order.push(p.id); }
+          else order.push(Number(q.addPosition.run(unit, r.title, r.name, null, r.note, 0).lastInsertRowid));
+        }
+        let removed = 0;
+        for (const x of out.remove) if (!keep || keep.has(x.id)) { q.delPosition.run(x.id); removed++; }
+        // 순번: 엑셀 순서대로, 공석·남긴 자리는 같은 조직 첫 줄 앞에
+        const rest = q.positions.all().filter((p) => !order.includes(p.id));
+        const all = order.slice();
+        for (const p of rest) {
+          const at = all.findIndex((id) => q.position.get(id).unit_id === p.unit_id);
+          all.splice(at < 0 ? all.length : at, 0, p.id);
+        }
+        renumber(all);
+        if (b.baseDate) q.setSetting.run("org_base_date", b.baseDate);
+        return { added: out.add.length, moved: out.move.length, removed };
+      });
+      console.log(`[admin] ${user.login} → 조직도 불러오기 (추가 ${result.added}, 이동 ${result.moved}, 빠짐 ${result.removed})`);
+      return send(res, 200, { ...result, ...orgOut() });
+    }
+
     /* 조직도 */
     if (path === "/api/admin/units" && method === "POST") {
       const b = await readJson(req);
@@ -1003,7 +1205,7 @@ async function api(req, res, path) {
         let n = 0;
         for (const line of lines) {
           const parts = line.split(/\s*[>›]\s*/).filter(Boolean);
-          if (parts.length > UNIT_DEPTH) throw bad(`'${line}' — 조직은 3단계까지예요.`);
+          if (parts.length > UNIT_DEPTH) throw bad(`'${line}' — 조직은 ${UNIT_DEPTH}단계까지예요.`);
           let parent = null;
           for (const p of parts) { const r = addUnit(parent, p); parent = r.id; if (r.created) n++; }
         }
@@ -1018,7 +1220,7 @@ async function api(req, res, path) {
       // 이 조직(아래 조직 포함)과 연결된 것: 이번 달 회의, 남은 할 일, 구글 캘린더
       if (unm[2] && method === "GET") {
         const scope = JSON.stringify(unitSubtree(u.id));
-        const ids = JSON.stringify(q.usersInUnits.all(scope).map((x) => x.id));
+        const ids = JSON.stringify(unitUserIds(unitSubtree(u.id)));
         const month = (isDate(param("today")) ? param("today") : new Date().toISOString().slice(0, 10)).slice(0, 7);
         return send(res, 200, {
           meetings: q.unitMeetings.all({ from: month + "-01", to: month + "-31", ids }).length,
@@ -1046,6 +1248,7 @@ async function api(req, res, path) {
           q.liftUnitChildren.run(u.parent_id, u.id);
           q.liftUnitUsers.run(u.parent_id, u.id);
           q.liftUnitCalendars.run(u.parent_id, u.id);
+          if (u.parent_id) q.liftUnitPositions.run(u.parent_id, u.id); // 맨 위 조직이면 자리도 함께 지워짐
           q.delUnit.run(u.id);
         });
         return send(res, 200, { units: unitsOut(), team: teamOut() });

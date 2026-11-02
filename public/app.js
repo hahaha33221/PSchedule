@@ -38,6 +38,8 @@
     user: null,
     team: [],
     tags: [],
+    positions: [],    // 조직도 자리 [{ id, unitId, title, name, userId, note, sort }] — 계정과 따로, 겸직·공석 포함
+    orgBaseDate: "",
     units: [],        // 조직도 [{ id, parentId, name, short, leadId }] — 멤버의 소속 (분류와는 따로)
     ourUnit: store.get("ps.ours", "0") === "1", // 대시보드·할 일·회의에서 '우리 소속'만
     calendars: [],    // 외부(구글) 캘린더 [{ id, name, color, categoryId }] — 가져온 일정은 읽기 전용
@@ -641,7 +643,7 @@
       ]),
       layout.mini,
       h("div", { class: "side__section" }, [
-        h("div", { class: "side__label" }, ["자주 쓰는 태그", h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "태그 관리", title: "태그 관리", html: ICON.plus, onclick: () => manageTags() })]),
+        h("div", { class: "side__label" }, ["자주 쓰는 태그", h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "태그 관리", title: "태그 관리", html: ICON.gear, onclick: () => manageTags() })]),
         layout.tags
       ]),
       account
@@ -660,6 +662,7 @@
   function toggleNav(open) {
     state.navOpen = open;
     app.querySelector(".shell").classList.toggle("nav-open", open);
+    if (open) requestAnimationFrame(drawTagsNav); // 서랍을 열면 태그 줄 다시 계산
   }
 
   function drawNav(active) {
@@ -669,7 +672,8 @@
       { id: "tasks", label: "할 일", icon: "check" },
       { id: "meetings", label: "회의", icon: "people" },
       { id: "memos", label: "메모", icon: "note" },
-      { id: "notices", label: "공지", icon: "bell" }
+      { id: "notices", label: "공지", icon: "bell" },
+      { id: "orgchart", label: "조직도", icon: "org" }
     ];
     layout.nav.replaceChildren(...items.map((it) => h("a", {
       class: "side__link" + (it.id === active ? " is-active" : ""), href: "#/" + it.id, "aria-current": it.id === active ? "page" : null,
@@ -703,7 +707,7 @@
       : h("a", { class: "side__link side__link--admin" + (id === active ? " is-active" : ""), href: "#/" + id, "aria-current": id === active ? "page" : null, onclick: () => toggleNav(false) }, [icon(ic), h("span", { text: label })]));
     layout.admin.replaceChildren(
       h("div", { class: "side__adminhead" }, [icon("lock"), "관리자 전용"]),
-      link("org", "조직도", "org"),
+      link("org", "조직도 편집", "org"),
       link("members", "멤버 · 소속 지정", "user"),
       link("cats", "분류 관리", "folder", manageCategories),
       link("cals", "구글 캘린더 연결", "cal", manageCalendars),
@@ -726,11 +730,31 @@
       ...state.calendars.map((cal) => item("cal" + cal.id, cal.name, cal.color, "구글 캘린더에서 가져온 일정 (읽기 전용)"))
     );
   }
+  // 자주 쓰는 태그: 칩을 옆으로 이어 붙이고(줄이 차면 다음 줄), 많이 쓴 태그가 앞에. 3줄을 넘으면 '+N' 으로 접기
+  let tagsOpen = false;
   function drawTagsNav() {
     if (!layout.tags) return;
-    layout.tags.replaceChildren(...(state.tags.length ? state.tags.map((t) => h("a", { class: "side__tag", href: `#/tasks`, onclick: () => { taskFilter.tag = t.id; } }, tagChip(t.id))) : [h("p", { class: "muted small", text: "태그가 없어요." })]),
-      h("button", { class: "side__tagmanage", type: "button", onclick: () => manageTags() }, [icon("gear"), "태그 관리"]));
+    if (!state.tags.length) return layout.tags.replaceChildren(h("p", { class: "muted small", text: "태그가 없어요." }));
+    const sorted = state.tags.slice().sort((a, b) => (b.uses || 0) - (a.uses || 0));
+    const chips = sorted.map((t) => h("a", { class: `side__tag c${t.color}`, href: "#/tasks", title: `'${t.name}' 할 일 보기${t.uses ? ` · ${t.uses}곳` : ""}`, onclick: () => { taskFilter.tag = t.id; toggleNav(false); if (route().name === "tasks") render(); } }, t.name));
+    const more = h("button", { class: "side__tagmore", type: "button", "aria-expanded": String(tagsOpen) });
+    more.addEventListener("click", () => { tagsOpen = !tagsOpen; drawTagsNav(); });
+    layout.tags.replaceChildren(...chips, more);
+    clampTags(chips, more);
   }
+  function clampTags(chips, more) {
+    more.hidden = true;
+    if (!layout.tags.offsetParent) return; // 서랍이 닫혀 있으면 열 때 다시 계산
+    const lines = () => new Set([...layout.tags.children].filter((el) => !el.hidden).map((el) => el.offsetTop)).size;
+    if (lines() <= 3) return; // 다 들어가면 버튼 없음
+    more.hidden = false;
+    if (tagsOpen) { more.textContent = "접기"; more.setAttribute("aria-label", "태그 접기"); return; }
+    let hidden = 0;
+    const label = () => { more.textContent = `+${hidden}`; more.setAttribute("aria-label", `태그 ${hidden}개 더 보기`); };
+    for (let i = chips.length - 1; i >= 0 && lines() > 3; i--) { chips[i].hidden = true; hidden++; label(); }
+    while (lines() > 3 && hidden < chips.length) { chips[chips.length - 1 - hidden].hidden = true; hidden++; label(); }
+  }
+
 
   // 분류 트리: 누르면 오늘·대시보드·할 일·회의·메모를 그 분류(와 그 아래)로 걸러 봄
   const CAT_PAGES = new Set(["today", "dashboard", "tasks", "meetings", "memos"]);
@@ -850,7 +874,7 @@
     app.querySelector(".shell").classList.add("has-peek");
     let content;
     try {
-      content = p.type === "event" ? await eventPeek(p.id) : p.type === "ext" ? await extPeek(p.id) : p.type === "task" ? await taskPeek(p.id) : await dayPeek(p.id);
+      content = p.type === "event" ? await eventPeek(p.id) : p.type === "ext" ? await extPeek(p.id) : p.type === "pos" ? await posPeek(p.id) : p.type === "task" ? await taskPeek(p.id) : await dayPeek(p.id);
     } catch (e) {
       if (e.status === 404) { closePeek(); toast(e.message); return; }
       content = peekFrame("", failed(e));
@@ -2253,230 +2277,533 @@
     openDialog(`${u.login} 수정`, form, { admin: true });
   }
 
-  /* ---------- 조직도 (관리자) ---------- */
-  const org = { sel: null, q: "", open: new Set(JSON.parse(store.get("ps.orgClosed", "[]") || "[]")) }; // open 에는 '접은' 조직
-  async function pageOrg() {
-    if (!isAdmin()) return go("#/today");
+  /* ---------- 조직도 공통 ---------- */
+  // 자리(직함·이름)는 PSchedule 계정과 따로. 이름이 비면 공석, userId 로 계정 연결
+  async function loadOrg() {
+    const r = await api("/org");
+    state.units = r.units; state.positions = r.positions; state.orgBaseDate = r.baseDate;
+    return r;
+  }
+  const setOrg = (r) => { if (r.units) state.units = r.units; if (r.positions) state.positions = r.positions; if (r.baseDate !== undefined) state.orgBaseDate = r.baseDate; if (r.team) state.team = r.team; };
+  const posIn = (ids) => state.positions.filter((p) => ids.has(p.unitId));
+  // 인원: 공석 빼고, 한 조직 안에서는 같은 사람(겸직)을 한 번만
+  function headCount(unitId) {
+    const names = new Set(posIn(unitSubtree(unitId)).filter((p) => p.name).map((p) => (p.userId ? "u" + p.userId : "n" + p.name)));
+    return names.size;
+  }
+  const unitDepthOf = (id) => unitPath(id).length; // 1 위원회, 2 본부, 3 부, 4 분과·팀, 5 팀
+  // 엑셀식 위치: 본부 / 부 / 팀(맨 끝)
+  function placeOf(unitId) {
+    const path = unitPath(unitId);
+    return { hq: path[1] ? path[1].name : "", dept: path[2] ? path[2].name : "", team: path.length > 3 ? path[path.length - 1].name : "", mid: path.length > 4 ? path.slice(3, -1).map((u) => u.name).join(" › ") : "" };
+  }
+  function orgRowsOrdered() { return state.positions.slice().sort((a, b) => a.sort - b.sort || a.id - b.id); }
+
+  /* ---------- 조직도 보기 (모두) ---------- */
+  const chart = { hq: "all", names: store.get("ps.chartNames", "1") === "1", zoom: Number(store.get("ps.chartZoom", "1")) || 1, q: "" };
+  async function pageOrgChart() {
     document.title = `조직도 · ${TITLE}`;
     drawMini(null);
-    const treeBox = h("section", { class: "card org-tree", "aria-label": "조직 트리" });
-    const detail = h("section", { class: "card org-detail", "aria-label": "선택한 조직" });
-    const search = h("label", { class: "search" }, [icon("search"), h("input", { type: "search", value: org.q, placeholder: "조직·멤버 찾기", "aria-label": "조직·멤버 찾기", oninput: (e) => { org.q = e.target.value.trim(); drawTree(); } })]);
-    setMain("org", [
-      h("div", { class: "page-head page-head--wrap" }, [h("h1", { text: "조직도" }), adminBadge(), h("span", { class: "muted small", text: "멤버에게는 이 화면이 보이지 않아요. 여기서 만든 조직이 멤버의 '소속'이 돼요." })]),
-      h("div", { class: "filters" }, [
-        h("button", { class: "btn btn--admin", type: "button", onclick: (ev) => addUnitPop(ev.currentTarget, null) }, [icon("plus"), "최상위 조직 추가"]),
-        h("button", { class: "btn btn--ghost", type: "button", text: "여러 줄 한 번에 넣기", onclick: bulkUnits }),
-        h("span", { class: "filters__end" }, search)
-      ]),
-      h("div", { class: "org-grid" }, [treeBox, detail])
-    ]);
-    const saved = (r) => { if (r.units) state.units = r.units; if (r.team) state.team = r.team; drawNavAll(); drawTree(); drawDetail(); return r; };
-    const directCount = (id) => state.team.filter((m) => m.unitId === id).length;
+    setMain("orgchart", loading());
+    try { await loadOrg(); } catch (e) { if (e.status !== 401) setMain("orgchart", failed(e)); return; }
+    const root = unitChildren(null)[0];
+    const head = h("div", { class: "page-head page-head--wrap" });
+    const tools = h("div", { class: "filters" });
+    const inner = h("div", { class: "oc", style: `zoom:${chart.zoom}` });
+    const wrap = h("div", { class: "card oc-wrap" }, inner);
+    setMain("orgchart", [head, tools, wrap, h("p", { class: "muted small", text: "사람 이름을 누르면 그 사람이 참석하는 회의·맡은 할 일이 측면 패널에 열려요. 부서 이름을 누르면 그 소속 화면으로 가요. 파란 칸은 '나'예요." })]);
+    if (!root) {
+      fill(head, h("h1", { text: "조직도" }));
+      fill(wrap, h("p", { class: "muted empty", text: isAdmin() ? "아직 조직도가 없어요. 관리자 메뉴의 '조직도 편집'에서 엑셀을 불러와 주세요." : "아직 조직도가 없어요." }));
+      page = { name: "orgchart", reload: async () => {} };
+      return;
+    }
+    const total = headCount(root.id);
+    fill(head,
+      h("h1", { text: "조직도" }),
+      h("span", { class: "muted small", text: `${root.name}${state.orgBaseDate ? ` · 기준일 ${state.orgBaseDate.replace(/-/g, ".")}` : ""} · ${total}명 (공석 제외)` }),
+      isAdmin() ? h("a", { class: "btn btn--admin page-head__end", href: "#/org" }, [icon("lock"), "표로 편집"]) : null
+    );
+    const hqs = unitChildren(root.id);
+    let hits = [], hit = 0;
+    const setZoom = (z) => { chart.zoom = Math.max(0.3, Math.min(1.6, Math.round(z * 100) / 100)); inner.style.zoom = chart.zoom; store.set("ps.chartZoom", String(chart.zoom)); zoomLabel.textContent = Math.round(chart.zoom * 100) + "%"; };
+    const zoomLabel = h("span", { class: "oc-zoom", text: Math.round(chart.zoom * 100) + "%" });
+    const search = h("input", { type: "search", value: chart.q, placeholder: "이름·부서 찾기 (찾으면 그 칸으로 이동)", "aria-label": "이름·부서 찾기" });
+    const hitInfo = h("span", { class: "muted small" });
+    function find(next) {
+      inner.querySelectorAll(".is-hit").forEach((el) => el.classList.remove("is-hit"));
+      const qv = search.value.trim();
+      chart.q = qv;
+      hits = qv ? [...inner.querySelectorAll("[data-find]")].filter((el) => el.dataset.find.includes(qv)) : [];
+      if (!hits.length) { hitInfo.textContent = qv ? "찾는 사람·부서가 없어요" : ""; return; }
+      hit = next ? (hit + 1) % hits.length : 0;
+      hits.forEach((el) => el.classList.add("is-hit"));
+      hits[hit].classList.add("is-hit--now");
+      inner.querySelectorAll(".is-hit--now").forEach((el) => el !== hits[hit] && el.classList.remove("is-hit--now"));
+      hits[hit].scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+      hitInfo.textContent = `${hit + 1} / ${hits.length}`;
+    }
+    search.addEventListener("input", () => find(false));
+    search.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); find(true); } });
+    fill(tools,
+      h("div", { class: "seg seg--sm" }, [["all", "전체"], ...hqs.map((u) => [u.id, u.name])].map(([k, label]) => h("button", { type: "button", "aria-selected": String(chart.hq === k), text: label, onclick: () => { chart.hq = k; draw(); drawTools(); } }))),
+      h("div", { class: "seg seg--sm" }, [[true, "이름까지"], [false, "부서·인원만"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String(chart.names === k), text: label, onclick: () => { chart.names = k; store.set("ps.chartNames", k ? "1" : "0"); draw(); drawTools(); } }))),
+      h("label", { class: "search" }, [icon("search"), search]), hitInfo,
+      h("span", { class: "filters__end oc-zoombar" }, [
+        h("button", { class: "icon-btn", type: "button", "aria-label": "축소", text: "−", onclick: () => setZoom(chart.zoom - 0.1) }),
+        zoomLabel,
+        h("button", { class: "icon-btn", type: "button", "aria-label": "확대", text: "+", onclick: () => setZoom(chart.zoom + 0.1) }),
+        h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "화면에 맞추기", onclick: () => { inner.style.zoom = 1; setZoom(Math.min(1, (wrap.clientWidth - 40) / inner.scrollWidth)); } })
+      ])
+    );
+    const drawTools = () => tools.querySelectorAll(".seg").forEach((seg, i) => seg.querySelectorAll("button").forEach((b, j) => {
+      const val = i === 0 ? (j === 0 ? "all" : hqs[j - 1].id) : j === 0;
+      b.setAttribute("aria-selected", String((i === 0 ? chart.hq : chart.names) === val));
+    }));
 
+    const me = state.user.id;
+    const personRow = (p) => h("button", {
+      class: "oc-person" + (!p.name ? " is-vacant" : "") + (p.userId === me ? " is-me" : ""), type: "button", "data-find": `${p.name} ${p.title}`,
+      onclick: () => openPeek("pos", p.id), title: p.note || null
+    }, [h("span", { class: "oc-person__title", text: p.title }), h("span", { class: "oc-person__name", text: p.name ? p.name + (p.userId === me ? " (나)" : "") : "공석" })]);
+    const own = (u) => state.positions.filter((p) => p.unitId === u.id).sort((a, b) => a.sort - b.sort);
+    const unitLink = (u, cls, extra) => h("a", { class: cls, href: `#/unit/${u.id}`, "data-find": u.name }, [h("strong", { text: u.name }), ` (${headCount(u.id)})`, extra]);
+    // 팀·분과 카드 (안쪽 조직은 점선 카드로)
+    function teamCard(u, inside) {
+      return h("div", { class: inside ? "oc-sub" : "oc-team" }, [
+        h("a", { class: inside ? "oc-sub__head" : "oc-team__head", href: `#/unit/${u.id}`, "data-find": u.name }, [h("span", { text: (inside ? "↳ " : "") + u.name }), h("span", { text: String(headCount(u.id)) })]),
+        chart.names || unitChildren(u.id).length ? h("div", { class: "oc-team__body" }, [...(chart.names ? own(u).map(personRow) : []), ...unitChildren(u.id).map((k) => teamCard(k, true))]) : null
+      ]);
+    }
+    function draw() {
+      const tops = own(root);
+      const shown = chart.hq === "all" ? hqs : hqs.filter((u) => u.id === chart.hq);
+      fill(inner,
+        h("div", { class: "oc-top" }, tops.map((p) => h("div", { class: "oc-topwrap" }, [h("button", { class: "oc-box oc-box--d1" + (p.userId === me ? " is-me" : ""), type: "button", "data-find": `${p.name} ${p.title}`, onclick: () => openPeek("pos", p.id) }, `${p.title} ${p.name || "공석"}`), h("i", { class: "oc-vline" })]))),
+        h("div", { class: "oc-hqs" + (shown.length > 1 ? " has-line" : "") }, shown.map((hq) => h("section", { class: "oc-hq", "aria-label": hq.name }, [
+          h("div", { class: "oc-box oc-box--d2" }, [unitLink(hq, "oc-box__name"), ...own(hq).map((p) => h("button", { class: "oc-box__sub" + (p.userId === me ? " is-me" : ""), type: "button", "data-find": `${p.name} ${p.title}`, onclick: () => openPeek("pos", p.id) }, `${p.title} ${p.name || "공석"}`))]),
+          h("div", { class: "oc-depts" }, unitChildren(hq.id).map((d) => h("div", { class: "oc-dept" }, [
+            h("div", { class: "oc-box oc-box--d3" }, [unitLink(d, "oc-box__name"), ...(chart.names ? own(d).map((p) => h("button", { class: "oc-box__sub" + (!p.name ? " is-vacant" : "") + (p.userId === me ? " is-me" : ""), type: "button", "data-find": `${p.name} ${p.title}`, onclick: () => openPeek("pos", p.id) }, `${p.title} ${p.name || "공석"}`)) : [])]),
+            ...unitChildren(d.id).map((t) => teamCard(t, false))
+          ])))
+        ])))
+      );
+      if (chart.q) find(false);
+      markPeeked();
+    }
+    page = { name: "orgchart", reload: async () => { await loadOrg(); draw(); } };
+    draw();
+  }
+
+  /* ----- 조직도 자리 패널: 겸직 자리, 계정이 연결돼 있으면 그 사람의 회의·할 일 ----- */
+  async function posPeek(id) {
+    if (!state.positions.some((p) => p.id === id)) await loadOrg();
+    const p = state.positions.find((x) => x.id === id);
+    if (!p) throw Object.assign(new Error("조직도에서 그 자리를 찾을 수 없어요."), { status: 404 });
+    const same = p.name ? state.positions.filter((x) => (p.userId ? x.userId === p.userId : !x.userId && x.name === p.name)) : [p];
+    const head = [h("div", { class: "peek__kind" }, [icon("org"), h("span", { text: "조직도" })]), h("h2", { class: "peek__h", text: p.name || `${p.title} (공석)` })];
+    const body = [
+      section("org", same.length > 1 ? `자리 ${same.length}개 (겸직)` : "자리", null, h("ul", { class: "pos-list" }, same.map((x) => h("li", {}, [
+        h("strong", { text: x.title || "직함 없음" }), h("a", { href: `#/unit/${x.unitId}`, text: unitLabel(x.unitId) }), x.note ? h("small", { class: "muted", text: x.note }) : null
+      ]))))
+    ];
+    if (p.userId) {
+      const r = await api(`/people/${p.userId}?today=${today()}`);
+      body.push(
+        section("people", ["앞으로 30일 회의 ", h("span", { class: "muted", text: String(r.meetings.length) })], null, r.meetings.length ? h("ul", { class: "mrows" }, r.meetings.map((e) => meetingRow(e))) : h("p", { class: "muted small", text: "참석하는 회의가 없어요." })),
+        section("check", ["맡은 할 일 ", h("span", { class: "muted", text: String(r.tasks.length) })], null, taskRows(r.tasks, { compact: true, empty: "남은 할 일이 없어요." }))
+      );
+    } else if (p.name) {
+      body.push(h("p", { class: "notice-box small", text: isAdmin() ? "PSchedule 계정이 연결되지 않은 자리예요. '조직도 편집'의 계정 칸에서 연결하면 회의·할 일이 여기 보여요." : "PSchedule 계정이 연결되지 않은 자리예요." }));
+    }
+    return peekFrame(head, body);
+  }
+
+  /* ---------- 조직도 편집 (관리자): 엑셀과 같은 표 ---------- */
+  const orgEdit = { hq: "all", q: "" };
+  async function pageOrg() {
+    if (!isAdmin()) return go("#/today");
+    document.title = `조직도 편집 · ${TITLE}`;
+    drawMini(null);
+    setMain("org", loading());
+    try { await loadOrg(); } catch (e) { if (e.status !== 401) setMain("org", failed(e)); return; }
+    const base = h("input", { type: "date", value: state.orgBaseDate || "", "aria-label": "기준일" });
+    base.addEventListener("change", async () => setOrg(await act(() => api("/admin/org/settings", { method: "PUT", body: { baseDate: base.value } }), "기준일을 저장했어요.")));
+    const tableBox = h("section", { class: "card ot-card", "aria-label": "조직 표" });
+    const checkBox = h("section", { class: "card ot-side ot-check", "aria-label": "확인할 것" });
+    const treeBox = h("section", { class: "card ot-side", "aria-label": "부서 구조" });
+    setMain("org", [
+      h("div", { class: "page-head page-head--wrap" }, [
+        h("h1", { text: "조직도 편집" }), adminBadge(),
+        h("label", { class: "ot-base" }, ["기준일", base]),
+        h("span", { class: "page-head__end ot-actions" }, [
+          h("a", { class: "btn btn--ghost", href: "#/orgchart", text: "조직도로 보기 →" }),
+          h("button", { class: "btn btn--ghost", type: "button", text: "엑셀(CSV)로 내보내기", onclick: exportCsv }),
+          h("button", { class: "btn btn--admin", type: "button", text: "엑셀 불러오기 · 붙여넣기", onclick: importDialog })
+        ])
+      ]),
+      h("div", { class: "ot-grid" }, [tableBox, h("aside", { class: "ot-aside" }, [checkBox, treeBox])])
+    ]);
+    const saved = (r) => { setOrg(r); drawTable(); drawCheck(); drawTree(); drawNavAll(); return r; };
+    const patch = (p, body) => act(() => api(`/admin/org/positions/${p.id}`, { method: "PATCH", body })).then(saved);
+
+    // 표: 부별 묶음 줄 + 자리 줄. 칸은 바로 고치고(포커스가 빠지면 저장), 순번 칸을 끌어서 순서 바꾸기
+    let dragId = null;
+    function drawTable() {
+      const all = orgRowsOrdered();
+      const root = unitChildren(null)[0];
+      const hqs = root ? unitChildren(root.id) : [];
+      const hqOf = (p) => unitPath(p.unitId)[1]?.id || null;
+      const qv = orgEdit.q;
+      const rows = all.filter((p) => (orgEdit.hq === "all" || hqOf(p) === orgEdit.hq) && (!qv || `${p.name} ${p.title} ${unitLabel(p.unitId)} ${p.note}`.includes(qv)));
+      const no = new Map(all.map((p, i) => [p.id, i + 1]));
+      const hqNames = hqs.map((u) => u.name);
+      const datalist = (id, names) => h("datalist", { id }, [...new Set(names)].map((n) => h("option", { value: n })));
+      const lists = [datalist("ot-hq", ["공통", ...hqNames]), datalist("ot-dept", state.units.filter((u) => unitDepthOf(u.id) === 3).map((u) => u.name).concat(["본부 직속", "위원회 직속"])), datalist("ot-team", state.units.filter((u) => unitDepthOf(u.id) >= 4).map((u) => u.name))];
+      const groupKey = (p) => { const path = unitPath(p.unitId); return (path[2] || path[1] || path[0])?.id; };
+      const out = [];
+      let lastGroup = null;
+      for (const p of rows) {
+        const g = groupKey(p);
+        if (g !== lastGroup) {
+          lastGroup = g;
+          const gu = unitOf(g);
+          const d = gu ? unitDepthOf(g) : 0;
+          out.push(h("tr", { class: "ot-group" }, h("td", { colspan: "9", text: !gu ? "(조직 없음)" : d === 3 ? `${gu.name} (${headCount(g)})` : d === 2 ? `${gu.name} · 본부 직속` : `${gu.name} · 위원회 직속` })));
+        }
+        out.push(positionRow(p, no.get(p.id)));
+      }
+      const users = state.team;
+      const unlinkedSuggest = all.filter((p) => p.name && !p.userId && users.some((u) => u.name === p.name)).length;
+      fill(tableBox,
+        h("div", { class: "ot-toolbar" }, [
+          h("div", { class: "seg seg--sm" }, [["all", `전체 ${all.length}`], ...hqs.map((u) => [u.id, `${u.name} ${all.filter((p) => hqOf(p) === u.id).length}`])].map(([k, label]) => h("button", { type: "button", "aria-selected": String(orgEdit.hq === k), text: label, onclick: () => { orgEdit.hq = k; drawTable(); } }))),
+          h("label", { class: "search" }, [icon("search"), h("input", { type: "search", value: qv, placeholder: "이름·부서·직함 찾기", "aria-label": "표에서 찾기", oninput: (e) => { orgEdit.q = e.target.value.trim(); clearTimeout(drawTable.t); drawTable.t = setTimeout(() => { drawTable(); tableBox.querySelector('input[type="search"]').focus(); }, 250); } })]),
+          h("span", { class: "muted small filters__end", text: "칸을 눌러 바로 고쳐요 · 순번을 끌어서 순서 바꾸기" })
+        ]),
+        ...lists,
+        h("div", { class: "table-wrap" }, h("table", { class: "table ot-table" }, [
+          h("thead", {}, h("tr", {}, ["순번", "본부", "부", "팀 · 분과", "직함", "이름", "PSchedule 계정", "비고", ""].map((t) => h("th", { text: t })))),
+          h("tbody", {}, out.length ? out : h("tr", {}, h("td", { colspan: "9", class: "muted empty", text: all.length ? "조건에 맞는 줄이 없어요." : "아직 조직도가 없어요. '엑셀 불러오기 · 붙여넣기'로 시작해 주세요." })))
+        ])),
+        h("div", { class: "ot-foot" }, [
+          h("button", { class: "btn btn--ghost btn--sm ot-add", type: "button", text: "+ 줄 추가", onclick: addRow }),
+          h("span", { class: "muted small", text: "부·팀 칸에 새 이름을 적으면 조직이 함께 만들어져요. 고친 칸은 바로 저장돼요." }),
+          unlinkedSuggest ? h("button", { class: "btn btn--admin btn--sm filters__end", type: "button", text: `이름 같은 계정 ${unlinkedSuggest}명 연결`, onclick: linkSameNames }) : null
+        ])
+      );
+    }
+    function cellInput(value, opts) {
+      const el = h("input", { class: "ot-in" + (opts.cls ? " " + opts.cls : ""), value: value || "", placeholder: opts.placeholder || "", list: opts.list || null, maxlength: opts.max || "30", "aria-label": opts.label });
+      let saved0 = value || "";
+      el.addEventListener("keydown", (e) => { if (e.key === "Enter") el.blur(); if (e.key === "Escape") { el.value = saved0; el.blur(); } });
+      el.addEventListener("change", async () => { const v = el.value.trim(); if (v === saved0) return; try { await opts.onSave(v); saved0 = v; } catch (ex) { el.value = saved0; } });
+      return el;
+    }
+    function positionRow(p, n) {
+      const pl = placeOf(p.unitId);
+      const row = h("tr", { class: "ot-row" + (!p.name ? " is-vacant" : "") + (p.userId === state.user.id ? " is-me" : ""), "data-id": p.id });
+      const inputs = {};
+      const savePath = () => patch(p, { path: { hq: inputs.hq.value || "공통", dept: inputs.dept.value, team: inputs.team.value } });
+      inputs.hq = cellInput(pl.hq || "공통", { list: "ot-hq", label: "본부", onSave: savePath });
+      inputs.dept = cellInput(pl.dept || (pl.hq ? "본부 직속" : "위원회 직속"), { list: "ot-dept", label: "부", onSave: savePath });
+      inputs.team = cellInput(pl.team, { list: "ot-team", label: "팀·분과", placeholder: "—", onSave: savePath });
+      const sameUser = !p.userId && p.name && state.team.find((u) => u.name === p.name);
+      const acc = h("button", { class: "ot-acc" + (p.userId ? " is-linked" : sameUser ? " is-suggest" : ""), type: "button", title: p.userId ? "연결 바꾸기·끊기" : sameUser ? "이름이 같은 계정이 있어요" : "계정 연결" },
+        p.userId ? `● ${member(p.userId)?.name || "연결됨"}` : sameUser ? `연결 제안: ${sameUser.name}` : "+ 연결");
+      acc.addEventListener("click", () => {
+        if (sameUser) return patch(p, { userId: sameUser.id });
+        personPicker(acc, p.userId ? [p.userId] : [], false, (uid) => patch(p, { userId: uid }));
+      });
+      const grip = h("td", { class: "ot-no", draggable: "true", title: "끌어서 순서 바꾸기" }, [h("span", { class: "org-row__grip", html: ICON.grip, "aria-hidden": "true" }), String(n)]);
+      grip.addEventListener("dragstart", (e) => { dragId = p.id; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(p.id)); row.classList.add("is-drag"); });
+      grip.addEventListener("dragend", () => { dragId = null; tableBox.querySelectorAll(".ot-row").forEach((r) => r.classList.remove("is-drag", "drop-before", "drop-after")); });
+      const zone = (e) => { const r = row.getBoundingClientRect(); return e.clientY - r.top < r.height / 2 ? "before" : "after"; };
+      row.addEventListener("dragover", (e) => { if (!dragId || dragId === p.id) return; e.preventDefault(); row.classList.remove("drop-before", "drop-after"); row.classList.add("drop-" + zone(e)); });
+      row.addEventListener("dragleave", () => row.classList.remove("drop-before", "drop-after"));
+      row.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        const id = dragId, z = zone(e); dragId = null;
+        if (!id || id === p.id) return;
+        const ids = orgRowsOrdered().map((x) => x.id).filter((x) => x !== id);
+        const index = ids.indexOf(p.id) + (z === "after" ? 1 : 0);
+        try { saved(await api(`/admin/org/positions/${id}`, { method: "PATCH", body: { index } })); } catch (ex) { toast(ex.message); drawTable(); }
+      });
+      row.append(grip,
+        h("td", {}, inputs.hq), h("td", {}, inputs.dept),
+        h("td", {}, [pl.mid ? h("small", { class: "muted ot-mid", text: pl.mid + " ›" }) : null, inputs.team]),
+        h("td", {}, cellInput(p.title, { label: "직함", onSave: (v) => patch(p, { title: v }) })),
+        h("td", {}, cellInput(p.name, { label: "이름", placeholder: "공석", cls: "ot-in--name", onSave: (v) => patch(p, { name: v }) })),
+        h("td", {}, acc),
+        h("td", {}, cellInput(p.note, { label: "비고", max: "200", cls: "ot-in--note", onSave: (v) => patch(p, { note: v }) })),
+        h("td", {}, h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": `${p.name || p.title || "빈"} 줄 지우기`, html: ICON.close, onclick: async () => {
+          if (!confirm(`'${[p.title, p.name || "공석"].join(" ")}' 줄을 지울까요?`)) return;
+          saved(await act(() => api(`/admin/org/positions/${p.id}`, { method: "DELETE" })));
+        } }))
+      );
+      return row;
+    }
+    async function addRow() {
+      const list = orgRowsOrdered();
+      const last = [...tableBox.querySelectorAll(".ot-row")].pop();
+      const after = last ? list.find((x) => x.id === Number(last.dataset.id)) : null;
+      const body = after ? { afterId: after.id, unitId: after.unitId, title: "", name: "" } : { path: { hq: "공통", dept: "위원회 직속", team: "" }, title: "", name: "" };
+      const r = await act(() => api("/admin/org/positions", { method: "POST", body }));
+      saved(r);
+      const row = tableBox.querySelector(`.ot-row[data-id="${r.id}"]`);
+      if (row) { row.scrollIntoView({ block: "center" }); row.querySelector(".ot-in--name").focus(); }
+    }
+    async function linkSameNames() {
+      const list = orgRowsOrdered().filter((p) => p.name && !p.userId).map((p) => [p, state.team.find((u) => u.name === p.name)]).filter(([, u]) => u);
+      if (!confirm(`이름이 같은 계정 ${list.length}개를 조직도 자리에 연결할까요?\n${list.map(([p, u]) => `· ${p.title} ${p.name} → ${u.name}`).join("\n")}`)) return;
+      let r;
+      for (const [p, u] of list) r = await act(() => api(`/admin/org/positions/${p.id}`, { method: "PATCH", body: { userId: u.id } }));
+      if (r) { saved(r); await reloadTeam(); toast(`${list.length}개를 연결했어요.`); }
+    }
+
+    // 확인할 것: 이름이 같은 자리(겸직인지 동명이인인지), 공석, 계정 미연결
+    function drawCheck() {
+      const named = state.positions.filter((p) => p.name);
+      const byName = new Map();
+      for (const p of named) { if (!byName.has(p.name)) byName.set(p.name, []); byName.get(p.name).push(p); }
+      const dups = [...byName.entries()].filter(([, l]) => l.length > 1);
+      const vacant = state.positions.filter((p) => !p.name);
+      const unlinked = new Set(named.filter((p) => !p.userId).map((p) => p.name)).size;
+      const items = [
+        ...dups.map(([name, l]) => h("li", {}, [h("strong", { text: `${name} ${l.length}자리` }), " — ", l.map((p) => `${p.title}(${unitOf(p.unitId)?.name || "?"})`).join(", "),
+          h("small", { class: "muted", text: l.every((p) => p.userId && p.userId === l[0].userId) ? " 같은 계정으로 연결됨 (겸직)" : " 같은 사람이면 겸직, 다른 사람이면 계정을 따로 연결해 주세요." })])),
+        vacant.length ? h("li", {}, [h("strong", { text: `공석 ${vacant.length}` }), " — ", vacant.map((p) => `${unitOf(p.unitId)?.name || "?"} ${p.title}`).join(", ")]) : null,
+        unlinked ? h("li", {}, [h("strong", { text: `계정 미연결 ${unlinked}명` }), " — 조직도에는 보이지만 회의·할 일과는 아직 이어지지 않아요."]) : null,
+        ...(() => { const empty = state.units.filter((u) => !posIn(unitSubtree(u.id)).length); return empty.length ? [h("li", {}, [h("strong", { text: `빈 조직 ${empty.length}` }), " — ", empty.map((u) => unitLabel(u.id)).join(", "), h("small", { class: "muted", text: " 필요 없으면 부서 구조에서 지워 주세요." })])] : []; })()
+      ].filter(Boolean);
+      fill(checkBox, h("h2", { class: "card__title", text: `확인할 것 ${items.length}` }), items.length ? h("ul", { class: "ot-checklist" }, items) : h("p", { class: "muted small", text: "확인할 것이 없어요." }));
+    }
+
+    // 부서 구조: 끌어서 위치·순서 바꾸기 (팀을 분과 아래로 넣으면 조직도에서 안쪽에 보여요)
+    let dragUnit = null;
+    const closed = new Set(JSON.parse(store.get("ps.orgClosed", "[]") || "[]"));
+    function drawTree() {
+      const rows = [];
+      const walk = (pid, depth) => { for (const u of unitChildren(pid)) { const kids = unitChildren(u.id).length; rows.push(treeRow(u, depth, kids)); if (kids && !closed.has(u.id)) walk(u.id, depth + 1); } };
+      walk(null, 0);
+      fill(treeBox,
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "부서 구조" }), h("button", { class: "link-btn", type: "button", text: "+ 맨 위 조직", onclick: (ev) => addUnitPop(ev.currentTarget, null) })]),
+        h("p", { class: "muted small", text: "팀을 분과 아래로 끌어 넣으면 조직도에서 안쪽에 보여요. 행 위쪽에 놓으면 앞에, 아래쪽은 뒤에, 가운데는 그 조직 안으로 (5단계까지)." }),
+        rows.length ? h("div", { class: "ot-tree" }, rows) : h("p", { class: "muted small", text: "아직 조직이 없어요." })
+      );
+    }
+    function treeRow(u, depth, kids) {
+      const row = h("div", { class: "org-row org-row--sm", draggable: "true", style: `padding-left:${4 + depth * 16}px`, "data-id": u.id }, [
+        h("span", { class: "org-row__grip", html: ICON.grip, "aria-hidden": "true" }),
+        kids ? h("button", { class: "org-row__chev" + (closed.has(u.id) ? "" : " is-open"), type: "button", "aria-label": `${u.name} ${closed.has(u.id) ? "펼치기" : "접기"}`, html: ICON.right, onclick: (e) => { e.stopPropagation(); closed.has(u.id) ? closed.delete(u.id) : closed.add(u.id); store.set("ps.orgClosed", JSON.stringify([...closed])); drawTree(); } }) : h("span", { class: "org-row__chev" }),
+        h("span", { class: `org-row__name org-row__name--d${Math.min(depth, 2)}`, text: u.name }),
+        h("span", { class: "org-row__count", text: `${headCount(u.id)}명` }),
+        h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": `${u.name} 고치기`, html: ICON.edit, onclick: (e) => { e.stopPropagation(); unitPop(e.currentTarget, u); } })
+      ]);
+      row.addEventListener("dragstart", (e) => { dragUnit = u.id; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(u.id)); row.classList.add("is-drag"); });
+      row.addEventListener("dragend", () => { dragUnit = null; treeBox.querySelectorAll(".org-row").forEach((r) => r.classList.remove("is-drag", "drop-before", "drop-after", "drop-inside")); });
+      const zone = (e) => { const r = row.getBoundingClientRect(); const y = (e.clientY - r.top) / r.height; return y < 0.25 ? "before" : y > 0.75 ? "after" : "inside"; };
+      row.addEventListener("dragover", (e) => { if (!dragUnit || dragUnit === u.id) return; e.preventDefault(); row.classList.remove("drop-before", "drop-after", "drop-inside"); row.classList.add("drop-" + zone(e)); });
+      row.addEventListener("dragleave", () => row.classList.remove("drop-before", "drop-after", "drop-inside"));
+      row.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        const id = dragUnit, z = zone(e); dragUnit = null;
+        if (!id || id === u.id) return;
+        let parentId, index;
+        if (z === "inside") { parentId = u.id; index = unitChildren(u.id).filter((x) => x.id !== id).length; closed.delete(u.id); }
+        else { parentId = u.parentId || null; const sibs = unitChildren(parentId).filter((x) => x.id !== id); index = sibs.indexOf(u) + (z === "after" ? 1 : 0); }
+        try { const r = await api(`/admin/units/${id}`, { method: "PATCH", body: { parentId, index } }); setOrg(r); drawTable(); drawTree(); }
+        catch (ex) { toast(ex.message); drawTree(); }
+      });
+      return row;
+    }
     function addUnitPop(anchor, parent) {
-      const input = h("input", { placeholder: parent ? `'${parent.name}' 아래 조직 이름` : "최상위 조직 이름 (예: 조직위원회)", maxlength: "30" });
+      const input = h("input", { placeholder: parent ? `'${parent.name}' 아래 조직 이름` : "맨 위 조직 이름 (예: 조직위원회)", maxlength: "30" });
       const err = errorLine();
       const ok = h("button", { class: "btn btn--admin btn--sm", type: "submit", text: "추가" });
       const form = h("form", { class: "pop__form" }, [input, err, ok]);
       form.addEventListener("submit", (e) => {
         e.preventDefault();
         busy(ok, async () => {
-          try {
-            const r = await api("/admin/units", { method: "POST", body: { parentId: parent ? parent.id : null, name: input.value } });
-            if (parent) org.open.delete(parent.id);
-            org.sel = r.id; closePop(); saved(r);
-          } catch (ex) { showError(err, ex.message); }
+          try { const r = await api("/admin/units", { method: "POST", body: { parentId: parent ? parent.id : null, name: input.value } }); closePop(); setOrg(r); drawTree(); drawTable(); }
+          catch (ex) { showError(err, ex.message); }
         });
       });
       popover(anchor, form);
       input.focus();
     }
-    function bulkUnits() {
-      const ta = h("textarea", { rows: "8", maxlength: "20000", autofocus: true, placeholder: "한 줄에 하나씩, > 로 단계를 나눠요\n조직위원회 > 운영총괄부 > 식음료팀\n조직위원회 > 운영총괄부 > 숙박팀\n조직위원회 > 기획본부 > 행사팀" });
+    // 조직 이름·약칭·책임자 고치기, 아래 조직 추가, 지우기
+    function unitPop(anchor, u) {
+      const name = h("input", { value: u.name, maxlength: "30", "aria-label": "조직 이름" });
+      const short = h("input", { value: u.short || "", maxlength: "12", placeholder: "약칭 (예: 식음료)", "aria-label": "약칭" });
       const err = errorLine();
-      const ok = h("button", { class: "btn btn--admin", type: "submit", text: "한 번에 넣기" });
-      const form = h("form", { class: "stack", novalidate: true }, [ta, h("p", { class: "muted small", text: "3단계까지, 이미 있는 조직은 건너뛰고 없는 것만 만들어요." }), err,
-        h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])]);
+      const ok = h("button", { class: "btn btn--admin btn--sm", type: "submit", text: "저장" });
+      const form = h("form", { class: "pop__form" }, [h("strong", { class: "small", text: unitLabel(u.id) }), name, short, err,
+        h("div", { class: "actions" }, [
+          unitDepthOf(u.id) < 5 ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "+ 아래 조직", onclick: () => addUnitPop(anchor, u) }) : null,
+          h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
+            if (!confirm(`'${unitLabel(u.id)}' 을(를) 지울까요? 아래 조직·자리·소속 멤버는 ${u.parentId ? `'${unitOf(u.parentId).name}'(으)로 옮겨져요` : "함께 지워져요"}.`)) return;
+            closePop(); await act(() => api(`/admin/units/${u.id}`, { method: "DELETE" })); await loadOrg(); await reloadTeam(); drawTree(); drawTable(); drawCheck();
+          } }),
+          ok
+        ])]);
       form.addEventListener("submit", (e) => {
         e.preventDefault();
-        if (!ta.value.trim()) return ta.focus();
         busy(ok, async () => {
-          try {
-            const r = await api("/admin/units/bulk", { method: "POST", body: { text: ta.value } });
-            closeDialog(); saved(r);
-            toast(r.added ? `조직 ${r.added}개를 만들었어요.` : "새로 만든 조직이 없어요 (이미 있어요).");
-          } catch (ex) { showError(err, ex.message); }
+          try { const r = await api(`/admin/units/${u.id}`, { method: "PATCH", body: { name: name.value, short: short.value } }); closePop(); setOrg(r); drawTree(); drawTable(); }
+          catch (ex) { showError(err, ex.message); }
         });
       });
-      openDialog("조직 여러 줄 한 번에 넣기", form, { admin: true, wide: true });
+      popover(anchor, form);
+      name.focus();
     }
 
-    // 트리: 끌어서 놓기 — 행의 위쪽 1/4 은 앞에, 아래쪽 1/4 은 뒤에, 가운데는 그 조직 아래로
-    let dragId = null;
-    function drawTree() {
-      const qv = org.q;
-      const match = (u) => !qv || u.name.includes(qv) || (u.short || "").includes(qv) || state.team.some((m) => m.unitId === u.id && m.name.includes(qv));
-      const visible = new Set();
-      if (qv) for (const u of state.units) if (match(u)) for (const a of unitPath(u.id)) visible.add(a.id);
-      const rows = [];
-      const walk = (pid, depth) => {
-        for (const u of unitChildren(pid)) {
-          if (qv && !visible.has(u.id)) continue;
-          const kids = unitChildren(u.id);
-          const closed = !qv && org.open.has(u.id);
-          rows.push(treeRow(u, depth, kids.length, closed));
-          if (!closed) walk(u.id, depth + 1);
-        }
-      };
-      walk(null, 0);
-      const none = state.team.filter((m) => !m.unitId).length;
-      fill(treeBox,
-        h("div", { class: "org-tree__head" }, [h("span", { text: `조직 ${state.units.length}개 · 소속 멤버 ${state.team.filter((m) => m.unitId).length}명` }), h("span", { text: "끌어서 순서·위치 바꾸기" })]),
-        rows.length ? rows : h("p", { class: "muted small org-empty", text: qv ? "찾는 조직이 없어요." : "아직 조직이 없어요. '최상위 조직 추가'나 '여러 줄 한 번에 넣기'로 만들어 주세요." }),
-        h("button", { class: "org-row org-row--none" + (org.sel === "none" ? " is-sel" : ""), type: "button", onclick: () => { org.sel = "none"; drawTree(); drawDetail(); } }, [
-          h("span", { class: "org-row__name", text: "소속 미지정" }), h("span", { class: "org-row__count" + (none ? " is-warn" : ""), text: `${none}명` })
-        ]),
-        (() => {
-          const selUnit = org.sel && org.sel !== "none" ? unitOf(org.sel) : null;
-          const can = selUnit && unitPath(selUnit.id).length < 3;
-          return h("button", { class: "org-addchild", type: "button", disabled: !can, title: selUnit && !can ? "3단계까지만 만들 수 있어요" : null, onclick: (ev) => addUnitPop(ev.currentTarget, selUnit) }, selUnit ? `+ '${selUnit.name}' 아래에 추가` : "+ 선택한 조직 아래에 추가");
-        })()
-      );
-    }
-    function treeRow(u, depth, kidCount, closed) {
-      const lead = u.leadId && member(u.leadId);
-      const row = h("div", { class: "org-row" + (org.sel === u.id ? " is-sel" : ""), draggable: "true", style: `padding-left:${8 + depth * 22}px`, "data-id": u.id, role: "button", tabindex: "0", "aria-label": `${unitLabel(u.id)} 선택` }, [
-        h("span", { class: "org-row__grip", html: ICON.grip, "aria-hidden": "true" }),
-        kidCount ? h("button", { class: "org-row__chev" + (closed ? "" : " is-open"), type: "button", "aria-label": `${u.name} ${closed ? "펼치기" : "접기"}`, html: ICON.right, onclick: (e) => {
-          e.stopPropagation();
-          closed ? org.open.delete(u.id) : org.open.add(u.id);
-          store.set("ps.orgClosed", JSON.stringify([...org.open]));
-          drawTree();
-        } }) : h("span", { class: "org-row__chev" }),
-        h("span", { class: `org-row__name org-row__name--d${depth}`, text: u.name }),
-        u.short ? h("small", { class: "muted", text: u.short }) : null,
-        h("span", { class: "org-row__lead muted", text: lead ? `책임 ${lead.name}` : "" }),
-        h("span", { class: "org-row__count", text: `${directCount(u.id)}명` })
-      ]);
-      const select = () => { org.sel = u.id; drawTree(); drawDetail(); };
-      row.addEventListener("click", select);
-      row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(); } });
-      row.addEventListener("dragstart", (e) => { dragId = u.id; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(u.id)); row.classList.add("is-drag"); });
-      row.addEventListener("dragend", () => { dragId = null; treeBox.querySelectorAll(".org-row").forEach((r) => r.classList.remove("is-drag", "drop-before", "drop-after", "drop-inside")); });
-      const zone = (e) => { const r = row.getBoundingClientRect(); const y = (e.clientY - r.top) / r.height; return y < 0.25 ? "before" : y > 0.75 ? "after" : "inside"; };
-      row.addEventListener("dragover", (e) => {
-        if (!dragId || dragId === u.id) return;
-        e.preventDefault();
-        row.classList.remove("drop-before", "drop-after", "drop-inside");
-        row.classList.add("drop-" + zone(e));
-      });
-      row.addEventListener("dragleave", () => row.classList.remove("drop-before", "drop-after", "drop-inside"));
-      row.addEventListener("drop", async (e) => {
-        e.preventDefault();
-        const id = dragId, z = zone(e);
-        dragId = null;
-        if (!id || id === u.id) return;
-        let parentId, index;
-        if (z === "inside") { parentId = u.id; index = unitChildren(u.id).filter((x) => x.id !== id).length; org.open.delete(u.id); }
-        else {
-          parentId = u.parentId || null;
-          const sibs = unitChildren(parentId).filter((x) => x.id !== id);
-          index = sibs.indexOf(u) + (z === "after" ? 1 : 0);
-        }
-        try { saved(await api(`/admin/units/${id}`, { method: "PATCH", body: { parentId, index } })); }
-        catch (ex) { toast(ex.message); drawTree(); }
-      });
-      return row;
-    }
-
-    async function drawDetail() {
-      if (org.sel === "none") {
-        const list = state.team.filter((m) => !m.unitId);
-        fill(detail,
-          h("div", { class: "org-detail__head" }, [h("h2", { text: "소속 미지정" }), h("span", { class: "muted small", text: `${list.length}명` })]),
-          h("p", { class: "muted small", text: "아직 소속이 없는 멤버예요. 소속을 넣으면 소속 화면에 함께 모여요." }),
-          list.length ? h("ul", { class: "org-members" }, list.map((m) => h("li", {}, [avatar(m.id, "sm"), h("strong", { text: m.name }),
-            h("button", { class: "btn btn--admin btn--sm org-members__end", type: "button", text: "소속 넣기", onclick: (ev) => unitPicker(ev.currentTarget, null, async (id) => {
-              if (!id) return;
-              saved(await act(() => api("/admin/users/unit", { method: "POST", body: { userIds: [m.id], unitId: id } })));
-            }, { noneLabel: null }) })
-          ]))) : h("p", { class: "muted small", text: "모든 멤버에게 소속이 있어요." })
-        );
-        return;
-      }
-      const u = org.sel && unitOf(org.sel);
-      if (!u) {
-        fill(detail, h("div", { class: "org-detail__empty" }, [icon("people"), h("p", { class: "muted", text: state.units.length ? "왼쪽에서 조직을 고르면 이름·책임자·소속 멤버를 고칠 수 있어요." : "조직을 만들면 여기에서 고칠 수 있어요." })]));
-        return;
-      }
-      const path = unitPath(u.id);
-      const name = h("input", { value: u.name, maxlength: "30" });
-      const short = h("input", { value: u.short || "", maxlength: "12", placeholder: "예: 식음료" });
-      const subtree = unitSubtree(u.id);
-      const height = (id) => 1 + Math.max(0, ...unitChildren(id).map((k) => height(k.id)));
-      const h0 = height(u.id);
-      const parent = h("select", {}, [h("option", { value: "", text: "(최상위)" }), ...unitRows(null).filter(({ u: x }) => !subtree.has(x.id) && unitPath(x.id).length + h0 <= 3).map(({ u: x }) => h("option", { value: String(x.id), text: unitLabel(x.id) }))]);
-      parent.value = u.parentId ? String(u.parentId) : "";
-      const lead = h("select", {}, [h("option", { value: "", text: "없음" }), ...state.team.map((m) => h("option", { value: String(m.id), text: m.unitId ? `${m.name} · ${unitShort(m.unitId)}` : m.name }))]);
-      lead.value = u.leadId ? String(u.leadId) : "";
-      const members = state.team.filter((m) => m.unitId === u.id);
+    // 엑셀 불러오기·붙여넣기 → 지금 조직도와 비교한 미리보기 → 바뀐 것만 반영
+    function importDialog() {
       const err = errorLine();
-      const save = h("button", { class: "btn btn--admin", type: "button", text: "저장" });
-      save.addEventListener("click", () => busy(save, async () => {
+      const file = h("input", { type: "file", accept: ".xlsx" });
+      const sheetSel = h("select", { "aria-label": "시트", hidden: true });
+      const paste = h("textarea", { rows: "7", placeholder: "엑셀에서 표를 복사해 붙여 넣어도 돼요 (머리줄 포함)\n넘버링 | 본부 | 부서 | 직함 | 이름 | 비고", "aria-label": "붙여넣기" });
+      const baseIn = h("input", { type: "date", value: state.orgBaseDate || today(), "aria-label": "기준일" });
+      const preview = h("div", { class: "ot-preview" });
+      const go2 = h("button", { class: "btn btn--admin", type: "button", text: "비교하기" });
+      let sheets = [], rows = null, diff = null;
+      file.addEventListener("change", () => busy(go2, async () => {
         try {
-          const body = { name: name.value, short: short.value, leadId: lead.value ? Number(lead.value) : null };
-          if ((parent.value || "") !== String(u.parentId || "")) body.parentId = parent.value ? Number(parent.value) : null;
-          saved(await api(`/admin/units/${u.id}`, { method: "PATCH", body }));
-          showError(err, ""); toast("저장했어요.");
+          sheets = await readXlsx(file.files[0]);
+          sheetSel.replaceChildren(...sheets.map((s, i) => h("option", { value: String(i), text: `${s.name} (${s.rows.length}줄)` })));
+          sheetSel.hidden = sheets.length < 2;
+          const guess = sheets.findIndex((s) => /후/.test(s.name));
+          sheetSel.value = String(guess >= 0 ? guess : 0);
+          const m = sheets[Number(sheetSel.value)]?.name.match(/(\d{2})(\d{2})\s*$/);
+          if (m) baseIn.value = `${today().slice(0, 4)}-${m[1]}-${m[2]}`;
+          showError(err, "");
         } catch (ex) { showError(err, ex.message); }
       }));
-      const stats = h("div", { class: "org-stats" }, [0, 1, 2].map(() => h("span", { class: "org-stat is-loading" })));
-      const addMemberBtn = h("button", { class: "link-btn", type: "button", text: "+ 멤버 넣기" });
-      addMemberBtn.addEventListener("click", () => {
-        const others = state.team.filter((m) => m.unitId !== u.id);
-        popover(addMemberBtn, h("div", { class: "pop__list" }, others.length ? others.map((m) => h("button", { type: "button", class: "pop__item", onclick: async () => {
-          closePop();
-          saved(await act(() => api("/admin/users/unit", { method: "POST", body: { userIds: [m.id], unitId: u.id } }), `${m.name}님을 넣었어요.`));
-        } }, [avatar(m.id, "sm"), h("span", { class: "pop__name" }, [m.name, h("small", { text: m.unitId ? unitLabel(m.unitId) : "소속 미지정" })])])) : [h("p", { class: "pop__empty", text: "넣을 멤버가 없어요." })]));
+      async function compare() {
+        try {
+          rows = sheets.length ? parseOrgRows(sheets[Number(sheetSel.value)].rows) : parseOrgRows(paste.value.split(/\r?\n/).map((l) => l.split("\t")));
+          if (!rows.length) throw new Error("본부·부서·직함·이름 열을 찾지 못했어요. 머리줄(본부, 부서, 직함, 이름)을 함께 붙여 넣어 주세요.");
+          diff = await api("/admin/org/preview", { method: "POST", body: { rows } });
+          showError(err, "");
+          drawPreview();
+        } catch (ex) { showError(err, ex.message); }
+      }
+      go2.addEventListener("click", () => busy(go2, compare));
+      const remove = new Set();
+      function drawPreview() {
+        remove.clear(); diff.remove.forEach((x) => remove.add(x.id));
+        const list = (kind, items, cls) => items.length ? h("div", { class: "ot-diff" }, [h("h3", {}, [h("span", { class: `ot-badge ot-badge--${cls}`, text: kind }), ` ${items.length}`]),
+          h("ul", {}, items.map((x) => h("li", {}, [
+            cls === "remove" ? h("input", { type: "checkbox", checked: true, "aria-label": `${x.name} 빼기`, onchange: (e) => { e.target.checked ? remove.add(x.id) : remove.delete(x.id); applyBtn.textContent = `${diff.add.length + diff.move.length + remove.size}건 반영`; } }) : null,
+            h("strong", { text: x.name }), " ", h("span", { class: "muted", text: x.what })
+          ])))]) : null;
+        const applyBtn = h("button", { class: "btn btn--admin", type: "button", text: `${diff.add.length + diff.move.length + diff.remove.length}건 반영` });
+        applyBtn.addEventListener("click", () => busy(applyBtn, async () => {
+          try {
+            const r = await api("/admin/org/apply", { method: "POST", body: { rows, baseDate: baseIn.value || null, removeIds: [...remove] } });
+            closeDialog(); saved(r); base.value = state.orgBaseDate || "";
+            toast(`반영했어요: 추가 ${r.added}, 이동·변경 ${r.moved}, 빠짐 ${r.removed}`);
+          } catch (ex) { showError(err, ex.message); }
+        }));
+        fill(preview,
+          h("p", { class: "muted small", text: `${rows.length}줄을 지금 조직도와 비교했어요. 그대로인 줄 ${diff.same}개, 바뀐 것만 반영해요. 공석 줄은 그대로 둬요.` }),
+          list("추가", diff.add, "add"), list("이동·변경", diff.move, "move"), list("빠짐", diff.remove, "remove"),
+          !diff.add.length && !diff.move.length && !diff.remove.length ? h("p", { class: "muted", text: "바뀐 것이 없어요." }) : null,
+          h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), diff.add.length + diff.move.length + diff.remove.length ? applyBtn : null])
+        );
+      }
+      openDialog("엑셀 불러오기 · 붙여넣기", h("div", { class: "stack" }, [
+        h("p", { class: "muted small", text: "엑셀 파일(.xlsx)을 고르거나 표를 붙여 넣으면, 지금 조직도와 비교해 추가·이동·빠짐만 보여 줘요. 확인한 뒤 반영해요. 파일은 이 브라우저 안에서만 읽고 서버에는 표 내용만 보내요." }),
+        h("div", { class: "row2" }, [field("엑셀 파일", file), field("기준일", baseIn)]), sheetSel,
+        field("또는 붙여넣기", paste), err,
+        h("div", { class: "actions" }, go2),
+        preview
+      ]), { admin: true, wide: true });
+    }
+    function exportCsv() {
+      const esc = (v) => (/[",\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+      const lines = [["넘버링", "본부", "부서", "직함", "이름", "비고"]];
+      orgRowsOrdered().forEach((p, i) => {
+        const pl = placeOf(p.unitId);
+        lines.push([i + 1, pl.hq || "공통", pl.dept ? (pl.team ? `${pl.dept} / ${pl.team}` : pl.dept) : pl.hq ? "본부 직속" : "위원회 직속", p.title, p.name || "공석", p.note]);
       });
-      fill(detail,
-        h("div", { class: "org-detail__head" }, [
-          path.length > 1 ? h("span", { class: "muted small", text: path.slice(0, -1).map((x) => x.name).join(" › ") + " ›" }) : null,
-          h("div", { class: "org-detail__title" }, [h("h2", { text: u.name }), h("span", { class: "muted small", text: `${path.length}단계` })])
-        ]),
-        h("div", { class: "row2" }, [field("조직 이름", name), field("상위 조직", parent), field("책임자", lead), field("약칭 (목록에 짧게)", short)]),
-        h("div", { class: "org-block" }, [
-          h("div", { class: "org-block__head" }, [h("h3", { text: `소속 멤버 ${members.length}명` }), addMemberBtn]),
-          members.length ? h("ul", { class: "org-members" }, members.map((m) => h("li", {}, [avatar(m.id, "sm"), h("strong", { text: m.name }),
-            u.leadId === m.id ? h("span", { class: "badge badge--accent", text: "책임자" }) : null,
-            h("button", { class: "link-btn link-btn--muted org-members__end", type: "button", text: "빼기", onclick: async () => {
-              saved(await act(() => api("/admin/users/unit", { method: "POST", body: { userIds: [m.id], unitId: null } }), `${m.name}님을 뺐어요 (소속 미지정).`));
-            } })
-          ]))) : h("p", { class: "muted small", text: "아직 소속 멤버가 없어요." })
-        ]),
-        h("div", { class: "org-block" }, [h("h3", { text: "이 조직과 연결된 것 (아래 조직 포함)" }), stats, h("a", { class: "small", href: `#/unit/${u.id}`, text: "소속 화면에서 보기 →" })]),
-        err,
-        h("div", { class: "org-detail__foot" }, [
-          h("span", { class: "muted small", text: u.parentId ? `지우면 아래 조직·소속 멤버는 '${unitOf(u.parentId).name}'(으)로 옮겨져요.` : "지우면 아래 조직은 최상위로, 소속 멤버는 '소속 미지정'으로 옮겨져요." }),
-          h("button", { class: "btn btn--danger-outline", type: "button", text: "조직 지우기", onclick: () => confirmDialog("조직 지우기", `'${unitLabel(u.id)}' 을(를) 지울까요?`, "지우기", async () => {
-            const r = await api(`/admin/units/${u.id}`, { method: "DELETE" });
-            org.sel = u.parentId || null; closeDialog(); toast("지웠어요."); saved(r);
-          }) }),
-          save
-        ])
-      );
-      try {
-        const s = await api(`/admin/units/${u.id}/stats?today=${today()}`);
-        if (org.sel !== u.id) return;
-        stats.replaceChildren(...[[s.meetings, "이번 달 회의"], [s.openTasks, "남은 할 일"], [s.calendars, "구글 캘린더"]].map(([n, label]) => h("a", { class: "org-stat", href: `#/unit/${u.id}` }, [h("strong", { text: String(n) }), h("span", { text: label })])));
-      } catch (e) { stats.replaceChildren(h("span", { class: "muted small", text: e.message })); }
+      const blob = new Blob(["﻿" + lines.map((l) => l.map(esc).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+      const a = h("a", { href: URL.createObjectURL(blob), download: `조직도${state.orgBaseDate ? "_" + state.orgBaseDate : ""}.csv` });
+      document.body.append(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     }
 
-    page = { name: "org", reload: async () => { await reloadTeam(); drawTree(); drawDetail(); } };
-    if (org.sel && org.sel !== "none" && !unitOf(org.sel)) org.sel = null;
-    drawTree();
-    drawDetail();
+    page = { name: "org", reload: async () => { await loadOrg(); drawTable(); drawCheck(); drawTree(); } };
+    drawTable(); drawCheck(); drawTree();
+  }
+
+  // 엑셀 표(2차원 배열) → [{ hq, dept, title, name, note }]. 머리줄(본부·부서·직함·이름)을 찾아 열을 맞춤
+  function parseOrgRows(grid) {
+    const norm = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
+    const hi = grid.findIndex((r) => r.some((c) => norm(c) === "이름") && r.some((c) => norm(c) === "직함"));
+    let col, start;
+    if (hi >= 0) {
+      const head = grid[hi].map(norm);
+      col = { hq: head.indexOf("본부"), dept: head.indexOf("부서"), title: head.indexOf("직함"), name: head.indexOf("이름"), note: head.indexOf("비고") };
+      start = hi + 1;
+    } else {
+      // 머리줄 없이 붙여 넣으면: (넘버링) 본부 부서 직함 이름 비고
+      const first = (grid.find((r) => r.some((c) => norm(c))) || []).map(norm).filter((c, i, a) => c || i < a.length);
+      const shift = /^\d+$/.test(first[0] || "") || first[0] === "" ? 1 : 0;
+      col = { hq: shift, dept: shift + 1, title: shift + 2, name: shift + 3, note: shift + 4 };
+      start = 0;
+    }
+    if (col.name < 0 || col.title < 0) return [];
+    const at = (r, i) => (i >= 0 ? norm(r[i]) : "");
+    return grid.slice(start).map((r) => ({ hq: at(r, col.hq), dept: at(r, col.dept), title: at(r, col.title), name: at(r, col.name), note: at(r, col.note) }))
+      .filter((r) => r.name || r.title).map((r) => (r.name === "공석" || r.name === "-" ? { ...r, name: "" } : r));
+  }
+
+  // .xlsx 읽기 (외부 라이브러리 없이: zip 목록 → 압축 풀기(브라우저 DecompressionStream) → 시트 XML)
+  async function readXlsx(f) {
+    if (!f) throw new Error("파일을 골라 주세요.");
+    const buf = new Uint8Array(await f.arrayBuffer());
+    const dv = new DataView(buf.buffer);
+    let e = buf.length - 22;
+    while (e >= 0 && dv.getUint32(e, true) !== 0x06054b50) e--;
+    if (e < 0) throw new Error("엑셀 파일(.xlsx)이 아니에요.");
+    const files = {};
+    for (let i = 0, off = dv.getUint32(e + 16, true), n = dv.getUint16(e + 10, true); i < n; i++) {
+      const nameLen = dv.getUint16(off + 28, true), extra = dv.getUint16(off + 30, true), comment = dv.getUint16(off + 32, true);
+      files[new TextDecoder().decode(buf.subarray(off + 46, off + 46 + nameLen))] = { method: dv.getUint16(off + 10, true), size: dv.getUint32(off + 20, true), local: dv.getUint32(off + 42, true) };
+      off += 46 + nameLen + extra + comment;
+    }
+    const read = async (name) => {
+      const x = files[name];
+      if (!x) return null;
+      const startAt = x.local + 30 + dv.getUint16(x.local + 26, true) + dv.getUint16(x.local + 28, true);
+      const data = buf.subarray(startAt, startAt + x.size);
+      if (x.method === 0) return new TextDecoder().decode(data);
+      return new Response(new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"))).text();
+    };
+    const xml = (s) => new DOMParser().parseFromString(s || "<x/>", "application/xml");
+    const tags = (node, name) => [...node.getElementsByTagName(name)];
+    const wb = xml(await read("xl/workbook.xml"));
+    const rels = Object.fromEntries(tags(xml(await read("xl/_rels/workbook.xml.rels")), "Relationship").map((r) => [r.getAttribute("Id"), r.getAttribute("Target")]));
+    const strings = tags(xml(await read("xl/sharedStrings.xml")), "si").map((si) => tags(si, "t").filter((t) => t.parentNode.nodeName !== "rPh").map((t) => t.textContent).join(""));
+    const colOf = (ref) => { let n = 0; for (const ch of ref.replace(/\d+/g, "")) n = n * 26 + ch.charCodeAt(0) - 64; return n - 1; };
+    const sheets = [];
+    for (const s of tags(wb, "sheet")) {
+      const target = rels[s.getAttribute("r:id")] || "";
+      const doc = xml(await read(target.startsWith("/") ? target.slice(1) : "xl/" + target.replace(/^\.\//, "")));
+      const rows = tags(doc, "row").map((row) => {
+        const cells = [];
+        for (const c of tags(row, "c")) {
+          const t = c.getAttribute("t"), v = tags(c, "v")[0]?.textContent ?? "";
+          cells[colOf(c.getAttribute("r") || "A")] = t === "s" ? strings[Number(v)] ?? "" : t === "inlineStr" ? tags(c, "t").map((x) => x.textContent).join("") : v;
+        }
+        return Array.from(cells, (x) => x ?? "");
+      });
+      sheets.push({ name: s.getAttribute("name"), rows });
+    }
+    if (!sheets.length) throw new Error("시트를 찾지 못했어요.");
+    return sheets;
   }
 
   /* ---------- 소속 화면 (모두): 팀원이 참석하는 회의 · 맡은 할 일 · 쓴 메모 ---------- */
@@ -2509,7 +2836,8 @@
 
     function drawHead() {
       const scope = sub ? unitSubtree(u.id) : new Set([u.id]);
-      const people = state.team.filter((m) => scope.has(m.unitId));
+      const ids = data ? new Set(data.memberIds) : new Set(state.team.filter((m) => scope.has(m.unitId)).map((m) => m.id));
+      const people = state.team.filter((m) => ids.has(m.id));
       const lead = u.leadId && member(u.leadId);
       const path = unitPath(u.id);
       const other = h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "다른 소속" });
@@ -2556,6 +2884,7 @@
 
     async function load() {
       data = await api(`/units/${u.id}?sub=${sub ? 1 : 0}&today=${today()}`);
+      drawHead();
       drawBody();
     }
     page = { name: "unit", reload: load };
@@ -2610,6 +2939,7 @@
     if (name === "notices") return pageNotices();
     if (name === "members") return pageMembers();
     if (name === "org") return pageOrg();
+    if (name === "orgchart") return pageOrgChart();
     if (name === "backup") return pageBackup();
     if (name === "unit") return pageUnit(id ? Number(id) : null);
     return go("#/today");
