@@ -1791,7 +1791,8 @@
     function toolbar() {
       const title = `${state.month.getFullYear()}년 ${state.month.getMonth() + 1}월`;
       document.title = `${title} · ${TITLE}`;
-      const search = h("label", { class: "search" }, [icon("search"), h("input", { type: "search", value: state.search, placeholder: "안건·메모·댓글까지 전체 검색", "aria-label": "검색", oninput: (e) => { state.search = e.target.value; scheduleSearch(); } })]);
+      searchToggle = h("button", { class: "search__more", type: "button", "aria-label": "종류 거르기 펼치기", "aria-expanded": String(searchFiltersOpen), hidden: !state.search.trim(), html: ICON.right, onclick: (e) => { e.preventDefault(); searchFiltersOpen = !searchFiltersOpen; searchToggle.setAttribute("aria-expanded", String(searchFiltersOpen)); drawBody(); } });
+      const search = h("label", { class: "search search--main" }, [icon("search"), h("input", { type: "search", value: state.search, placeholder: "안건·메모·댓글까지 전체 검색", "aria-label": "검색", oninput: (e) => { state.search = e.target.value; scheduleSearch(); } }), searchToggle]);
       const views = h("div", { class: "seg seg--sm" }, [["month", "월"], ["list", "목록"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String(state.view === k), text: label, onclick: () => { state.view = k; store.set("ps.view", k); draw(); } }))
         .concat(h("a", { href: "#/today", class: "seg__link", text: "일" })));
       return h("div", { class: "cal-head" }, [
@@ -1814,6 +1815,7 @@
     function drawBody() {
       const searching = !!state.search.trim();
       listCard.hidden = searching;
+      if (searchToggle) searchToggle.hidden = !searching;
       bodyBox.replaceChildren(searching ? searchView() : state.view === "list" ? monthList() : monthGrid());
       if (!searching) drawMeetingList();
       markPeeked();
@@ -1821,6 +1823,7 @@
 
     /* ----- 검색: 서버에서 안쪽 내용까지 찾고, 날짜 순서대로 묶어서 ----- */
     let searchTimer = null, searchSeq = 0, searchData = null, searchKind = store.get("ps.searchKind", "all");
+    let searchToggle = null, searchFiltersOpen = searchKind !== "all";
     function scheduleSearch() {
       clearTimeout(searchTimer);
       if (!state.search.trim()) { searchData = null; drawBody(); return; }
@@ -1837,15 +1840,30 @@
         drawBody();
         // 오늘(또는 오늘 다음 첫 날짜) 위치로
         const target = bodyBox.querySelector(".sr-today, .sr-group.is-today, .sr-group.is-future");
-        if (target) target.scrollIntoView({ block: "start", behavior: "smooth" });
+        if (target) target.scrollIntoView({ block: "center", behavior: "smooth" });
       } catch (e) { if (seq === searchSeq && e.status !== 401) bodyBox.replaceChildren(failed(e)); }
     }
     const SR_KIND = { meeting: ["회의", 4], event: ["일정", 0], task: ["할 일", 1], memo: ["메모", 2] };
     const srGroup = (r) => (r.type === "task" ? "task" : r.type === "memo" ? "memo" : "meeting");
     const marked = (text, hl) => (hl ? [text.slice(0, hl[0]), h("mark", { text: text.slice(hl[0], hl[1]) }), text.slice(hl[1])] : [text]);
+    // '오전 10:30~ 11:30', '오후 2시~ 3시', '오전 11시~ 오후 1시'
+    function koTime(t) {
+      const [hh, mm] = t.split(":").map(Number);
+      const ampm = hh < 12 || hh === 24 ? "오전" : "오후";
+      const h12 = hh % 12 === 0 ? 12 : hh % 12;
+      return [ampm, mm ? `${h12}:${pad(mm)}` : `${h12}시`];
+    }
+    function koRange(start, end) {
+      if (!start) return "종일";
+      const [a1, s1] = koTime(start);
+      if (!end || end === start) return `${a1} ${s1}`;
+      const [a2, s2] = koTime(end);
+      return `${a1} ${s1}~ ${a2 === a1 ? "" : a2 + " "}${s2}`;
+    }
     function searchView() {
       const qv = state.search.trim();
-      if (!searchData || searchData.q !== qv) return h("div", { class: "loading", text: "찾는 중…" });
+      if (!searchData) return h("div", { class: "card sr-card" }, h("div", { class: "loading", text: "찾는 중…" }));
+      const pending = searchData.q !== qv; // 치는 동안에는 이전 결과를 그대로 두고 '찾는 중'만 표시
       const inCat = catFilter(), ours = ourFilter();
       const all = searchData.results.filter((r) => inCat(r) && ours(r));
       const count = (k) => (k === "all" ? all.length : all.filter((r) => srGroup(r) === k).length);
@@ -1857,44 +1875,54 @@
         if (!groups.length || groups[groups.length - 1].key !== key) groups.push({ key, items: [] });
         groups[groups.length - 1].items.push(r);
       }
+      const todayLine = (note) => h("div", { class: "sr-today" }, [h("span", { class: "sr-today__dot" }), h("span", { text: `오늘 ${dateLabel(t)}` }), h("small", { text: note })]);
       const out = [];
       let todayShown = false;
       for (const g of groups) {
-        if (!todayShown && g.key && g.key >= t) {
+        if (!todayShown && (!g.key || g.key >= t)) {
           todayShown = true;
-          if (g.key !== t) out.push(h("div", { class: "sr-today" }, [h("span", { text: `오늘 · ${dateLabel(t)}` }), h("small", { text: "이 날은 찾은 것이 없어요" })]));
+          if (g.key !== t) out.push(todayLine(g.key ? "이 날은 찾은 것이 없어요" : "앞으로의 날짜에는 찾은 것이 없어요"));
         }
-        if (!todayShown && !g.key) { todayShown = true; out.push(h("div", { class: "sr-today" }, [h("span", { text: `오늘 · ${dateLabel(t)}` }), h("small", { text: "이후 날짜에는 찾은 것이 없어요" })])); }
-        out.push(h("section", { class: "sr-group" + (g.key === t ? " is-today" : g.key > t ? " is-future" : !g.key ? " is-nodate" : " is-past") }, [
-          h("h3", { class: "sr-date" }, g.key ? [dateLabel(g.key, { year: g.key.slice(0, 4) !== t.slice(0, 4) }), relDay(g.key) ? h("span", { class: "sr-rel", text: relDay(g.key) }) : null] : ["날짜 없음"]),
-          h("ul", { class: "sr-list" }, g.items.map(resultRow))
-        ]));
+        out.push(srGroupEl(g, t));
       }
-      if (!todayShown && groups.length) out.push(h("div", { class: "sr-today" }, [h("span", { text: `오늘 · ${dateLabel(t)}` }), h("small", { text: "이후 날짜에는 찾은 것이 없어요" })]));
+      if (!todayShown && groups.length) out.push(todayLine("앞으로의 날짜에는 찾은 것이 없어요"));
       return h("div", { class: "sr" }, [
         h("div", { class: "sr-head" }, [
-          h("p", { class: "sr-summary" }, [h("strong", { text: `'${qv}'` }), ` 결과 ${list.length}개 · 전체 기간, 날짜 순서`, searchData.total > searchData.limit ? h("small", { class: "muted", text: ` (앞 ${searchData.limit}개만 보여요. 검색어를 더 자세히 적어 주세요)` }) : null]),
-          h("div", { class: "seg seg--sm" }, [["all", "전체"], ["meeting", "회의·일정"], ["task", "할 일"], ["memo", "메모"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String(searchKind === k), onclick: () => { searchKind = k; store.set("ps.searchKind", k); drawBody(); } }, [label, h("span", { class: "count", text: String(count(k)) })]))),
-          h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "검색 지우기", onclick: () => { state.search = ""; searchData = null; draw(); } })
+          h("p", { class: "sr-summary" }, [h("strong", { text: `'${searchData.q}'` }), ` ${list.length}건 · 전체 기간`, pending ? h("small", { class: "muted", text: " · 찾는 중…" }) : null, searchData.total > searchData.limit ? h("small", { class: "muted", text: ` (앞 ${searchData.limit}건만, 검색어를 더 자세히 적어 주세요)` }) : null]),
+          searchKind !== "all" && !searchFiltersOpen ? h("span", { class: "sr-kindtag", text: { meeting: "회의·일정만", task: "할 일만", memo: "메모만" }[searchKind] }) : null
         ]),
-        out.length ? h("div", { class: "sr-body" }, out) : h("p", { class: "empty", text: "찾는 내용이 없어요. 다른 낱말로 찾아 보세요." })
+        searchFiltersOpen ? h("div", { class: "seg seg--sm sr-kinds" }, [["all", "전체"], ["meeting", "회의·일정"], ["task", "할 일"], ["memo", "메모"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String(searchKind === k), onclick: () => { searchKind = k; store.set("ps.searchKind", k); drawBody(); } }, [label, h("span", { class: "count", text: String(count(k)) })]))) : null,
+        out.length ? h("div", { class: "card sr-card" }, out) : h("div", { class: "card sr-card" }, h("p", { class: "empty", text: "찾는 내용이 없어요. 다른 낱말로 찾아 보세요." }))
       ]);
+    }
+    // 날짜 한 묶음: 왼쪽 큰 날짜 숫자 + 'YYYY년 M월, 요일', 오른쪽에 그날 항목
+    function srGroupEl(g, t) {
+      const cls = g.key === t ? " is-today" : !g.key ? " is-nodate" : g.key > t ? " is-future" : " is-past";
+      let dateCol;
+      if (g.key) {
+        const d = parseYmd(g.key);
+        dateCol = h("div", { class: "sr-date" }, [h("span", { class: "sr-date__n", text: String(d.getDate()) }), h("span", { class: "sr-date__ym" }, [h("span", { class: "sr-date__long", text: `${d.getFullYear()}년 ${d.getMonth() + 1}월, ` }), WEEKDAYS[d.getDay()]])]);
+      } else dateCol = h("div", { class: "sr-date sr-date--none" }, h("span", { class: "sr-date__ym", text: "날짜 없음" }));
+      return h("section", { class: "sr-group" + cls, "aria-label": g.key ? dateLabel(g.key, { year: true }) : "날짜 없음" }, [dateCol, h("ul", { class: "sr-list" }, g.items.map(resultRow))]);
     }
     function resultRow(r) {
       const [label, color] = r.ext ? [r.calendarName || "구글 캘린더", r.color] : SR_KIND[r.type];
       const key = r.ext ? `ext:${r.id}` : r.type === "task" ? `task:${r.id}` : r.type === "memo" ? (r.meetingId ? `event:${r.meetingId}` : `day:${r.date}`) : `event:${r.id}`;
       const open = () => { const [type, id] = key.split(":"); openPeek(type, type === "day" ? id : Number(id)); };
       const inTitle = r.field === "제목" || (r.type === "memo" && r.field === "메모"); // 메모는 본문이 곧 제목
-      const time = r.type === "task" ? (r.status === "done" ? "완료" : STATUS[r.status]) : r.time ? (r.endTime ? `${r.time}-${r.endTime}` : r.time) : r.type === "memo" ? "" : "종일";
-      return h("li", {}, h("button", { class: "sr-row", type: "button", "data-peek": key, onclick: open }, [
-        h("span", { class: `sr-kind c${color}` }, [h("i", { class: "dot" }), h("span", { text: label })]),
+      const done = r.type === "task" && r.status === "done";
+      const mark = r.type === "task" ? h("span", { class: "sr-mark sr-mark--task" + (done ? " is-done" : ""), title: label, html: done ? ICON.check : "" })
+        : r.type === "memo" ? h("span", { class: "sr-mark sr-mark--memo", title: label }, icon("note"))
+        : h("span", { class: `sr-mark sr-mark--dot c${color}`, title: label });
+      const time = r.type === "task" ? (done ? "완료" : `할 일 · ${STATUS[r.status]}`) : r.type === "memo" ? (r.important ? "중요 메모" : "메모") : koRange(r.time, r.endTime);
+      return h("li", {}, h("button", { class: "sr-row", type: "button", "data-peek": key, onclick: open, title: `${label} · ${r.title}` }, [
+        mark,
         h("span", { class: "sr-time", text: time }),
         h("span", { class: "sr-main" }, [
-          h("strong", { class: "sr-title" + (r.type === "task" && r.status === "done" ? " is-done" : "") }, inTitle ? marked(r.text, r.hl) : [r.title]),
-          inTitle ? null : h("span", { class: "sr-snip" }, [h("span", { class: "sr-field", text: `${r.field}: ` }), ...marked(r.text, r.hl)]),
-          r.type === "memo" && r.meetingTitle ? h("span", { class: "sr-meta" }, [icon("people"), r.meetingTitle]) : null
-        ]),
-        catChip(r.categoryId)
+          h("span", { class: "sr-title" + (done ? " is-done" : "") }, inTitle ? marked(r.text, r.hl) : [r.title]),
+          inTitle ? null : h("span", { class: "sr-snip" }, [`${r.field}: `, ...marked(r.text, r.hl)]),
+          r.type === "memo" && r.meetingTitle ? h("span", { class: "sr-snip" }, `회의: ${r.meetingTitle}`) : r.ext ? h("span", { class: "sr-snip", text: label }) : null
+        ])
       ]));
     }
 
