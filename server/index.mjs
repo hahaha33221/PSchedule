@@ -40,6 +40,22 @@ const CATEGORY_DEPTH = 3; // 대분류 › 중분류 › 소분류
 const UNIT_DEPTH = 5;     // 조직도는 5단계까지 (위원회 › 본부 › 부 › 분과 › 팀)
 
 const db = openDb(join(DATA_DIR, "pschedule.db"));
+
+/* ---------- 보이는 범위 (팀별 제한) ----------
+ * 멤버: 자기 소속 조직과 그 아래 팀의 항목 + 다른 팀이어도 내가 관련된 것 (만든 것, 참석하는 회의, 맡은 할 일, 쓴 메모,
+ *       그리고 볼 수 있는 회의에 붙은 할 일·메모). 소속이 없으면 내 것만. 관리자는 모두.
+ * 회의·일정·할 일·메모를 읽고 쓰는 쿼리는 모두 아래 조건을 :admin, :uid, :units (볼 수 있는 조직 id JSON) 로 씀
+ */
+const IN_UNITS = (col) => `${col} IN (SELECT value FROM json_each(:units))`;
+const EV_VIS = (e) => `(:admin = 1 OR ${IN_UNITS(`${e}.unit_id`)} OR ${e}.created_by = :uid
+  OR EXISTS (SELECT 1 FROM event_attendees va WHERE va.event_id = ${e}.id AND va.user_id = :uid))`;
+const TASK_VIS = (t) => `(:admin = 1 OR ${IN_UNITS(`${t}.unit_id`)} OR ${t}.created_by = :uid OR ${t}.assignee_id = :uid
+  OR EXISTS (SELECT 1 FROM events ve WHERE ve.id = ${t}.meeting_id AND ${EV_VIS("ve")}))`;
+const MEMO_VIS = (m) => `(:admin = 1 OR ${IN_UNITS(`${m}.unit_id`)} OR ${m}.created_by = :uid
+  OR EXISTS (SELECT 1 FROM events ve WHERE ve.id = ${m}.meeting_id AND ${EV_VIS("ve")}))`;
+// 가져온 구글 캘린더: 팀을 안 정한 캘린더는 '공용' (모두)
+const EXT_VIS = (c) => `(:admin = 1 OR ${c}.unit_id IS NULL OR ${IN_UNITS(`${c}.unit_id`)})`;
+const extV = (v) => ({ admin: v.admin, units: v.units });
 const created = ensureAdmin(db);
 if (created) console.log(`관리자 계정을 만들었어요 → 아이디 ${created.login} / 비밀번호 ${created.password} (로그인 후 바로 바꿔 주세요)`);
 const calendarSync = createCalendarSync(db);
@@ -89,6 +105,7 @@ const q = {
   liftUnitUsers: db.prepare("UPDATE users SET unit_id = ? WHERE unit_id = ?"),
   liftUnitCalendars: db.prepare("UPDATE calendars SET unit_id = ? WHERE unit_id = ?"),
   liftUnitPositions: db.prepare("UPDATE org_positions SET unit_id = ? WHERE unit_id = ?"),
+  liftUnitItems: ["events", "tasks", "memos"].map((t) => db.prepare(`UPDATE ${t} SET unit_id = ? WHERE unit_id = ?`)),
   // 조직도 자리
   positions: db.prepare("SELECT * FROM org_positions ORDER BY sort, id"),
   position: db.prepare("SELECT * FROM org_positions WHERE id = ?"),
@@ -124,9 +141,9 @@ const q = {
   addCalendar: db.prepare("INSERT INTO calendars (name, url, color, category_id, unit_id) VALUES (?, ?, ?, ?, ?)"),
   setCalendar: db.prepare("UPDATE calendars SET name = ?, url = ?, color = ?, category_id = ?, unit_id = ? WHERE id = ?"),
   delCalendar: db.prepare("DELETE FROM calendars WHERE id = ?"),
-  externalRange: db.prepare(`SELECT x.*, c.name AS calendar_name, c.color, c.category_id FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id
-    WHERE x.start_date <= ? AND x.end_date >= ? ORDER BY x.start_date, x.start_time IS NOT NULL, x.start_time, x.id LIMIT 3000`),
-  external: db.prepare(`SELECT x.*, c.name AS calendar_name, c.color, c.category_id, c.last_ok_at FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id WHERE x.id = ?`),
+  externalRange: db.prepare(`SELECT x.*, c.name AS calendar_name, c.color, c.category_id, c.unit_id FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id
+    WHERE x.start_date <= ? AND x.end_date >= ? AND ${EXT_VIS("c")} ORDER BY x.start_date, x.start_time IS NOT NULL, x.start_time, x.id LIMIT 3000`),
+  external: db.prepare(`SELECT x.*, c.name AS calendar_name, c.color, c.category_id, c.unit_id, c.last_ok_at FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id WHERE x.id = ?`),
 
   // 일정 (기간이 겹치는 것)
   events: db.prepare(`
@@ -135,8 +152,19 @@ const q = {
       (SELECT count(*) FROM memos m WHERE m.meeting_id = e.id AND m.important = 1) AS important_memos,
       (SELECT count(*) FROM comments c WHERE c.target_type = 'event' AND c.target_id = e.id) AS comments
     FROM events e LEFT JOIN users u ON u.id = e.created_by
-    WHERE e.start_date <= ? AND e.end_date >= ?
+    WHERE e.start_date <= ? AND e.end_date >= ? AND ${EV_VIS("e")}
     ORDER BY e.start_date, e.start_time IS NOT NULL, e.start_time, e.id`),
+  // 이 사용자가 볼 수 있는지 (상세·수정 전에)
+  eventVis: db.prepare(`SELECT 1 FROM events e WHERE e.id = :id AND ${EV_VIS("e")}`),
+  taskVis: db.prepare(`SELECT 1 FROM tasks t WHERE t.id = :id AND ${TASK_VIS("t")}`),
+  memoVis: db.prepare(`SELECT 1 FROM memos m WHERE m.id = :id AND ${MEMO_VIS("m")}`),
+  extVis: db.prepare(`SELECT 1 FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id WHERE x.id = :id AND ${EXT_VIS("c")}`),
+  setEventUnit: db.prepare("UPDATE events SET unit_id = ? WHERE id = ?"),
+  setTaskUnit: db.prepare("UPDATE tasks SET unit_id = ? WHERE id = ?"),
+  setMemoUnit: db.prepare("UPDATE memos SET unit_id = ? WHERE id = ?"),
+  // 관리자 전체 대시보드: 팀별 요약 (항목의 팀 기준, 팀 없음은 null)
+  overviewMeetings: db.prepare("SELECT unit_id, count(*) AS n FROM events WHERE kind = 'meeting' AND start_date <= ? AND end_date >= ? GROUP BY unit_id"),
+  overviewTasks: db.prepare("SELECT unit_id, sum(status <> 'done') AS open, sum(status <> 'done' AND due_date < ?) AS late FROM tasks GROUP BY unit_id"),
   event: db.prepare(`
     SELECT e.*, u.name AS author,
       (SELECT count(*) FROM tasks t WHERE t.meeting_id = e.id AND t.status <> 'done') AS open_tasks,
@@ -145,9 +173,9 @@ const q = {
     FROM events e LEFT JOIN users u ON u.id = e.created_by WHERE e.id = ?`),
   // 회의 고르기 (빠른 메모·할 일 연결용): 오늘 기준 앞뒤
   meetingChoices: db.prepare(`
-    SELECT id, title, start_date, start_time FROM events
-    WHERE kind = 'meeting' AND end_date >= ? AND start_date <= ?
-    ORDER BY abs(julianday(start_date) - julianday(?)), start_time, id LIMIT 40`),
+    SELECT e.id, e.title, e.start_date, e.start_time FROM events e
+    WHERE e.kind = 'meeting' AND e.end_date >= ? AND e.start_date <= ? AND ${EV_VIS("e")}
+    ORDER BY abs(julianday(e.start_date) - julianday(?)), e.start_time, e.id LIMIT 40`),
   addEvent: db.prepare(`INSERT INTO events (kind, title, start_date, end_date, start_time, end_time, location, description, agenda, category_id, created_by)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
   setEvent: db.prepare(`UPDATE events SET kind = ?, title = ?, start_date = ?, end_date = ?, start_time = ?, end_time = ?,
@@ -216,22 +244,23 @@ const TASK_FROM = `FROM tasks t LEFT JOIN events e ON e.id = t.meeting_id`;
 const TASK_ORDER = `ORDER BY t.status = 'done', t.due_date IS NULL, t.due_date, t.id`;
 Object.assign(q, {
   task: db.prepare(`SELECT ${q.taskCols} ${TASK_FROM} WHERE t.id = ?`),
-  tasksAll: db.prepare(`SELECT ${q.taskCols} ${TASK_FROM} ${TASK_ORDER} LIMIT 2000`),
-  tasksRange: db.prepare(`SELECT ${q.taskCols} ${TASK_FROM} WHERE t.due_date BETWEEN ? AND ? ${TASK_ORDER}`),
+  tasksAll: db.prepare(`SELECT ${q.taskCols} ${TASK_FROM} WHERE ${TASK_VIS("t")} ${TASK_ORDER} LIMIT 2000`),
+  tasksRange: db.prepare(`SELECT ${q.taskCols} ${TASK_FROM} WHERE t.due_date BETWEEN ? AND ? AND ${TASK_VIS("t")} ${TASK_ORDER}`),
   tasksMeeting: db.prepare(`SELECT ${q.taskCols} ${TASK_FROM} WHERE t.meeting_id = ? ORDER BY t.phase = 'after', t.status = 'done', t.due_date IS NULL, t.due_date, t.id`),
   // 그날 할 일: 마감이 그날 / 마감 지난 미완료 / 마감 없이 그날 회의에 연결된 것
   tasksDay: db.prepare(`SELECT ${q.taskCols} ${TASK_FROM}
-    WHERE t.due_date = :day
+    WHERE (t.due_date = :day
        OR (t.due_date < :day AND t.status <> 'done' AND :day = :today)
-       OR (t.due_date IS NULL AND e.start_date <= :day AND e.end_date >= :day)
+       OR (t.due_date IS NULL AND e.start_date <= :day AND e.end_date >= :day))
+      AND ${TASK_VIS("t")}
     ${TASK_ORDER}`),
   memo: db.prepare(`SELECT ${q.memoCols} FROM memos m LEFT JOIN users u ON u.id = m.created_by LEFT JOIN events e ON e.id = m.meeting_id WHERE m.id = ?`),
   memosDay: db.prepare(`SELECT ${q.memoCols} FROM memos m LEFT JOIN users u ON u.id = m.created_by LEFT JOIN events e ON e.id = m.meeting_id
-    WHERE m.memo_date = ? ORDER BY m.important DESC, m.created_at DESC, m.id DESC`),
+    WHERE m.memo_date = ? AND ${MEMO_VIS("m")} ORDER BY m.important DESC, m.created_at DESC, m.id DESC`),
   memosMeeting: db.prepare(`SELECT ${q.memoCols} FROM memos m LEFT JOIN users u ON u.id = m.created_by LEFT JOIN events e ON e.id = m.meeting_id
     WHERE m.meeting_id = ? ORDER BY m.important DESC, m.created_at, m.id`),
   memosAll: db.prepare(`SELECT ${q.memoCols} FROM memos m LEFT JOIN users u ON u.id = m.created_by LEFT JOIN events e ON e.id = m.meeting_id
-    WHERE (:important = 0 OR m.important = 1) ORDER BY m.memo_date DESC, m.created_at DESC, m.id DESC LIMIT 1000`)
+    WHERE (:important = 0 OR m.important = 1) AND ${MEMO_VIS("m")} ORDER BY m.memo_date DESC, m.created_at DESC, m.id DESC LIMIT 1000`)
 });
 
 // 소속 화면: 팀원(json 배열)이 참석하는 회의 · 맡은 할 일 · 쓴 메모
@@ -244,10 +273,16 @@ Object.assign(q, {
   unitMeetings: db.prepare(`SELECT ${EVENT_COLS} FROM events e LEFT JOIN users u ON u.id = e.created_by
     WHERE e.kind = 'meeting' AND e.start_date <= :to AND e.end_date >= :from
       AND EXISTS (SELECT 1 FROM event_attendees a WHERE a.event_id = e.id AND a.user_id IN (SELECT value FROM json_each(:ids)))
+      AND ${EV_VIS("e")}
     ORDER BY e.start_date, e.start_time IS NOT NULL, e.start_time, e.id`),
-  unitTasks: db.prepare(`SELECT ${q.taskCols} ${TASK_FROM} WHERE t.status <> 'done' AND t.assignee_id IN (SELECT value FROM json_each(?)) ${TASK_ORDER}`),
-  unitMemos: db.prepare(`SELECT ${q.memoCols} ${MEMO_FROM} WHERE m.created_by IN (SELECT value FROM json_each(?)) ORDER BY m.important DESC, m.created_at DESC, m.id DESC LIMIT 30`),
-  unitImportant: db.prepare("SELECT count(*) AS n FROM memos WHERE important = 1 AND created_by IN (SELECT value FROM json_each(?))")
+  unitTasks: db.prepare(`SELECT ${q.taskCols} ${TASK_FROM} WHERE t.status <> 'done' AND t.assignee_id IN (SELECT value FROM json_each(:ids)) AND ${TASK_VIS("t")} ${TASK_ORDER}`),
+  unitMemos: db.prepare(`SELECT ${q.memoCols} ${MEMO_FROM} WHERE m.created_by IN (SELECT value FROM json_each(:ids)) AND ${MEMO_VIS("m")} ORDER BY m.important DESC, m.created_at DESC, m.id DESC LIMIT 30`),
+  unitImportant: db.prepare(`SELECT count(*) AS n FROM memos m WHERE m.important = 1 AND m.created_by IN (SELECT value FROM json_each(:ids)) AND ${MEMO_VIS("m")}`),
+  // 검색: 볼 수 있는 항목 id
+  visEventIds: db.prepare(`SELECT e.id FROM events e WHERE ${EV_VIS("e")}`),
+  visTaskIds: db.prepare(`SELECT t.id FROM tasks t WHERE ${TASK_VIS("t")}`),
+  visMemoIds: db.prepare(`SELECT m.id FROM memos m WHERE ${MEMO_VIS("m")}`),
+  visCalendarIds: db.prepare(`SELECT c.id FROM calendars c WHERE ${EXT_VIS("c")}`)
 });
 
 /* ---------- 로그인 시도 제한 (IP별, 아이디별) ---------- */
@@ -498,7 +533,7 @@ const calendarAdminOut = (c) => ({
 const externalOut = (x) => ({
   id: x.id, ext: true, kind: "external", calendarId: x.calendar_id, calendarName: x.calendar_name, color: x.color, categoryId: x.category_id,
   title: x.title, startDate: x.start_date, endDate: x.end_date, startTime: x.start_time, endTime: x.end_time, location: x.location,
-  tagIds: [], attendeeIds: []
+  unitId: x.unit_id, tagIds: [], attendeeIds: []
 });
 function calendarInput(b, cur) {
   const name = has(b, "name") || !cur ? text(b.name, LIMITS.calendarName, "캘린더 이름", true) : cur.name;
@@ -576,14 +611,14 @@ function eventsOut(rows, user) {
   const att = groupBy(q.eventAttendees, rows, "user_id");
   return rows.map((e) => ({
     id: e.id, kind: e.kind, title: e.title, startDate: e.start_date, endDate: e.end_date, startTime: e.start_time, endTime: e.end_time,
-    location: e.location, categoryId: e.category_id, tagIds: tags.get(e.id), attendeeIds: att.get(e.id), author: e.author, createdBy: e.created_by,
+    location: e.location, categoryId: e.category_id, unitId: e.unit_id, tagIds: tags.get(e.id), attendeeIds: att.get(e.id), author: e.author, createdBy: e.created_by,
     openTasks: e.open_tasks, importantMemos: e.important_memos, comments: e.comments,
     canDelete: user.role === "admin" || e.created_by === user.id
   }));
 }
 
 /* ----- 할 일 ----- */
-function taskInput(b, cur) {
+function taskInput(b, cur, v) {
   const get = (k, curVal) => (has(b, k) ? b[k] : curVal);
   const title = text(get("title", cur?.title), LIMITS.title, "할 일", true);
   const due = get("dueDate", cur?.due_date) || null;
@@ -594,7 +629,8 @@ function taskInput(b, cur) {
   if (assignee && !q.userExists.get(assignee)) throw bad("담당자를 찾을 수 없어요.");
   const meeting = idOrNull(get("meetingId", cur?.meeting_id));
   const ev = meeting && q.event.get(meeting);
-  if (meeting && !ev) throw bad("연결할 회의를 찾을 수 없어요.");
+  // 볼 수 없는 회의에는 새로 연결할 수 없음 (이미 연결된 것은 그대로)
+  if (meeting && (!ev || (v && meeting !== cur?.meeting_id && !q.eventVis.get({ id: meeting, ...v })))) throw bad("연결할 회의를 찾을 수 없어요.");
   const phase = meeting ? (get("phase", cur?.phase) === "before" ? "before" : "after") : null;
   return [title, due, status, assignee, meeting, phase, text(get("note", cur?.note), LIMITS.taskNote, "메모"), categoryOf(b, cur, ev?.category_id)];
 }
@@ -606,7 +642,7 @@ function tasksOut(rows, user) {
   return rows.map((t) => ({
     id: t.id, title: t.title, dueDate: t.due_date, status: t.status, assigneeId: t.assignee_id,
     meetingId: t.meeting_id, meetingTitle: t.meeting_title, meetingDate: t.meeting_date, meetingTime: t.meeting_time,
-    phase: t.phase, note: t.note, categoryId: t.category_id, tagIds: tags.get(t.id), doneAt: t.done_at, createdBy: t.created_by,
+    phase: t.phase, note: t.note, categoryId: t.category_id, unitId: t.unit_id, tagIds: tags.get(t.id), doneAt: t.done_at, createdBy: t.created_by,
     canDelete: user.role === "admin" || t.created_by === user.id || t.assignee_id === user.id
   }));
 }
@@ -614,24 +650,42 @@ function tasksOut(rows, user) {
 /* ----- 메모 ----- */
 const memoOut = (m, user) => ({
   id: m.id, body: m.body, date: m.memo_date, meetingId: m.meeting_id, meetingTitle: m.meeting_title, meetingDate: m.meeting_date,
-  important: !!m.important, categoryId: m.category_id, taskId: m.task_id, author: m.author || "(탈퇴한 멤버)", createdAt: m.created_at, updatedAt: m.updated_at,
+  important: !!m.important, categoryId: m.category_id, unitId: m.unit_id, createdBy: m.created_by, taskId: m.task_id, author: m.author || "(탈퇴한 멤버)", createdAt: m.created_at, updatedAt: m.updated_at,
   canEdit: user.role === "admin" || m.created_by === user.id
 });
-function memoInput(b, cur) {
+function memoInput(b, cur, v) {
   const get = (k, curVal) => (has(b, k) ? b[k] : curVal);
   const body = text(get("body", cur?.body), LIMITS.memo, "메모", true);
   const date = get("date", cur?.memo_date);
   if (!isDate(date)) throw bad("메모 날짜를 확인해 주세요.");
   const meeting = idOrNull(get("meetingId", cur?.meeting_id));
   const ev = meeting && q.event.get(meeting);
-  if (meeting && !ev) throw bad("연결할 회의를 찾을 수 없어요.");
+  if (meeting && (!ev || (v && meeting !== cur?.meeting_id && !q.eventVis.get({ id: meeting, ...v })))) throw bad("연결할 회의를 찾을 수 없어요.");
   return [body, date, meeting, get("important", !!cur?.important) ? 1 : 0, categoryOf(b, cur, ev?.category_id)];
+}
+
+/* ----- 보이는 범위: 요청한 사람 기준 조건 값 ----- */
+// mine: 관리자도 '나의 대시보드'에서는 멤버와 같은 규칙으로
+function viewer(user, mine) {
+  const units = user.unit_id && q.unit.get(user.unit_id) ? unitSubtree(user.unit_id) : [];
+  return { admin: user.role === "admin" && !mine ? 1 : 0, uid: user.id, units: JSON.stringify(units) };
+}
+const notFound = (what) => Object.assign(new Error(`${what}을(를) 찾을 수 없어요. 지워졌거나 볼 수 없는 팀의 항목이에요.`), { status: 404, expose: true });
+// 항목의 팀: 보내면 그 팀 (이미 있는 항목은 만든 사람·관리자만), 안 보내면 새로 만들 땐 연결한 회의의 팀 → 만든 사람의 소속
+function itemUnit(b, user, cur, meetingId) {
+  if (has(b, "unitId")) {
+    if (cur && user.role !== "admin" && cur.created_by !== user.id) throw Object.assign(new Error("팀은 만든 사람이나 관리자만 바꿀 수 있어요."), { status: 403, expose: true });
+    return unitIdOrNull(b.unitId);
+  }
+  if (cur) return meetingId && meetingId !== cur.meeting_id ? q.event.get(meetingId)?.unit_id ?? cur.unit_id : cur.unit_id;
+  if (meetingId) return q.event.get(meetingId)?.unit_id ?? null;
+  return user.unit_id && q.unit.get(user.unit_id) ? user.unit_id : null;
 }
 
 /* ----- 검색 (대시보드): 회의·일정·할 일·메모·가져온 일정의 안쪽 내용까지, 전체 기간 ----- */
 const SEARCH_LIMIT = 300;
 const searchQ = {
-  events: db.prepare("SELECT id, kind, title, start_date, end_date, start_time, end_time, location, description, agenda, category_id, created_by FROM events"),
+  events: db.prepare("SELECT id, kind, title, start_date, end_date, start_time, end_time, location, description, agenda, category_id, unit_id, created_by FROM events"),
   attendees: db.prepare("SELECT a.event_id, a.user_id, u.name FROM event_attendees a JOIN users u ON u.id = a.user_id"),
   eventTags: db.prepare("SELECT x.event_id, t.name FROM event_tags x JOIN tags t ON t.id = x.tag_id"),
   links: db.prepare("SELECT event_id, title, url FROM event_links"),
@@ -644,6 +698,7 @@ const searchQ = {
   external: db.prepare(`SELECT x.id, x.title, x.location, x.description, x.start_date, x.end_date, x.start_time, x.end_time, x.calendar_id, c.name AS calendar_name, c.color, c.category_id
     FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id`)
 };
+const searchQ_vis = { events: q.visEventIds, tasks: q.visTaskIds, memos: q.visMemoIds, calendars: q.visCalendarIds };
 // 한글은 그대로, 영문은 대소문자 무시, 띄어쓰기 무시
 const squash = (s) => String(s ?? "").normalize("NFC").toLowerCase().replace(/\s+/g, "");
 function searchPattern(q) {
@@ -659,9 +714,12 @@ function snippet(text, re) {
   const pre = from > 0 ? "…" : "";
   return { text: pre + t.slice(from, to) + (to < t.length ? "…" : ""), hl: [pre.length + m.index - from, pre.length + m.index - from + m[0].length] };
 }
-function runSearch(q, kind) {
+function runSearch(q, kind, v) {
   const re = searchPattern(q);
   if (!re) return { results: [], total: 0 };
+  // 볼 수 있는 항목만
+  const seeEv = new Set(searchQ_vis.events.all(v).map((x) => x.id)), seeTask = new Set(searchQ_vis.tasks.all(v).map((x) => x.id));
+  const seeMemo = new Set(searchQ_vis.memos.all(v).map((x) => x.id)), seeCal = new Set(searchQ_vis.calendars.all(extV(v)).map((x) => x.id));
   const needle = squash(q);
   const cats = new Map(q_categoriesPath());
   const group = (rows, key, val) => { const m = new Map(); for (const r of rows) { if (!m.has(r[key])) m.set(r[key], []); m.get(r[key]).push(val(r)); } return m; };
@@ -681,15 +739,17 @@ function runSearch(q, kind) {
     const links = group(searchQ.links.all(), "event_id", (r) => r.title);
     const comments = group(searchQ.comments.all(), "event_id", (r) => r.body);
     for (const e of searchQ.events.all()) {
+      if (!seeEv.has(e.id)) continue;
       const fields = [["제목", e.title], ["장소", e.location], ["개요", e.description],
         ...parseAgenda(e.agenda).map((a) => ["안건", a]), ...(links.get(e.id) || []).map((x) => ["관련 문서", x]),
         ...(comments.get(e.id) || []).map((x) => ["댓글", x]), ...(tags.get(e.id) || []).map((x) => ["태그", x]),
         ["분류", cats.get(e.category_id)], ...(att.get(e.id) || []).map((x) => ["참석자", x.name])];
       const h = hit(fields);
       if (h) out.push({ type: e.kind, id: e.id, title: e.title, date: e.start_date, endDate: e.end_date, time: e.start_time, endTime: e.end_time,
-        categoryId: e.category_id, createdBy: e.created_by, attendeeIds: (att.get(e.id) || []).map((x) => x.user_id), ...h });
+        categoryId: e.category_id, unitId: e.unit_id, createdBy: e.created_by, attendeeIds: (att.get(e.id) || []).map((x) => x.user_id), ...h });
     }
     for (const x of searchQ.external.all()) {
+      if (!seeCal.has(x.calendar_id)) continue;
       const h = hit([["제목", x.title], ["장소", x.location], ["설명", x.description]]);
       if (h) out.push({ type: "ext", id: x.id, title: x.title, date: x.start_date, endDate: x.end_date, time: x.start_time, endTime: x.end_time,
         calendarId: x.calendar_id, calendarName: x.calendar_name, color: x.color, categoryId: x.category_id, ext: true, ...h });
@@ -698,12 +758,14 @@ function runSearch(q, kind) {
   if (kind === "all" || kind === "task") {
     const tags = group(searchQ.taskTags.all(), "task_id", (r) => r.name);
     for (const t of searchQ.tasks.all()) {
+      if (!seeTask.has(t.id)) continue;
       const h = hit([["제목", t.title], ["메모", t.note], ["관련 회의", t.meeting_title], ["담당자", t.assignee], ...(tags.get(t.id) || []).map((x) => ["태그", x]), ["분류", cats.get(t.category_id)]]);
       if (h) out.push({ type: "task", id: t.id, title: t.title, date: t.due_date, status: t.status, assigneeId: t.assignee_id, meetingId: t.meeting_id, categoryId: t.category_id, ...h });
     }
   }
   if (kind === "all" || kind === "memo") {
     for (const m of searchQ.memos.all()) {
+      if (!seeMemo.has(m.id)) continue;
       const h = hit([["메모", m.body], ["분류", cats.get(m.category_id)]]);
       if (h) out.push({ type: "memo", id: m.id, title: m.body.split("\n")[0].slice(0, 80), date: m.memo_date, meetingId: m.meeting_id, meetingTitle: m.meeting_title,
         important: !!m.important, categoryId: m.category_id, createdBy: m.created_by, ...h });
@@ -764,6 +826,8 @@ async function api(req, res, path) {
   const user = auth(req);
   if (!user) return send(res, 401, { error: "로그인이 필요해요." });
   const isAdmin = user.role === "admin";
+  // 보이는 범위 조건 값 (?scope=mine 이면 관리자도 멤버처럼)
+  const V = viewer(user, url.searchParams.get("scope") === "mine");
 
   if (path === "/api/logout" && method === "POST") {
     q.delSession.run(sha256(tokenOf(req)));
@@ -835,8 +899,8 @@ async function api(req, res, path) {
     const until = new Date(Date.parse(day + "T00:00:00Z") + 30 * 86400e3).toISOString().slice(0, 10);
     return send(res, 200, {
       user: { id: target.id, name: target.name, unitId: target.unit_id },
-      meetings: eventsOut(q.unitMeetings.all({ from: day, to: until, ids }), user),
-      tasks: tasksOut(q.unitTasks.all(ids), user)
+      meetings: eventsOut(q.unitMeetings.all({ from: day, to: until, ids, ...V }), user),
+      tasks: tasksOut(q.unitTasks.all({ ids, ...V }), user)
     });
   }
 
@@ -852,12 +916,12 @@ async function api(req, res, path) {
     const d = new Date(day + "T00:00:00Z");
     const shift = (n) => new Date(d.getTime() + n * 86400e3).toISOString().slice(0, 10);
     const from = shift(-((d.getUTCDay() + 6) % 7)), to = shift(6 - ((d.getUTCDay() + 6) % 7)); // 이번 주 월~일
-    const tasks = tasksOut(q.unitTasks.all(ids), user);
-    const meetings = eventsOut(q.unitMeetings.all({ from, to, ids }), user);
+    const tasks = tasksOut(q.unitTasks.all({ ids, ...V }), user);
+    const meetings = eventsOut(q.unitMeetings.all({ from, to, ids, ...V }), user);
     return send(res, 200, {
       unitId: u.id, scope, memberIds, week: { from, to },
-      meetings, tasks, memos: q.unitMemos.all(ids).map((m) => memoOut(m, user)),
-      stats: { weekMeetings: meetings.length, openTasks: tasks.length, lateTasks: tasks.filter((t) => t.dueDate && t.dueDate < day).length, importantMemos: q.unitImportant.get(ids).n }
+      meetings, tasks, memos: q.unitMemos.all({ ids, ...V }).map((m) => memoOut(m, user)),
+      stats: { weekMeetings: meetings.length, openTasks: tasks.length, lateTasks: tasks.filter((t) => t.dueDate && t.dueDate < day).length, importantMemos: q.unitImportant.get({ ids, ...V }).n }
     });
   }
 
@@ -925,13 +989,13 @@ async function api(req, res, path) {
   if (path === "/api/events" && method === "GET") {
     const from = param("from"), to = param("to");
     if (!isDate(from) || !isDate(to) || to < from) return send(res, 400, { error: "기간을 확인해 주세요." });
-    return send(res, 200, { events: eventsOut(q.events.all(to, from), user), external: q.externalRange.all(to, from).map(externalOut) });
+    return send(res, 200, { events: eventsOut(q.events.all(V, to, from), user), external: q.externalRange.all(extV(V), to, from).map(externalOut) });
   }
   if (path === "/api/meetings/choices" && method === "GET") {
     const d = isDate(param("date")) ? param("date") : new Date().toISOString().slice(0, 10);
     const day = (n) => new Date(Date.parse(d + "T00:00:00Z") + n * 86400000).toISOString().slice(0, 10);
     return send(res, 200, {
-      meetings: q.meetingChoices.all(day(-30), day(60), d).map((m) => ({ id: m.id, title: m.title, startDate: m.start_date, startTime: m.start_time }))
+      meetings: q.meetingChoices.all(V, day(-30), day(60), d).map((m) => ({ id: m.id, title: m.title, startDate: m.start_date, startTime: m.start_time }))
     });
   }
   if (path === "/api/events" && method === "POST") {
@@ -939,6 +1003,7 @@ async function api(req, res, path) {
     const id = inTx(() => {
       const r = q.addEvent.run(...eventInput(b), user.id);
       const id = Number(r.lastInsertRowid);
+      q.setEventUnit.run(itemUnit(b, user), id);
       if (!has(b, "attendeeIds")) b.attendeeIds = [user.id];
       saveEventRelations(id, b);
       return id;
@@ -948,7 +1013,7 @@ async function api(req, res, path) {
   const em = path.match(/^\/api\/events\/(\d+)(?:\/(comments|links))?$/);
   if (em) {
     const e = q.event.get(Number(em[1]));
-    if (!e) return send(res, 404, { error: "일정을 찾을 수 없어요. 지워졌을 수 있어요." });
+    if (!e || !q.eventVis.get({ id: e.id, ...V })) throw notFound("일정");
     if (em[2] === "comments") {
       if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
       const body = text((await readJson(req)).body, LIMITS.comment, "댓글", true);
@@ -969,6 +1034,7 @@ async function api(req, res, path) {
       const b = await readJson(req);
       inTx(() => {
         q.setEvent.run(...eventInput(b, e), e.id);
+        if (has(b, "unitId")) q.setEventUnit.run(itemUnit(b, user, e), e.id);
         saveEventRelations(e.id, b);
       });
       return send(res, 200, eventDetail(q.event.get(e.id), user));
@@ -984,12 +1050,14 @@ async function api(req, res, path) {
   const xm = path.match(/^\/api\/external\/(\d+)$/);
   if (xm && method === "GET") {
     const x = q.external.get(Number(xm[1]));
-    if (!x) return send(res, 404, { error: "가져온 일정을 찾을 수 없어요. 캘린더에서 지워졌을 수 있어요." });
+    if (!x || !q.extVis.get({ id: x.id, ...extV(V) })) return send(res, 404, { error: "가져온 일정을 찾을 수 없어요. 캘린더에서 지워졌을 수 있어요." });
     return send(res, 200, { event: { ...externalOut(x), description: x.description, syncedAt: x.last_ok_at } });
   }
 
   const lm = path.match(/^\/api\/links\/(\d+)$/);
   if (lm && method === "DELETE") {
+    const l = q.link.get(Number(lm[1]));
+    if (l && !q.eventVis.get({ id: l.event_id, ...V })) throw notFound("문서");
     q.delLink.run(Number(lm[1]));
     return send(res, 204);
   }
@@ -997,17 +1065,18 @@ async function api(req, res, path) {
   /* ----- 할 일 ----- */
   if (path === "/api/tasks" && method === "GET") {
     let rows;
-    if (isDate(param("date"))) rows = q.tasksDay.all({ day: param("date"), today: isDate(param("today")) ? param("today") : "" });
-    else if (isDate(param("from")) && isDate(param("to"))) rows = q.tasksRange.all(param("from"), param("to"));
-    else rows = q.tasksAll.all();
+    if (isDate(param("date"))) rows = q.tasksDay.all({ day: param("date"), today: isDate(param("today")) ? param("today") : "", ...V });
+    else if (isDate(param("from")) && isDate(param("to"))) rows = q.tasksRange.all(V, param("from"), param("to"));
+    else rows = q.tasksAll.all(V);
     return send(res, 200, { tasks: tasksOut(rows, user) });
   }
   if (path === "/api/tasks" && method === "POST") {
     const b = await readJson(req);
-    const input = taskInput(b);
+    const input = taskInput(b, null, V);
     const id = inTx(() => {
       const r = q.addTask.run(...input, user.id, input[2]);
       const id = Number(r.lastInsertRowid);
+      q.setTaskUnit.run(itemUnit(b, user, null, input[4]), id);
       saveTaskTags(id, b);
       return id;
     });
@@ -1016,12 +1085,12 @@ async function api(req, res, path) {
   const km = path.match(/^\/api\/tasks\/(\d+)$/);
   if (km) {
     const t = q.task.get(Number(km[1]));
-    if (!t) return send(res, 404, { error: "할 일을 찾을 수 없어요. 지워졌을 수 있어요." });
+    if (!t || !q.taskVis.get({ id: t.id, ...V })) throw notFound("할 일");
     if (method === "GET") return send(res, 200, { task: tasksOut([t], user)[0] });
     if (method === "PATCH") {
       const b = await readJson(req);
-      const input = taskInput(b, t);
-      inTx(() => { q.setTask.run(...input, input[2], t.id); saveTaskTags(t.id, b); });
+      const input = taskInput(b, t, V);
+      inTx(() => { q.setTask.run(...input, input[2], t.id); q.setTaskUnit.run(itemUnit(b, user, t, input[4]), t.id); saveTaskTags(t.id, b); });
       return send(res, 200, { task: tasksOut([q.task.get(t.id)], user)[0] });
     }
     if (method === "DELETE") {
@@ -1035,19 +1104,27 @@ async function api(req, res, path) {
   /* ----- 메모 ----- */
   if (path === "/api/memos" && method === "GET") {
     let rows;
-    if (isDate(param("date"))) rows = q.memosDay.all(param("date"));
-    else if (Number(param("meeting")) > 0) rows = q.memosMeeting.all(Number(param("meeting")));
-    else rows = q.memosAll.all({ important: param("important") === "1" ? 1 : 0 });
+    if (isDate(param("date"))) rows = q.memosDay.all(V, param("date"));
+    else if (Number(param("meeting")) > 0) {
+      if (!q.eventVis.get({ id: Number(param("meeting")), ...V })) throw notFound("회의");
+      rows = q.memosMeeting.all(Number(param("meeting")));
+    } else rows = q.memosAll.all({ important: param("important") === "1" ? 1 : 0, ...V });
     return send(res, 200, { memos: rows.map((m) => memoOut(m, user)) });
   }
   if (path === "/api/memos" && method === "POST") {
-    const r = q.addMemo.run(...memoInput(await readJson(req)), user.id);
-    return send(res, 201, { memo: memoOut(q.memo.get(Number(r.lastInsertRowid)), user) });
+    const b = await readJson(req);
+    const input = memoInput(b, null, V);
+    const id = inTx(() => {
+      const id = Number(q.addMemo.run(...input, user.id).lastInsertRowid);
+      q.setMemoUnit.run(itemUnit(b, user, null, input[2]), id);
+      return id;
+    });
+    return send(res, 201, { memo: memoOut(q.memo.get(id), user) });
   }
   const mm = path.match(/^\/api\/memos\/(\d+)(\/task)?$/);
   if (mm) {
     const m = q.memo.get(Number(mm[1]));
-    if (!m) return send(res, 404, { error: "메모를 찾을 수 없어요. 지워졌을 수 있어요." });
+    if (!m || !q.memoVis.get({ id: m.id, ...V })) throw notFound("메모");
     // 메모 → 할 일로 만들기 (원래 회의에 자동 연결)
     if (mm[2]) {
       if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
@@ -1055,6 +1132,7 @@ async function api(req, res, path) {
       const input = taskInput({ title: b.title || m.body.split("\n")[0].slice(0, LIMITS.title), dueDate: b.dueDate, assigneeId: b.assigneeId, meetingId: m.meeting_id, phase: "after", note: m.body.includes("\n") ? m.body : "", categoryId: has(b, "categoryId") ? b.categoryId : m.category_id });
       const id = inTx(() => {
         const id = Number(q.addTask.run(...input, user.id, input[2]).lastInsertRowid);
+        q.setTaskUnit.run(m.unit_id ?? itemUnit({}, user, null, m.meeting_id), id); // 메모의 팀을 따름
         saveTaskTags(id, b);
         q.setMemoTask.run(id, m.id);
         return id;
@@ -1065,7 +1143,12 @@ async function api(req, res, path) {
       if (!isAdmin && m.created_by !== user.id) return send(res, 403, { error: "직접 쓴 메모만 고칠 수 있어요." });
     }
     if (method === "PATCH") {
-      q.setMemo.run(...memoInput(await readJson(req), m), m.id);
+      const b = await readJson(req);
+      inTx(() => {
+        const input = memoInput(b, m, V);
+        q.setMemo.run(...input, m.id);
+        q.setMemoUnit.run(itemUnit(b, user, m, input[2]), m.id);
+      });
       return send(res, 200, { memo: memoOut(q.memo.get(m.id), user) });
     }
     if (method === "DELETE") {
@@ -1078,7 +1161,7 @@ async function api(req, res, path) {
   if (path === "/api/search" && method === "GET") {
     const qv = String(param("q") || "").slice(0, 100);
     const kind = ["meeting", "task", "memo"].includes(param("kind")) ? param("kind") : "all";
-    return send(res, 200, { q: qv, kind, limit: SEARCH_LIMIT, ...runSearch(qv, kind) });
+    return send(res, 200, { q: qv, kind, limit: SEARCH_LIMIT, ...runSearch(qv, kind, V) });
   }
 
   /* ----- 공지 ----- */
@@ -1212,6 +1295,19 @@ async function api(req, res, path) {
       return send(res, 200, { changed: list.length, team: teamOut() });
     }
 
+    /* 전체 대시보드: 팀별 이번 주 회의 · 남은 할 일 · 마감 지난 할 일 (항목의 팀 기준, 팀 없음은 unitId null) */
+    if (path === "/api/admin/overview" && method === "GET") {
+      const day = isDate(param("today")) ? param("today") : new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+      const d = new Date(day + "T00:00:00Z");
+      const shift = (n) => new Date(d.getTime() + n * 86400e3).toISOString().slice(0, 10);
+      const from = shift(-((d.getUTCDay() + 6) % 7)), to = shift(6 - ((d.getUTCDay() + 6) % 7));
+      const rows = new Map();
+      const row = (id) => { if (!rows.has(id)) rows.set(id, { unitId: id, weekMeetings: 0, openTasks: 0, lateTasks: 0 }); return rows.get(id); };
+      for (const r of q.overviewMeetings.all(to, from)) row(r.unit_id).weekMeetings = r.n;
+      for (const r of q.overviewTasks.all(day)) { row(r.unit_id).openTasks = r.open || 0; row(r.unit_id).lateTasks = r.late || 0; }
+      return send(res, 200, { week: { from, to }, rows: [...rows.values()] });
+    }
+
     /* 조직도 자리 (표로 편집) */
     if (path === "/api/admin/org/settings" && method === "PUT") {
       const b = await readJson(req);
@@ -1325,8 +1421,8 @@ async function api(req, res, path) {
         const ids = JSON.stringify(unitUserIds(unitSubtree(u.id)));
         const month = (isDate(param("today")) ? param("today") : new Date().toISOString().slice(0, 10)).slice(0, 7);
         return send(res, 200, {
-          meetings: q.unitMeetings.all({ from: month + "-01", to: month + "-31", ids }).length,
-          openTasks: q.unitTasks.all(ids).length,
+          meetings: q.unitMeetings.all({ from: month + "-01", to: month + "-31", ids, ...V }).length,
+          openTasks: q.unitTasks.all({ ids, ...V }).length,
           calendars: q.calendarsInUnits.get(scope).n
         });
       }
@@ -1351,6 +1447,7 @@ async function api(req, res, path) {
           q.liftUnitUsers.run(u.parent_id, u.id);
           q.liftUnitCalendars.run(u.parent_id, u.id);
           if (u.parent_id) q.liftUnitPositions.run(u.parent_id, u.id); // 맨 위 조직이면 자리도 함께 지워짐
+          for (const st of q.liftUnitItems) st.run(u.parent_id, u.id); // 항목의 팀도 한 단계 위로
           q.delUnit.run(u.id);
         });
         return send(res, 200, { units: unitsOut(), team: teamOut() });

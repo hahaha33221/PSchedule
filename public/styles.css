@@ -1060,3 +1060,22 @@ button.mgroup__head:hover { color: var(--ink); }
   .sr-main { grid-column: 2; flex-direction: column; gap: 0; align-items: stretch; }
   .sr-snip { min-width: 0; flex: none; }
 }
+
+/* ---------- 나의 대시보드 · 전체 대시보드 ---------- */
+.dash-top { display: flex; flex-direction: column; gap: 12px; }
+.dash-top:empty { display: none; }
+.scopebar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 9px 12px 9px 14px; border-radius: 12px; background: var(--surface); border: 1px solid var(--line); font-size: 13.5px; color: var(--ink-2); }
+.scopebar > span { flex: 1 1 240px; }
+.scopebar > .ic { flex: none; }
+.scopebar strong { color: var(--ink); }
+.scopebar .btn { margin-left: auto; }
+.teamsum-card { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.teamsum-wrap { max-height: 320px; overflow: auto; }
+.teamsum td, .teamsum th { padding: 6px 10px; }
+.teamsum .num { text-align: right; font-variant-numeric: tabular-nums; width: 96px; }
+.teamsum tbody tr { cursor: pointer; }
+.teamsum tbody tr:hover td { background: var(--surface-2); }
+.teamsum tr.is-sel td { background: var(--admin-soft); }
+.teamsum tr.is-empty td { color: var(--muted); }
+.teamsum .is-late { color: var(--danger); font-weight: 700; }
+.teamsum__name { display: inline-block; }

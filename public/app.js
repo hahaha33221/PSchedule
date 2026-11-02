@@ -298,6 +298,18 @@
       onclick: () => { state.ourUnit = k; store.set("ps.ours", k ? "1" : "0"); onChange(); }
     })));
   }
+  // 항목의 팀 (보이는 범위): 만든 사람의 소속으로 자동, 만든 사람·관리자만 바꿈
+  const canEditTeam = (x) => isAdmin() || x.createdBy === state.user.id;
+  const teamName = (id) => (id && unitOf(id) ? unitShort(id) : "팀 없음");
+  function teamButton(selected, onChange, cls) {
+    const b = h("button", { class: cls || "select-btn", type: "button", title: "이 팀(과 위 조직) 사람들, 그리고 관련된 사람이 볼 수 있어요" });
+    const draw = () => b.replaceChildren(h("span", { class: "catpath" }, [icon("org"), h("span", { text: selected && unitOf(selected) ? unitLabel(selected) : "팀 없음 (관련된 사람·관리자만)" })]));
+    b.addEventListener("click", () => unitPicker(b, selected, (id) => { selected = id; draw(); onChange(id); }, { noneLabel: "팀 없음 (관련된 사람·관리자만)" }));
+    draw();
+    return b;
+  }
+  const teamInfo = (id) => h("span", { class: "catpath muted", title: "보이는 범위" }, [icon("org"), h("span", { text: id && unitOf(id) ? unitLabel(id) : "팀 없음 (관련된 사람·관리자만)" })]);
+
   // 관리자 전용 표시 (주황)
   const adminBadge = (label) => h("span", { class: "admin-badge" }, [icon("lock"), label || "관리자 전용"]);
 
@@ -668,7 +680,7 @@
   function drawNav(active) {
     const items = [
       { id: "today", label: "오늘", icon: "home" },
-      { id: "dashboard", label: "대시보드", icon: "grid" },
+      { id: "dashboard", label: "나의 대시보드", icon: "grid" },
       { id: "tasks", label: "할 일", icon: "check" },
       { id: "meetings", label: "회의", icon: "people" },
       { id: "memos", label: "메모", icon: "note" },
@@ -708,6 +720,7 @@
     layout.admin.replaceChildren(
       h("div", { class: "side__adminhead" }, [icon("lock"), "관리자 전용"]),
       link("org", "조직도 편집", "org"),
+      link("alldash", "전체 대시보드", "grid"),
       link("members", "멤버 · 소속 지정", "user"),
       link("cats", "분류 관리", "folder", manageCategories),
       link("cals", "구글 캘린더 연결", "cal", manageCalendars),
@@ -757,8 +770,8 @@
 
 
   // 분류 트리: 누르면 오늘·대시보드·할 일·회의·메모를 그 분류(와 그 아래)로 걸러 봄
-  const CAT_PAGES = new Set(["today", "dashboard", "tasks", "meetings", "memos"]);
-  const ADMIN_PAGES = new Set(["org", "members", "backup"]);
+  const CAT_PAGES = new Set(["today", "dashboard", "alldash", "tasks", "meetings", "memos"]);
+  const ADMIN_PAGES = new Set(["org", "members", "backup", "alldash"]);
   function setCat(id) {
     state.cat = id;
     id ? store.set("ps.cat", String(id)) : store.remove("ps.cat");
@@ -964,6 +977,7 @@
       h("li", {}, [icon("cal"), h("button", { class: "fact-btn", type: "button", text: whenLabel(e), onclick: () => editEvent(e) })]),
       h("li", {}, [icon("place"), inlineText(e.location, { placeholder: "장소 추가", label: "장소", max: 80, onSave: (v) => patch({ location: v }) })]),
       h("li", {}, [icon("folder"), categoryButton(e.categoryId, (id) => patch({ categoryId: id }), "fact-btn")]),
+      state.units.length ? h("li", {}, canEditTeam(e) ? teamButton(e.unitId, (id) => patch({ unitId: id }), "fact-btn") : teamInfo(e.unitId)) : null,
       h("li", { class: "facts__tags" }, [icon("tag"), h("div", { class: "chips" }, [...tagChips(e.tagIds), h("button", { class: "chip-add", type: "button", text: e.tagIds.length ? "편집" : "태그 추가", onclick: (ev) => tagPicker(ev.currentTarget, e.tagIds, (ids) => { e.tagIds = ids; quiet(patch({ tagIds: ids })); redrawChips(ev.target.closest(".chips"), ids); }) })])])
     ]);
     function redrawChips(box, ids) {
@@ -1108,6 +1122,7 @@
             ? h("button", { class: m.categoryId ? "memo__cat" : "link-btn", type: "button", title: m.categoryId ? catLabel(m.categoryId) : null, onclick: (ev) => categoryPicker(ev.currentTarget, m.categoryId, async (id) => { await act(() => api(`/memos/${m.id}`, { method: "PATCH", body: { categoryId: id } })); refresh(); }) },
               m.categoryId ? catChip(m.categoryId) : "분류")
             : catChip(m.categoryId),
+          !o.inMeeting && m.unitId && unitOf(m.unitId) ? h("span", { title: "팀", text: unitShort(m.unitId) }) : null,
           m.taskId ? h("button", { class: "memo__task", type: "button", onclick: () => openPeek("task", m.taskId) }, [icon("check"), "할 일로 만듦"])
             : h("button", { class: "link-btn", type: "button", text: "할 일로 만들기", onclick: () => memoToTask(m) }),
           m.canEdit ? h("button", { class: "link-btn link-btn--muted", type: "button", text: "삭제", onclick: async () => { await act(() => api(`/memos/${m.id}`, { method: "DELETE" })); refresh(); } }) : null
@@ -1186,6 +1201,7 @@
       h("dt", {}, "담당자"), h("dd", {}, h("button", { class: "select-btn", type: "button", onclick: (ev) => personPicker(ev.currentTarget, t.assigneeId ? [t.assigneeId] : [], false, (uid) => patch({ assigneeId: uid })) }, personLine(t.assigneeId))),
       h("dt", {}, "마감일"), h("dd", {}, due),
       h("dt", {}, "분류"), h("dd", {}, categoryButton(t.categoryId, (id) => patch({ categoryId: id }))),
+      state.units.length ? h("dt", {}, "팀") : null, state.units.length ? h("dd", {}, canEditTeam(t) ? teamButton(t.unitId, (id) => patch({ unitId: id })) : teamInfo(t.unitId)) : null,
       h("dt", {}, "태그"), h("dd", {}, h("div", { class: "chips" }, [...tagChips(t.tagIds), h("button", { class: "chip-add", type: "button", text: t.tagIds.length ? "편집" : "태그 추가", onclick: (ev) => tagPicker(ev.currentTarget, t.tagIds, (ids) => { t.tagIds = ids; quiet(patchTask(t, { tagIds: ids })); const box = ev.target.closest(".chips"); const b = box.querySelector(".chip-add"); box.replaceChildren(...tagChips(ids), b); }) })])),
       h("dt", {}, "관련 회의"), h("dd", { class: "props__meeting" }, [meeting, t.meetingId ? h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => openPeek("event", t.meetingId) }, ["회의 열기", icon("arrow")]) : null]),
       t.meetingId ? h("dt", {}, "구분") : null, t.meetingId ? h("dd", {}, phase) : null
@@ -1264,7 +1280,7 @@
     const startTime = h("input", { type: "time", value: v.startTime || "10:00", step: "300" });
     const endTime = h("input", { type: "time", value: v.endTime || (v.startTime ? "" : "11:00"), step: "300" });
     const loc = h("input", { value: v.location, maxlength: "80", placeholder: "선택" });
-    let tagIds = v.tagIds.slice(), attendeeIds = v.attendeeIds.slice(), categoryId = v.categoryId || null;
+    let tagIds = v.tagIds.slice(), attendeeIds = v.attendeeIds.slice(), categoryId = v.categoryId || null, teamId = myUnit();
     const catBtn = categoryButton(categoryId, (id) => { categoryId = id; });
     const tagsBtn = h("button", { class: "select-btn", type: "button" });
     const drawTags = () => tagsBtn.replaceChildren(...(tagIds.length ? tagChips(tagIds) : [h("span", { class: "muted", text: "태그 고르기" })]));
@@ -1294,6 +1310,7 @@
       field("장소", loc),
       attField,
       field("분류", catBtn),
+      isNew && state.units.length ? field("팀", teamButton(teamId, (id) => { teamId = id; }), "이 팀(과 위 조직) 사람들과 참석자·관리자가 볼 수 있어요") : null,
       field("태그", tagsBtn),
       err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), submit])
@@ -1304,7 +1321,7 @@
         const body = {
           kind, title: title.value, startDate: startDate.value, endDate: endDate.value || startDate.value,
           startTime: allDay.checked ? null : startTime.value || null, endTime: allDay.checked ? null : endTime.value || null,
-          location: loc.value, categoryId, tagIds, attendeeIds: kind === "meeting" ? attendeeIds : []
+          location: loc.value, categoryId, tagIds, attendeeIds: kind === "meeting" ? attendeeIds : [], ...(isNew && state.units.length ? { unitId: teamId } : {})
         };
         try {
           const r = await api(isNew ? "/events" : `/events/${e.id}`, { method: isNew ? "POST" : "PATCH", body });
@@ -1327,6 +1344,8 @@
     const drawWho = () => who.replaceChildren(assignee ? personLine(assignee) : h("span", { class: "muted", text: "담당자 없음" }));
     who.addEventListener("click", () => personPicker(who, assignee ? [assignee] : [], false, (uid) => { assignee = uid; drawWho(); }));
     const catBtn = categoryButton(categoryId, (id) => { categoryId = id; catTouched = true; });
+    let teamId = myUnit(), teamTouched = false;
+    const teamBtn = state.units.length ? teamButton(teamId, (id) => { teamId = id; teamTouched = true; }) : null;
     const tagsBtn = h("button", { class: "select-btn", type: "button" });
     const drawTags = () => tagsBtn.replaceChildren(...(tagIds.length ? tagChips(tagIds) : [h("span", { class: "muted", text: "태그 고르기" })]));
     tagsBtn.addEventListener("click", () => tagPicker(tagsBtn, tagIds, (ids) => { tagIds = ids; drawTags(); }));
@@ -1342,6 +1361,7 @@
       field("할 일", title),
       h("div", { class: "row2" }, [field("담당자", who), field("마감일", due)]),
       h("div", { class: "row2" }, [field("분류", catBtn, "관련 회의를 고르면 회의 분류를 따라가요"), field("태그", tagsBtn)]),
+      teamBtn ? field("팀", teamBtn, "관련 회의를 고르면 회의의 팀을 따라가요") : null,
       h("div", { class: "row2" }, [field("관련 회의", meeting), phaseField]),
       err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), submit])
@@ -1353,6 +1373,7 @@
           const body = { title: title.value, dueDate: due.value || null, assigneeId: assignee, tagIds, meetingId: meeting.value ? Number(meeting.value) : null, phase: phase.value };
           // 회의를 골랐고 분류를 직접 안 바꿨으면 회의 분류를 따름 (서버에서)
           if (!body.meetingId || catTouched) body.categoryId = categoryId;
+          if (teamBtn && (!body.meetingId || teamTouched)) body.unitId = teamId; // 회의를 고르면 회의 팀을 따름
           const r = await api("/tasks", { method: "POST", body });
           closeDialog(); toast("할 일을 추가했어요."); openPeek("task", r.task.id); refresh({ keepPeek: true });
         } catch (ex) { showError(err, ex.message); }
@@ -1764,7 +1785,12 @@
     const end = addDays(last, 6 - last.getDay());
     return { start, end };
   }
-  async function pageDashboard() {
+  // mode 'mine': 나의 대시보드 (보이는 범위 규칙대로, 관리자도), 'all': 전체 대시보드 (관리자 전용, 팀으로 거르기·팀별 요약)
+  async function pageDashboard(mode) {
+    const all = mode === "all";
+    if (all && !isAdmin()) return go("#/dashboard");
+    const pageName = all ? "alldash" : "dashboard";
+    const scopeQ = all ? "" : "&scope=mine";
     if (!state.month) {
       const saved = store.get("ps.month", "");
       const base = /^\d{4}-\d{2}$/.test(saved) ? parseYmd(saved + "-01") : new Date();
@@ -1775,16 +1801,59 @@
     let listTab = store.get("ps.listTab", "all");
     const calCard = h("section", { class: "card cal-card" });
     const listCard = h("section", { class: "card mlist-card" });
-    setMain("dashboard", [calCard, listCard]);
+    const topBox = h("div", { class: "dash-top" });
+    setMain(pageName, [topBox, calCard, listCard]);
+    // 전체 대시보드: 팀으로 거르기 (null 모든 팀, 'none' 팀 미지정, 아니면 그 팀과 아래 팀)
+    const teamOk = () => {
+      if (!all || !state.allTeam) return () => true;
+      if (state.allTeam === "none") return (x) => !x.unitId;
+      const scope = unitSubtree(state.allTeam);
+      return (x) => scope.has(x.unitId);
+    };
+    function drawTop(overview) {
+      if (!all) {
+        const u = myUnit();
+        fill(topBox, h("div", { class: "scopebar" }, [icon("org"), h("span", {}, [h("strong", { text: "보이는 범위: " }),
+          u ? `${unitLabel(u)}${unitChildren(u).length ? " (아래 팀 포함)" : ""} + 내가 관련된 것` : "내가 만들었거나 참석·담당한 것만 (아직 소속이 없어요)"]),
+          isAdmin() ? h("a", { class: "btn btn--admin btn--sm", href: "#/alldash" }, [icon("lock"), "전체 대시보드"]) : null]));
+        return;
+      }
+      if (state.allTeam && state.allTeam !== "none" && !unitOf(state.allTeam)) state.allTeam = null;
+      const pick = h("button", { class: "select-btn select-btn--sm", type: "button" }, state.allTeam === "none" ? "팀 미지정" : state.allTeam ? unitLabel(state.allTeam) : h("span", { class: "muted", text: "모든 팀" }));
+      pick.addEventListener("click", () => unitPicker(pick, state.allTeam === "none" ? null : state.allTeam, (id) => { state.allTeam = id; render(); }, { noneLabel: "모든 팀" }));
+      const head = h("div", { class: "page-head page-head--wrap" }, [h("h1", { text: "전체 대시보드" }), adminBadge(),
+        h("span", { class: "muted small", text: "모든 팀의 회의·일정·할 일. 나의 대시보드는 사이드바 '나의 대시보드'에서 따로 봐요." }),
+        h("span", { class: "page-head__end ot-actions" }, [pick, state.allTeam ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "모든 팀 보기", onclick: () => { state.allTeam = null; render(); } }) : null])]);
+      // 팀별 요약 (아래 팀까지 합친 숫자), 팀 미지정 줄
+      let table = h("div", { class: "loading", text: "팀별 요약 불러오는 중…" });
+      if (overview) {
+        const byUnit = new Map(overview.rows.map((r) => [r.unitId, r]));
+        const sum = (id) => { const t = { weekMeetings: 0, openTasks: 0, lateTasks: 0 }; for (const x of unitSubtree(id)) { const r = byUnit.get(x); if (r) { t.weekMeetings += r.weekMeetings; t.openTasks += r.openTasks; t.lateTasks += r.lateTasks; } } return t; };
+        const rowEl = (key, label, depth, t) => h("tr", { class: (state.allTeam === key ? "is-sel" : "") + (t.weekMeetings + t.openTasks ? "" : " is-empty"), onclick: () => { state.allTeam = state.allTeam === key ? null : key; render(); } }, [
+          h("td", {}, h("span", { class: "teamsum__name", style: `padding-left:${depth * 14}px`, text: label })),
+          h("td", { class: "num", text: String(t.weekMeetings) }), h("td", { class: "num", text: String(t.openTasks) }),
+          h("td", { class: "num" + (t.lateTasks ? " is-late" : ""), text: String(t.lateTasks) })]);
+        const rows = unitRows(null).filter(({ depth }) => depth <= 3).map(({ u, depth }) => rowEl(u.id, u.name, depth, sum(u.id)));
+        const none = byUnit.get(null) || { weekMeetings: 0, openTasks: 0, lateTasks: 0 };
+        rows.push(rowEl("none", "팀 미지정", 0, none));
+        table = h("div", { class: "table-wrap teamsum-wrap" }, h("table", { class: "table teamsum" }, [
+          h("thead", {}, h("tr", {}, [h("th", { text: `팀 (이번 주 ${shortDate(overview.week.from)}~${shortDate(overview.week.to)})` }), h("th", { class: "num", text: "이번 주 회의" }), h("th", { class: "num", text: "남은 할 일" }), h("th", { class: "num", text: "마감 지남" })])),
+          h("tbody", {}, rows)]));
+      }
+      fill(topBox, head, h("section", { class: "card teamsum-card" }, [h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "팀별 요약" }), h("span", { class: "muted small", text: "줄을 누르면 그 팀만 봐요" })]), table]));
+    }
+    drawTop(null);
+    if (all) quiet(api(`/admin/overview?today=${today()}`).then(drawTop));
 
     const setMonth = (d) => { state.month = d; store.set("ps.month", ymd(d).slice(0, 7)); quiet(load()); };
     const matches = (x) => !state.search || x.title.toLowerCase().includes(state.search.toLowerCase());
 
     async function load() {
       const { start, end } = monthRange(state.month);
-      const [ev, tk] = await Promise.all([api(`/events?from=${ymd(start)}&to=${ymd(end)}`), api(`/tasks?from=${ymd(start)}&to=${ymd(end)}`)]);
-      const inCat = catFilter(), ours = ourFilter();
-      data = { events: allEvents(ev).filter((e) => inCat(e) && ours(e)), tasks: tk.tasks.filter((t) => inCat(t) && ours(t)) };
+      const [ev, tk] = await Promise.all([api(`/events?from=${ymd(start)}&to=${ymd(end)}${scopeQ}`), api(`/tasks?from=${ymd(start)}&to=${ymd(end)}${scopeQ}`)]);
+      const inCat = catFilter(), ours = ourFilter(), inTeam = teamOk();
+      const keep = (x) => inCat(x) && ours(x) && inTeam(x);
+      data = { events: allEvents(ev).filter(keep), tasks: tk.tasks.filter(keep) };
       draw();
     }
 
@@ -1834,7 +1903,7 @@
       const qv = state.search.trim(), seq = ++searchSeq;
       if (!qv) return;
       try {
-        const r = await api(`/search?q=${encodeURIComponent(qv)}`);
+        const r = await api(`/search?q=${encodeURIComponent(qv)}${scopeQ}`);
         if (seq !== searchSeq) return;
         searchData = r;
         drawBody();
@@ -1864,8 +1933,8 @@
       const qv = state.search.trim();
       if (!searchData) return h("div", { class: "card sr-card" }, h("div", { class: "loading", text: "찾는 중…" }));
       const pending = searchData.q !== qv; // 치는 동안에는 이전 결과를 그대로 두고 '찾는 중'만 표시
-      const inCat = catFilter(), ours = ourFilter();
-      const all = searchData.results.filter((r) => inCat(r) && ours(r));
+      const inCat = catFilter(), ours = ourFilter(), inTeam = teamOk();
+      const all = searchData.results.filter((r) => inCat(r) && ours(r) && inTeam(r));
       const count = (k) => (k === "all" ? all.length : all.filter((r) => srGroup(r) === k).length);
       const list = searchKind === "all" ? all : all.filter((r) => srGroup(r) === searchKind);
       const t = today();
@@ -2019,7 +2088,7 @@
       );
     }
 
-    page = { name: "dashboard", reload: load };
+    page = { name: pageName, reload: load };
     draw();
     try { await load(); } catch (e) { if (e.status !== 401) bodyBox.replaceChildren(failed(e)); }
   }
@@ -3060,7 +3129,8 @@
     const { name, id } = route();
     window.scrollTo(0, 0);
     if (name === "today") return pageToday(id && /^\d{4}-\d{2}-\d{2}$/.test(id) ? id : null);
-    if (name === "dashboard") return pageDashboard();
+    if (name === "dashboard") return pageDashboard("mine");
+    if (name === "alldash") return pageDashboard("all");
     if (name === "tasks") return pageTasks();
     if (name === "meetings") return pageMeetings();
     if (name === "memos") return pageMemos();

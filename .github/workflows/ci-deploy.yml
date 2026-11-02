@@ -66,8 +66,32 @@ jobs:
           curl -fs -H "$H" -XPOST -d '{"rows":[{"hq":"공통","dept":"위원회 직속","title":"이사장","name":"가나다"},{"hq":"기획본부","dept":"재무부 / 재무관리팀","title":"팀장","name":"라마바"}]}' $B/admin/org/preview | grep -q '"add":\[{'
           curl -fs -H "$H" -XPOST -d '{"rows":[{"hq":"기획본부","dept":"재무부 / 재무관리팀","title":"팀장","name":"라마바"}],"baseDate":"2026-11-01"}' $B/admin/org/apply | grep -q '"added":1'
           curl -fs -H "$H" $B/org | grep -q '"baseDate":"2026-11-01"'
+          # 팀별 보이는 범위: 다른 팀은 목록·상세·검색 모두 안 보이고, 참석자로 넣으면 보이고, 상위 조직은 아래 팀을 보고, 관리자는 전부
+          curl -fs -H "$H" -XPOST -d '{"text":"조직위원회 > 운영총괄부 > 숙박팀"}' $B/admin/units/bulk >/dev/null
+          uid() { curl -fs -H "$H" $B/org | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const u=d.units.find(x=>x.name===process.argv[1]);console.log(u.id)' "$1"; }
+          FB=$(uid 식음료팀); LG=$(uid 숙박팀); OP=$(uid 운영총괄부)
+          mk() { curl -fs -H "$H" -XPOST -d "{\"login\":\"$1\",\"name\":\"$1\",\"unitId\":$2}" $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).password'; }
+          tok() { curl -fs -XPOST -H 'content-type: application/json' -d "{\"login\":\"$1\",\"password\":\"$2\"}" $B/login | node -pe 'JSON.parse(require("fs").readFileSync(0)).token'; }
+          A1=$(tok usera "$(mk usera $FB)"); A2=$(tok userb "$(mk userb $LG)"); A3=$(tok userc "$(mk userc $OP)"); A4=$(tok usern "$(mk usern null)")
+          ME=$(curl -fs -H "Authorization: Bearer $A2" $B/me | node -pe 'JSON.parse(require("fs").readFileSync(0)).user.id')
+          EV=$(curl -fs -H "Authorization: Bearer $A1" -XPOST -d '{"title":"식음료 회의","startDate":"2026-02-03","agenda":["비밀안건"]}' $B/events | node -pe 'JSON.parse(require("fs").readFileSync(0)).event.id')
+          TK=$(curl -fs -H "Authorization: Bearer $A1" -XPOST -d '{"title":"식음료 할 일","dueDate":"2026-02-03"}' $B/tasks | node -pe 'JSON.parse(require("fs").readFileSync(0)).task.id')
+          S='%EB%B9%84%EB%B0%80%EC%95%88%EA%B1%B4'
+          for T in "$A2" "$A4"; do
+            curl -fs -H "Authorization: Bearer $T" "$B/events?from=2026-02-01&to=2026-02-28" | grep -vq '식음료 회의'
+            test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $T" $B/events/$EV)" = 404
+            test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $T" $B/tasks/$TK)" = 404
+            curl -fs -H "Authorization: Bearer $T" "$B/search?q=$S" | grep -q '"total":0'
+          done
+          curl -fs -H "Authorization: Bearer $A3" "$B/events?from=2026-02-01&to=2026-02-28" | grep -q '식음료 회의'
+          curl -fs -H "Authorization: Bearer $A3" "$B/search?q=$S" | grep -q '"total":1'
+          curl -fs -H "$H" "$B/search?q=$S" | grep -q '"total":1'
+          curl -fs -H "$H" $B/events/$EV | grep -q '"unitId":'"$FB"
+          curl -fs -H "Authorization: Bearer $A1" -XPATCH -d "{\"attendeeIds\":[$ME]}" $B/events/$EV >/dev/null
+          curl -fs -H "Authorization: Bearer $A2" $B/events/$EV | grep -q '비밀안건'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $A2" -XPATCH -d "{\"unitId\":$LG}" $B/events/$EV)" = 403
           curl -fs -H "$H" -XPOST -d '{"userIds":[1],"unitId":3}' $B/admin/users/unit | grep -q '"changed":1'
-          curl -fs -H "$H" "$B/units/1?sub=1" | grep -q '"memberIds":\[1'
+          curl -fs -H "$H" "$B/units/1?sub=1" | grep -Eq '"memberIds":\[([0-9]+,)*1[],]'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"name":"x","url":"http://127.0.0.1/a.ics"}' $B/admin/calendars)" = 400
           curl -fs -H "$H" -XPOST $B/admin/backups | grep -q 'pschedule-'
           test -s /tmp/ps/backups/pschedule-*.db

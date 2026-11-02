@@ -212,6 +212,15 @@ function addUnitColumns(db) {
     db.exec("UPDATE users SET note = '직책: ' || title WHERE title <> ''");
   }
   if (!has("calendars", "unit_id")) db.exec("ALTER TABLE calendars ADD COLUMN unit_id INTEGER REFERENCES org_units(id) ON DELETE SET NULL");
+  // 항목의 팀 (보이는 범위): 기존 항목은 만든 사람의 지금 소속, 회의에 연결된 할 일·메모는 그 회의의 팀
+  for (const t of ["events", "tasks", "memos"]) {
+    if (!has(t, "unit_id")) {
+      db.exec(`ALTER TABLE ${t} ADD COLUMN unit_id INTEGER REFERENCES org_units(id) ON DELETE SET NULL`);
+      db.exec(`UPDATE ${t} SET unit_id = (SELECT u.unit_id FROM users u WHERE u.id = ${t}.created_by)`);
+      if (t !== "events") db.exec(`UPDATE ${t} SET unit_id = (SELECT e.unit_id FROM events e WHERE e.id = ${t}.meeting_id) WHERE meeting_id IS NOT NULL`);
+    }
+    db.exec(`CREATE INDEX IF NOT EXISTS ${t}_unit ON ${t} (unit_id)`);
+  }
   // 같은 이름 자리 구분: '' 아직 안 정함(같은 사람으로 셈), 이름과 같으면 같은 사람(겸직) 확인, '이름#자리id' 면 다른 사람(동명이인)
   if (!has("org_positions", "person")) db.exec("ALTER TABLE org_positions ADD COLUMN person TEXT NOT NULL DEFAULT ''");
 }
