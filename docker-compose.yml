@@ -12,6 +12,9 @@ services:
       - "127.0.0.1:${API_PORT:-18807}:8787" # 외부 공개 X, 같은 서버의 프록시만 접근
     environment:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-} # 첫 실행 때만 사용 (master 계정)
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-30} # 매일 자동 백업 보관 일수 (data/backups, 0 이면 끔)
+      BACKUP_HOUR: ${BACKUP_HOUR:-4} # 한국 시각 이 시 이후 그날 백업
+      CALENDAR_SYNC_MINUTES: ${CALENDAR_SYNC_MINUTES:-20} # 구글 캘린더 다시 읽는 간격
     volumes:
       - ./data:/app/data # SQLite DB
     networks: [pschedule]

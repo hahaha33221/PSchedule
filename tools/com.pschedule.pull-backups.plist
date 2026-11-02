@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Mac 자동 실행 (launchd): 매일 오전 9시 30분에 ~/PSchedule-backups/pull-backups.sh 실행
+  잠자기 중이었으면 깨어난 뒤 한 번 실행돼요.
+  (macOS 는 자동 실행 프로그램이 '문서' 폴더를 읽는 것을 막을 수 있어서, 스크립트를 백업 폴더에 복사해 둠)
+
+  설치 (README '내 Mac 으로 백업 받기' 참고, 저장소 폴더에서):
+    mkdir -p ~/PSchedule-backups && cp tools/pull-backups.sh ~/PSchedule-backups/
+    sed "s#__HOME__#$HOME#g" tools/com.pschedule.pull-backups.plist > ~/Library/LaunchAgents/com.pschedule.pull-backups.plist
+    launchctl load ~/Library/LaunchAgents/com.pschedule.pull-backups.plist
+  끄기:
+    launchctl unload ~/Library/LaunchAgents/com.pschedule.pull-backups.plist && rm ~/Library/LaunchAgents/com.pschedule.pull-backups.plist
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.pschedule.pull-backups</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>__HOME__/PSchedule-backups/pull-backups.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>9</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>__HOME__/PSchedule-backups/pull.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/PSchedule-backups/pull.log</string>
+</dict>
+</plist>

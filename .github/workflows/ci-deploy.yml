@@ -34,6 +34,10 @@ jobs:
       - name: 문법 검사
         run: |
           for f in public/app.js server/*.mjs tools/*.mjs; do node --check "$f"; done
+          bash -n tools/pull-backups.sh
+
+      - name: iCal 가져오기 검사
+        run: node tools/ical-test.mjs
 
       - name: API 서버 동작 확인
         run: |
@@ -54,6 +58,10 @@ jobs:
           curl -fs -H "$H" "$B/tasks?date=2026-01-10&today=2026-01-10" | grep -q '준비'
           curl -fs -H "$H" -XPOST -d '{"title":"공지","body":"내용"}' $B/notices | grep -q '"id":1'
           curl -fs -H "$H" -XPOST -d '{"login":"member1","name":"멤버"}' $B/admin/users | grep -q '"password"'
+          curl -fs -H "$H" "$B/events?from=2026-01-01&to=2026-01-31" | grep -q '"external":\[\]'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"name":"x","url":"http://127.0.0.1/a.ics"}' $B/admin/calendars)" = 400
+          curl -fs -H "$H" -XPOST $B/admin/backups | grep -q 'pschedule-'
+          test -s /tmp/ps/backups/pschedule-*.db
 
       - name: 배포 설정 검사
         run: |

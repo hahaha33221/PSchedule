@@ -8,24 +8,31 @@
  *   - STATIC_DIR      지정하면 정적 파일도 함께 제공 (로컬 개발용: public)
  *   - DEV=1           정적 HTML에 자동 새로고침 스크립트 삽입
  *   - ADMIN_PASSWORD  처음 실행 때 만드는 master 계정 비밀번호 (없으면 임시 비밀번호를 로그에 출력)
+ *   - CALENDAR_SYNC_MINUTES  외부(구글) 캘린더 다시 읽는 간격, 기본 20분
+ *   - BACKUP_DIR / BACKUP_KEEP_DAYS / BACKUP_HOUR  자동 백업 (server/backup.mjs 참고)
  */
 import { createServer } from "node:http";
 import { createReadStream, statSync, watch } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import crypto from "node:crypto";
 import { openDb, ensureAdmin, verifyPassword, hashPassword, tempPassword } from "./db.mjs";
+import { createCalendarSync, checkUrl, maskUrl } from "./calendars.mjs";
+import { startAutoBackup, listBackups, backupNow, pruneBackups } from "./backup.mjs";
 
 const PORT = Number(process.env.PORT) || 8787;
 const DATA_DIR = resolve(process.env.DATA_DIR || "data");
 const STATIC_DIR = process.env.STATIC_DIR ? resolve(process.env.STATIC_DIR) : null;
 const DEV = process.env.DEV === "1";
+const BACKUP_DIR = resolve(process.env.BACKUP_DIR || join(DATA_DIR, "backups"));
+const BACKUP_KEEP_DAYS = process.env.BACKUP_KEEP_DAYS === undefined ? 30 : Number(process.env.BACKUP_KEEP_DAYS) || 0;
+const BACKUP_HOUR = Number(process.env.BACKUP_HOUR ?? 4);
 
 const SESSION_DAYS = 14; // 로그인 유지 기간
 const PASSWORD_MIN = 6, PASSWORD_MAX = 64;
 const MAX_BODY = 64 * 1024;
 const LIMITS = {
   title: 80, location: 80, description: 3000, agendaItem: 200, agendaItems: 30, notice: 5000,
-  comment: 1000, name: 20, userTitle: 20, memo: 3000, tag: 20, category: 30, taskNote: 2000, linkTitle: 80, url: 1000
+  comment: 1000, name: 20, userTitle: 20, memo: 3000, tag: 20, category: 30, calendarName: 30, taskNote: 2000, linkTitle: 80, url: 1000
 };
 const COLORS = 6; // 태그 색 개수 (public/styles.css 의 --c0 ~ --c5)
 const STATUSES = ["todo", "doing", "done"];
@@ -34,6 +41,9 @@ const CATEGORY_DEPTH = 3; // 대분류 › 중분류 › 소분류
 const db = openDb(join(DATA_DIR, "pschedule.db"));
 const created = ensureAdmin(db);
 if (created) console.log(`관리자 계정을 만들었어요 → 아이디 ${created.login} / 비밀번호 ${created.password} (로그인 후 바로 바꿔 주세요)`);
+const calendarSync = createCalendarSync(db);
+calendarSync.start(process.env.CALENDAR_SYNC_MINUTES);
+startAutoBackup(db, { dir: BACKUP_DIR, keepDays: BACKUP_KEEP_DAYS, hour: BACKUP_HOUR });
 
 const q = {
   userByLogin: db.prepare("SELECT * FROM users WHERE login = ?"),
@@ -72,6 +82,16 @@ const q = {
   delCategory: db.prepare("DELETE FROM categories WHERE id = ?"),
   // 지우는 분류(와 그 아래)에 붙어 있던 회의·할 일·메모는 한 단계 위 분류로
   moveCategoryItems: ["events", "tasks", "memos"].map((t) => db.prepare(`UPDATE ${t} SET category_id = ? WHERE category_id IN (SELECT value FROM json_each(?))`)),
+
+  // 외부 캘린더 (주소 url 은 관리자 API 에서도 maskUrl 로만 내보냄)
+  calendars: db.prepare("SELECT * FROM calendars ORDER BY id"),
+  calendar: db.prepare("SELECT * FROM calendars WHERE id = ?"),
+  addCalendar: db.prepare("INSERT INTO calendars (name, url, color, category_id) VALUES (?, ?, ?, ?)"),
+  setCalendar: db.prepare("UPDATE calendars SET name = ?, url = ?, color = ?, category_id = ? WHERE id = ?"),
+  delCalendar: db.prepare("DELETE FROM calendars WHERE id = ?"),
+  externalRange: db.prepare(`SELECT x.*, c.name AS calendar_name, c.color, c.category_id FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id
+    WHERE x.start_date <= ? AND x.end_date >= ? ORDER BY x.start_date, x.start_time IS NOT NULL, x.start_time, x.id LIMIT 3000`),
+  external: db.prepare(`SELECT x.*, c.name AS calendar_name, c.color, c.category_id, c.last_ok_at FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id WHERE x.id = ?`),
 
   // 일정 (기간이 겹치는 것)
   events: db.prepare(`
@@ -281,6 +301,32 @@ function inTx(fn) {
   try { const r = fn(); db.exec("COMMIT"); return r; } catch (e) { db.exec("ROLLBACK"); throw e; }
 }
 
+/* ----- 외부 캘린더 ----- */
+const calendarsPublic = () => q.calendars.all().map((c) => ({ id: c.id, name: c.name, color: c.color, categoryId: c.category_id }));
+const calendarAdminOut = (c) => ({
+  id: c.id, name: c.name, color: c.color, categoryId: c.category_id, address: maskUrl(c.url),
+  lastSyncAt: c.last_sync_at, lastOkAt: c.last_ok_at, lastError: c.last_error, eventCount: c.event_count
+});
+// 가져온 일정: 우리 일정과 같은 모양 + ext(읽기 전용) 표시
+const externalOut = (x) => ({
+  id: x.id, ext: true, kind: "external", calendarId: x.calendar_id, calendarName: x.calendar_name, color: x.color, categoryId: x.category_id,
+  title: x.title, startDate: x.start_date, endDate: x.end_date, startTime: x.start_time, endTime: x.end_time, location: x.location,
+  tagIds: [], attendeeIds: []
+});
+function calendarInput(b, cur) {
+  const name = has(b, "name") || !cur ? text(b.name, LIMITS.calendarName, "캘린더 이름", true) : cur.name;
+  let url = cur?.url, warn;
+  if (has(b, "url") || !cur) {
+    const r = checkUrl(b.url);
+    if (r.error) throw bad(r.error, "url");
+    url = r.url; warn = r.warn;
+  }
+  const color = has(b, "color") ? (Number.isInteger(b.color) && b.color >= 0 && b.color < COLORS ? b.color : 5) : cur?.color ?? 5;
+  const category = has(b, "categoryId") ? idOrNull(b.categoryId) : cur?.category_id ?? null;
+  if (category && !q.category.get(category)) throw bad("분류를 찾을 수 없어요.");
+  return { values: [name, url, color, category], warn };
+}
+
 /* ----- 분류 ----- */
 const categoriesOut = () => q.categories.all().map((c) => ({ id: c.id, parentId: c.parent_id, name: c.name }));
 function categoryDepth(id) {
@@ -446,7 +492,7 @@ async function api(req, res, path) {
 
   // 화면을 그리는 데 늘 필요한 것: 나, 팀원, 태그, 분류
   if (path === "/api/me" && method === "GET") {
-    return send(res, 200, { user: publicUser(user), team: q.team.all(), tags: q.tags.all(), categories: categoriesOut() });
+    return send(res, 200, { user: publicUser(user), team: q.team.all(), tags: q.tags.all(), categories: categoriesOut(), calendars: calendarsPublic() });
   }
 
   // 비밀번호 변경 (본인)
@@ -561,7 +607,7 @@ async function api(req, res, path) {
   if (path === "/api/events" && method === "GET") {
     const from = param("from"), to = param("to");
     if (!isDate(from) || !isDate(to) || to < from) return send(res, 400, { error: "기간을 확인해 주세요." });
-    return send(res, 200, { events: eventsOut(q.events.all(to, from), user) });
+    return send(res, 200, { events: eventsOut(q.events.all(to, from), user), external: q.externalRange.all(to, from).map(externalOut) });
   }
   if (path === "/api/meetings/choices" && method === "GET") {
     const d = isDate(param("date")) ? param("date") : new Date().toISOString().slice(0, 10);
@@ -616,6 +662,14 @@ async function api(req, res, path) {
     }
     return send(res, 405, { error: "Method not allowed" });
   }
+  // 외부(구글) 캘린더에서 가져온 일정 하나 (읽기 전용)
+  const xm = path.match(/^\/api\/external\/(\d+)$/);
+  if (xm && method === "GET") {
+    const x = q.external.get(Number(xm[1]));
+    if (!x) return send(res, 404, { error: "가져온 일정을 찾을 수 없어요. 캘린더에서 지워졌을 수 있어요." });
+    return send(res, 200, { event: { ...externalOut(x), description: x.description, syncedAt: x.last_ok_at } });
+  }
+
   const lm = path.match(/^\/api\/links\/(\d+)$/);
   if (lm && method === "DELETE") {
     q.delLink.run(Number(lm[1]));
@@ -780,6 +834,51 @@ async function api(req, res, path) {
       console.log(`[admin] ${user.login} → ${login} 계정 발급`);
       return send(res, 201, { login, name, password });
     }
+    /* 외부 캘린더 (구글 캘린더 비공개 iCal 주소) — 주소는 응답·로그에 가려서만 */
+    if (path === "/api/admin/calendars" && method === "GET") {
+      return send(res, 200, { calendars: q.calendars.all().map(calendarAdminOut) });
+    }
+    if (path === "/api/admin/calendars" && method === "POST") {
+      const { values, warn } = calendarInput(await readJson(req));
+      const id = Number(q.addCalendar.run(...values).lastInsertRowid);
+      console.log(`[admin] ${user.login} → 외부 캘린더 #${id} 등록`);
+      const sync = await calendarSync.syncOne(id);
+      return send(res, 201, { calendar: calendarAdminOut(q.calendar.get(id)), sync, warn });
+    }
+    const calm = path.match(/^\/api\/admin\/calendars\/(\d+)(\/sync)?$/);
+    if (calm) {
+      const c = q.calendar.get(Number(calm[1]));
+      if (!c) return send(res, 404, { error: "캘린더를 찾을 수 없어요." });
+      if (calm[2] && method === "POST") {
+        const sync = await calendarSync.syncOne(c.id);
+        return send(res, 200, { calendar: calendarAdminOut(q.calendar.get(c.id)), sync });
+      }
+      if (!calm[2] && method === "PATCH") {
+        const b = await readJson(req);
+        const { values, warn } = calendarInput(b, c);
+        q.setCalendar.run(...values, c.id);
+        const sync = has(b, "url") ? await calendarSync.syncOne(c.id) : null;
+        return send(res, 200, { calendar: calendarAdminOut(q.calendar.get(c.id)), sync, warn });
+      }
+      if (!calm[2] && method === "DELETE") {
+        q.delCalendar.run(c.id); // 가져온 일정도 함께 지워짐
+        console.log(`[admin] ${user.login} → 외부 캘린더 #${c.id} 삭제`);
+        return send(res, 204);
+      }
+      return send(res, 405, { error: "Method not allowed" });
+    }
+
+    /* 백업 */
+    if (path === "/api/admin/backups" && method === "GET") {
+      return send(res, 200, { backups: listBackups(BACKUP_DIR).map(({ name, size, date }) => ({ name, size, date })), keepDays: BACKUP_KEEP_DAYS, hour: BACKUP_HOUR });
+    }
+    if (path === "/api/admin/backups" && method === "POST") {
+      backupNow(db, BACKUP_DIR);
+      if (BACKUP_KEEP_DAYS) pruneBackups(BACKUP_DIR, BACKUP_KEEP_DAYS);
+      console.log(`[admin] ${user.login} → 지금 백업`);
+      return send(res, 200, { backups: listBackups(BACKUP_DIR), keepDays: BACKUP_KEEP_DAYS, hour: BACKUP_HOUR });
+    }
+
     const um = path.match(/^\/api\/admin\/users\/(\d+)(\/reset-password)?$/);
     if (um) {
       const target = q.userById.get(Number(um[1]));

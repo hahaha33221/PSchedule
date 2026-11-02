@@ -38,6 +38,7 @@
     user: null,
     team: [],
     tags: [],
+    calendars: [],    // 외부(구글) 캘린더 [{ id, name, color, categoryId }] — 가져온 일정은 읽기 전용
     categories: [],   // 분류 [{ id, parentId, name }] (대분류 › 중분류 › 소분류)
     cat: Number(store.get("ps.cat", "")) || null, // 왼쪽에서 고른 분류 (그 아래 분류까지 걸러 보기)
     catOpen: new Set(JSON.parse(store.get("ps.catOpen", "[]") || "[]")), // 펼친 분류
@@ -205,6 +206,13 @@
   }
   const tagChips = (list) => (list || []).map(tagChip).filter(Boolean);
   const kindDot = (kind) => h("i", { class: `dot c${KIND[kind].color}` });
+  // 일정 하나: 우리 일정(회의·일정) 또는 외부 캘린더에서 가져온 일정(ext, 읽기 전용)
+  const evColor = (e) => (e.ext ? e.color : KIND[e.kind].color);
+  const evDot = (e) => h("i", { class: `dot c${evColor(e)}` });
+  const evKey = (e) => (e.ext ? "ext:" : "event:") + e.id;
+  const openEv = (e) => openPeek(e.ext ? "ext" : "event", e.id);
+  const showEv = (e) => (e.ext ? state.show["cal" + e.calendarId] !== false : state.show[e.kind]);
+  const allEvents = (r) => r.events.concat(r.external || []);
 
   /* ---------- 분류 ---------- */
   const isAdmin = () => state.user && state.user.role === "admin";
@@ -521,7 +529,10 @@
         h("div", { class: "side__label" }, ["분류", isAdmin() ? h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "분류 관리", title: "분류 관리", html: ICON.gear, onclick: () => manageCategories() }) : null]),
         layout.cats
       ]),
-      h("div", { class: "side__section" }, [h("div", { class: "side__label", text: "내 캘린더" }), layout.cals]),
+      h("div", { class: "side__section" }, [
+        h("div", { class: "side__label" }, ["내 캘린더", isAdmin() ? h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "구글 캘린더 연결", title: "구글 캘린더 연결", html: ICON.gear, onclick: () => manageCalendars() }) : null]),
+        layout.cals
+      ]),
       layout.mini,
       h("div", { class: "side__section" }, [
         h("div", { class: "side__label" }, ["자주 쓰는 태그", h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "태그 관리", title: "태그 관리", html: ICON.plus, onclick: () => manageTags() })]),
@@ -561,15 +572,20 @@
     }, [icon(it.icon), h("span", { text: it.label })])));
   }
   function drawCalsNav() {
-    layout.cals.replaceChildren(...Object.entries(KIND).map(([k, v]) => {
-      const c = h("input", { type: "checkbox", checked: state.show[k] });
+    if (!layout.cals) return;
+    const item = (k, label, color, title) => {
+      const c = h("input", { type: "checkbox", checked: state.show[k] !== false });
       c.addEventListener("change", () => {
         state.show[k] = c.checked;
         store.set("ps.show", JSON.stringify(state.show));
         if (page && (page.name === "dashboard" || page.name === "today")) page.reload();
       });
-      return h("label", { class: `side__cal c${v.color}` }, [c, h("span", { text: v.label })]);
-    }));
+      return h("label", { class: `side__cal c${color}`, title }, [c, h("span", { text: label })]);
+    };
+    layout.cals.replaceChildren(
+      ...Object.entries(KIND).map(([k, v]) => item(k, v.label, v.color)),
+      ...state.calendars.map((cal) => item("cal" + cal.id, cal.name, cal.color, "구글 캘린더에서 가져온 일정 (읽기 전용)"))
+    );
   }
   function drawTagsNav() {
     if (!layout.tags) return;
@@ -693,7 +709,7 @@
     app.querySelector(".shell").classList.add("has-peek");
     let content;
     try {
-      content = p.type === "event" ? await eventPeek(p.id) : p.type === "task" ? await taskPeek(p.id) : await dayPeek(p.id);
+      content = p.type === "event" ? await eventPeek(p.id) : p.type === "ext" ? await extPeek(p.id) : p.type === "task" ? await taskPeek(p.id) : await dayPeek(p.id);
     } catch (e) {
       if (e.status === 404) { closePeek(); toast(e.message); return; }
       content = peekFrame("", failed(e));
@@ -840,6 +856,22 @@
       h("p", { class: "peek__foot muted small", text: `${e.author || "알 수 없음"}님이 만듦 · ${ago(e.updatedAt)} 수정` })
     ];
     return peekFrame(head, body, tools);
+  }
+
+  /* ----- 가져온 일정 패널 (읽기 전용) ----- */
+  async function extPeek(id) {
+    const e = (await api(`/external/${id}`)).event;
+    const head = [h("div", { class: "peek__kind" }, [evDot(e), h("span", { text: e.calendarName }), h("span", { class: "badge", text: "읽기 전용" })]), h("h2", { class: "peek__h", text: e.title })];
+    return peekFrame(head, [
+      h("ul", { class: "facts" }, [
+        h("li", {}, [icon("cal"), h("span", { text: whenLabel(e) })]),
+        e.location ? h("li", {}, [icon("place"), h("span", { text: e.location })]) : null,
+        e.categoryId ? h("li", {}, [icon("folder"), h("span", { class: "catpath", text: catLabel(e.categoryId) })]) : null
+      ]),
+      e.description ? section("doc", "설명", null, h("p", { class: "prose ext-desc", text: e.description })) : null,
+      h("p", { class: "notice-box small" }, [`구글 캘린더 '${e.calendarName}'에서 가져온 일정이에요. 고치려면 구글 캘린더에서 고쳐 주세요. `, e.syncedAt ? `(${ago(e.syncedAt)} 읽음)` : ""]),
+      h("button", { class: "btn btn--ghost btn--block", type: "button", onclick: () => editEvent(null, { kind: "meeting", date: e.startDate, time: e.startTime || "", title: e.title, location: e.location }) }, [icon("plus"), "이 일정으로 PSchedule 회의 만들기"])
+    ]);
   }
 
   function addLink(anchor, eventId) {
@@ -1012,20 +1044,21 @@
     ]);
     const details = await Promise.all(ev.events.filter((e) => e.kind === "meeting").map((e) => api(`/events/${e.id}`)));
     const byId = new Map(details.map((d) => [d.event.id, d]));
-    const cards = ev.events.map((e) => {
-      const d = byId.get(e.id);
+    const dayEvents = allEvents(ev);
+    const cards = dayEvents.map((e) => {
+      const d = e.ext ? null : byId.get(e.id);
       const imp = d ? d.memos.filter((m) => m.important).slice(0, 3) : [];
       const open = d ? d.tasks.filter((t) => t.status !== "done") : [];
-      return h("li", {}, h("button", { class: "daycard", type: "button", onclick: () => openPeek("event", e.id) }, [
-        h("div", { class: "daycard__top" }, [kindDot(e.kind), h("span", { class: "daycard__time", text: timeRange(e) }), h("strong", { text: e.title })]),
+      return h("li", {}, h("button", { class: "daycard", type: "button", onclick: () => openEv(e) }, [
+        h("div", { class: "daycard__top" }, [evDot(e), h("span", { class: "daycard__time", text: timeRange(e) }), h("strong", { text: e.title }), e.ext ? h("small", { class: "muted", text: e.calendarName }) : null]),
         d && d.event.agenda.length ? h("ol", { class: "daycard__agenda" }, [...d.event.agenda.slice(0, 3).map((a) => h("li", { text: a })), d.event.agenda.length > 3 ? h("li", { class: "muted", text: `외 ${d.event.agenda.length - 3}개` }) : null]) : null,
         imp.length ? h("ul", { class: "daycard__imp" }, imp.map((m) => h("li", {}, [icon("star"), h("span", { text: m.body })]))) : null,
         open.length ? h("div", { class: "daycard__tasks" }, [icon("check"), `남은 할 일 ${open.length}개`]) : null
       ]));
     });
     return peekFrame([h("div", { class: "peek__kind" }, [icon("cal"), h("span", { text: relDay(day) || "선택한 날" })]), h("h2", { class: "peek__h", text: dateLabel(day) })], [
-      section("people", ["일정 ", h("span", { class: "muted", text: String(ev.events.length) })], h("button", { class: "link-btn", type: "button", text: "추가", onclick: () => editEvent(null, { date: day }) }),
-        ev.events.length ? h("ul", { class: "daycards" }, cards) : h("p", { class: "muted small", text: "일정이 없어요." })),
+      section("people", ["일정 ", h("span", { class: "muted", text: String(dayEvents.length) })], h("button", { class: "link-btn", type: "button", text: "추가", onclick: () => editEvent(null, { date: day }) }),
+        dayEvents.length ? h("ul", { class: "daycards" }, cards) : h("p", { class: "muted small", text: "일정이 없어요." })),
       section("check", ["할 일 ", h("span", { class: "muted", text: String(tk.tasks.length) })], null,
         h("div", {}, [taskRows(tk.tasks, { compact: true }), adder("할 일 추가 후 Enter", (v) => act(() => api("/tasks", { method: "POST", body: { title: v, dueDate: day, assigneeId: state.user.id, categoryId: state.cat } })).then(() => refresh()))])),
       section("note", ["메모 ", h("span", { class: "muted", text: String(mm.memos.length) })], null, h("div", {}, [memoRows(mm.memos), memoAdder({ date: day })])),
@@ -1056,7 +1089,7 @@
 
   function eventForm(e, opts) {
     const isNew = !e;
-    const v = e || { kind: opts.kind || "meeting", title: "", startDate: opts.date || today(), endDate: opts.date || today(), startTime: opts.time || "", endTime: "", location: "", description: "", categoryId: state.cat, tagIds: [], attendeeIds: [state.user.id] };
+    const v = e || { kind: opts.kind || "meeting", title: opts.title || "", startDate: opts.date || today(), endDate: opts.date || today(), startTime: opts.time || "", endTime: "", location: opts.location || "", description: "", categoryId: state.cat, tagIds: [], attendeeIds: [state.user.id] };
     let kind = v.kind;
     const err = errorLine();
     const title = h("input", { value: v.title, maxlength: "80", required: true, autofocus: true, placeholder: kind === "meeting" ? "예: 식수 실무회의" : "예: 현장 방문" });
@@ -1289,6 +1322,97 @@
     ]), { wide: true });
   }
 
+  // 구글 캘린더 연결 (관리자): 비공개 iCal 주소 등록·이름·색·분류·지금 읽기·주소 바꾸기·지우기
+  // 주소는 서버가 가려서만 돌려줌 (calendar.google.com · …ab12)
+  async function manageCalendars() {
+    if (!isAdmin()) return;
+    const list = h("ul", { class: "calman" });
+    const body = h("div", { class: "stack" }, [loading()]);
+    openDialog("구글 캘린더 연결", body, { wide: true });
+    let cals = [];
+    const after = async () => { const me = await api("/me"); state.calendars = me.calendars || []; drawCalsNav(); refresh(); };
+    const report = (r, okMsg) => {
+      if (r.warn) toast(r.warn);
+      else if (r.sync && !r.sync.ok) toast(r.sync.error);
+      else if (r.sync) toast(`${okMsg} 일정 ${r.sync.count}개를 읽었어요.`);
+      else toast(okMsg);
+    };
+    async function load() { cals = (await api("/admin/calendars")).calendars; draw(); }
+    function status(c) {
+      if (c.lastError) return h("p", { class: "calman__err small", text: `읽기 실패 (${ago(c.lastSyncAt)}): ${c.lastError}` + (c.lastOkAt ? ` · 마지막 성공 ${ago(c.lastOkAt)}` : "") });
+      return h("p", { class: "muted small", text: c.lastOkAt ? `일정 ${c.eventCount}개 · ${ago(c.lastOkAt)} 읽음 · 20분마다 다시 읽어요` : "아직 읽지 않았어요" });
+    }
+    function changeUrl(anchor, c) {
+      const u = h("input", { type: "url", placeholder: "새 비공개 주소 (https://calendar.google.com/…/basic.ics)", autocomplete: "off", spellcheck: "false" });
+      const err = errorLine();
+      const ok = h("button", { class: "btn btn--primary btn--sm", type: "submit", text: "바꾸고 읽기" });
+      const form = h("form", { class: "pop__form" }, [u, err, ok]);
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        busy(ok, async () => {
+          try { const r = await api(`/admin/calendars/${c.id}`, { method: "PATCH", body: { url: u.value } }); closePop(); report(r, "주소를 바꿨어요."); await load(); await after(); }
+          catch (ex) { showError(err, ex.message); }
+        });
+      });
+      popover(anchor, form);
+      u.focus();
+    }
+    function draw() {
+      const patch = async (c, b) => { await act(() => api(`/admin/calendars/${c.id}`, { method: "PATCH", body: b })); await load(); await after(); };
+      list.replaceChildren(...(cals.length ? cals.map((c) => h("li", { class: "card calman__item" }, [
+        h("div", { class: "calman__row" }, [
+          h("i", { class: `dot c${c.color}` }),
+          inlineText(c.name, { label: "캘린더 이름", max: 30, required: true, onSave: (v) => patch(c, { name: v }) }),
+          h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: (ev) => busy(ev.currentTarget, async () => { const r = await act(() => api(`/admin/calendars/${c.id}/sync`, { method: "POST" })); report(r, "다시 읽었어요."); await load(); await after(); }) }, "지금 읽기"),
+          h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": `${c.name} 연결 끊기`, title: "연결 끊기", html: ICON.trash, onclick: async () => {
+            if (!confirm(`'${c.name}' 연결을 끊을까요? 가져온 일정이 PSchedule 에서 사라져요 (구글 캘린더는 그대로예요).`)) return;
+            await act(() => api(`/admin/calendars/${c.id}`, { method: "DELETE" })); await load(); await after();
+          } })
+        ]),
+        h("div", { class: "calman__row calman__row--meta" }, [
+          h("span", { class: "mono small muted", title: "비공개 주소는 가려서 보여 줘요", text: c.address }),
+          h("button", { class: "link-btn", type: "button", text: "주소 바꾸기", onclick: (ev) => changeUrl(ev.currentTarget, c) }),
+          h("div", { class: "swatches swatches--sm" }, COLOR_NAMES.map((cn, i) => h("button", { class: `swatch c${i}`, type: "button", "aria-label": cn, "aria-pressed": String(c.color === i), onclick: () => patch(c, { color: i }) }))),
+          categoryButton(c.categoryId, (id) => patch(c, { categoryId: id }), "select-btn calman__cat")
+        ]),
+        status(c)
+      ])) : [h("p", { class: "muted small", text: "아직 연결한 캘린더가 없어요." })]));
+    }
+
+    // 새로 연결
+    const err = errorLine();
+    const name = h("input", { maxlength: "30", placeholder: "예: 조직위 공용 캘린더" });
+    const url = h("input", { type: "url", placeholder: "https://calendar.google.com/calendar/ical/…/private-…/basic.ics", autocomplete: "off", spellcheck: "false" });
+    let color = 5, categoryId = null;
+    const swatches = h("div", { class: "swatches swatches--sm" });
+    const drawSw = () => swatches.replaceChildren(...COLOR_NAMES.map((cn, i) => h("button", { class: `swatch c${i}`, type: "button", "aria-label": cn, "aria-pressed": String(color === i), onclick: () => { color = i; drawSw(); } })));
+    drawSw();
+    const submit = h("button", { class: "btn btn--primary", type: "submit", text: "연결하고 읽기" });
+    const form = h("form", { class: "card calman__new stack", novalidate: true }, [
+      h("h3", { class: "card__title", text: "새 캘린더 연결" }),
+      h("div", { class: "row2" }, [field("이름", name), field("분류", categoryButton(null, (id) => { categoryId = id; }), "가져온 일정에 붙일 분류 (선택)")]),
+      field("비공개 주소 (iCal 형식)", url, "구글 캘린더 → 설정 → 왼쪽에서 캘린더 선택 → '캘린더 통합' → '비공개 주소(iCal 형식)' 를 복사해 붙여 넣어 주세요. 이 주소를 아는 사람은 누구나 일정을 볼 수 있으니 비밀번호처럼 다뤄 주세요."),
+      field("색", swatches), err,
+      h("div", { class: "actions" }, submit)
+    ]);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      busy(submit, async () => {
+        try {
+          const r = await api("/admin/calendars", { method: "POST", body: { name: name.value, url: url.value, color, categoryId } });
+          name.value = ""; url.value = "";
+          report(r, "연결했어요.");
+          await load(); await after();
+        } catch (ex) { showError(err, ex.message); (ex.field === "url" ? url : name).focus(); }
+      });
+    });
+    body.replaceChildren(
+      h("p", { class: "muted small", text: "구글 캘린더의 일정을 읽기 전용으로 가져와 달력·오늘 화면에 함께 보여 줘요. PSchedule 에서 고친 내용은 구글로 가지 않아요 (한 방향)." }),
+      list, form
+    );
+    try { await load(); } catch (e) { list.replaceChildren(failed(e)); }
+  }
+
   /* ---------- 댓글 ---------- */
   function commentsBox(type, id, initial, onChange) {
     const list = h("ul", { class: "comments" });
@@ -1352,7 +1476,7 @@
         api(`/events?from=${day}&to=${day}`), api(`/tasks?date=${day}&today=${today()}`), api(`/memos?date=${day}`)
       ]);
       const inCat = catFilter();
-      const events = ev.events.filter((e) => state.show[e.kind] && inCat(e));
+      const events = allEvents(ev).filter((e) => showEv(e) && inCat(e));
       drawTimeline(events);
       drawTasks(tk.tasks.filter(inCat));
       memoList.replaceChildren(memoRows(mm.memos.filter(inCat), { empty: "이 날 남긴 메모가 없어요." }));
@@ -1394,14 +1518,15 @@
         const e = it.e;
         const top = (it.s / 60) * HOUR_PX, height = Math.max(26, ((it.en - it.s) / 60) * HOUR_PX - 3);
         grid.append(h("button", {
-          class: `tl__ev c${KIND[e.kind].color}` + (height < 46 ? " is-short" : ""), type: "button", "data-peek": `event:${e.id}`,
+          class: `tl__ev c${evColor(e)}` + (e.ext ? " is-ext" : "") + (height < 46 ? " is-short" : ""), type: "button", "data-peek": evKey(e),
           style: `top:${top}px;height:${height}px;left:calc(56px + (100% - 60px) * ${it.lane / it.lanes});width:calc((100% - 60px) / ${it.lanes} - 4px)`,
-          onclick: () => openPeek("event", e.id)
+          onclick: () => openEv(e)
         }, [
           h("div", { class: "tl__evtop" }, [h("strong", { text: e.title }), h("span", { class: "tl__tags" }, tagChips(e.tagIds))]),
           h("div", { class: "tl__meta" }, [
             h("span", { text: timeRange(e) }),
             e.location ? h("span", {}, [icon("place"), e.location]) : null,
+            e.ext ? h("span", {}, [icon("cal"), e.calendarName]) : null,
             e.kind === "meeting" && e.attendeeIds.length ? h("span", {}, [icon("people"), `${e.attendeeIds.length}명`]) : null,
             e.openTasks ? h("span", {}, [icon("check"), `${e.openTasks}`]) : null
           ])
@@ -1414,7 +1539,7 @@
       }
       const scroller = h("div", { class: "tl-scroll" }, grid);
       fill(timelineBox, head,
-        allDay.length ? h("div", { class: "tl-allday" }, [h("span", { class: "tl-allday__label", text: "종일" }), ...allDay.map((e) => h("button", { class: `chip c${KIND[e.kind].color}`, type: "button", "data-peek": `event:${e.id}`, onclick: () => openPeek("event", e.id) }, h("span", { text: e.title })))]) : null,
+        allDay.length ? h("div", { class: "tl-allday" }, [h("span", { class: "tl-allday__label", text: "종일" }), ...allDay.map((e) => h("button", { class: `chip c${evColor(e)}` + (e.ext ? " is-ext" : ""), type: "button", "data-peek": evKey(e), onclick: () => openEv(e) }, h("span", { text: e.title })))]) : null,
         scroller,
         !events.length ? h("p", { class: "tl-empty muted", text: "일정이 없어요. 시간대를 두 번 눌러 바로 추가할 수 있어요." }) : null);
       grid.addEventListener("dblclick", (ev) => {
@@ -1491,7 +1616,7 @@
       const { start, end } = monthRange(state.month);
       const [ev, tk] = await Promise.all([api(`/events?from=${ymd(start)}&to=${ymd(end)}`), api(`/tasks?from=${ymd(start)}&to=${ymd(end)}`)]);
       const inCat = catFilter();
-      data = { events: ev.events.filter(inCat), tasks: tk.tasks.filter(inCat) };
+      data = { events: allEvents(ev).filter(inCat), tasks: tk.tasks.filter(inCat) };
       draw();
     }
 
@@ -1525,7 +1650,7 @@
     }
 
     function itemsOn(day) {
-      const ev = data.events.filter((e) => state.show[e.kind] && e.startDate <= day && e.endDate >= day && matches(e));
+      const ev = data.events.filter((e) => showEv(e) && e.startDate <= day && e.endDate >= day && matches(e));
       const tk = state.show.task ? data.tasks.filter((t) => t.dueDate === day && matches(t)) : [];
       return { ev, tk, n: ev.length + tk.length };
     }
@@ -1542,7 +1667,7 @@
         const day = ymd(d);
         const { ev, tk, n } = itemsOn(day);
         const chips = [
-          ...ev.map((e) => h("button", { class: `chip c${KIND[e.kind].color}` + (e.startDate !== e.endDate ? " chip--span" : ""), type: "button", "data-peek": `event:${e.id}`, title: `${e.title} · ${whenLabel(e)}`, onclick: (x) => { x.stopPropagation(); openPeek("event", e.id); } },
+          ...ev.map((e) => h("button", { class: `chip c${evColor(e)}` + (e.startDate !== e.endDate ? " chip--span" : "") + (e.ext ? " is-ext" : ""), type: "button", "data-peek": evKey(e), title: `${e.title} · ${whenLabel(e)}${e.ext ? ` · ${e.calendarName}` : ""}`, onclick: (x) => { x.stopPropagation(); openEv(e); } },
             [h("i", { class: "chip__dot" }), h("span", { text: (e.startTime && e.startDate === day ? e.startTime + " " : "") + e.title })])),
           ...tk.map((x) => h("button", { class: `chip chip--task c${KIND.task.color}` + (x.status === "done" ? " is-done" : ""), type: "button", "data-peek": `task:${x.id}`, title: `할 일 · ${x.title}`, onclick: (y) => { y.stopPropagation(); openPeek("task", x.id); } },
             [h("i", { class: "chip__box" }), h("span", { text: x.title })]))
@@ -1553,7 +1678,7 @@
         }, [
           h("span", { class: "cal-num", text: d.getDate() }),
           h("div", { class: "cal-chips" }, [...chips.slice(0, MAX_CHIPS), chips.length > MAX_CHIPS ? h("span", { class: "cal-more", text: `+${chips.length - MAX_CHIPS}개 더보기` }) : null]),
-          h("div", { class: "cal-dots", "aria-hidden": "true" }, [...ev.slice(0, 3).map((e) => h("i", { class: `c${KIND[e.kind].color}` })), ...tk.slice(0, 2).map(() => h("i", { class: `c${KIND.task.color}` }))])
+          h("div", { class: "cal-dots", "aria-hidden": "true" }, [...ev.slice(0, 3).map((e) => h("i", { class: `c${evColor(e)}` })), ...tk.slice(0, 2).map(() => h("i", { class: `c${KIND.task.color}` }))])
         ]);
         cell.addEventListener("click", () => openPeek("day", day));
         cell.addEventListener("dblclick", () => editEvent(null, { kind: "meeting", date: day }));
@@ -1624,10 +1749,10 @@
 
   function meetingRow(e, hideDate) {
     const st = e.kind === "meeting" ? meetingState(e) : null;
-    return h("li", {}, h("button", { class: "mrow", type: "button", "data-peek": `event:${e.id}`, onclick: () => openPeek("event", e.id) }, [
+    return h("li", {}, h("button", { class: "mrow", type: "button", "data-peek": evKey(e), onclick: () => openEv(e) }, [
       h("span", { class: "mrow__time" }, [hideDate ? null : h("small", { text: relDay(e.startDate) || shortDate(e.startDate) }), timeRange(e)]),
-      kindDot(e.kind),
-      h("span", { class: "mrow__title" }, [h("strong", { text: e.title }), catChip(e.categoryId), ...tagChips(e.tagIds).slice(0, 2),
+      evDot(e),
+      h("span", { class: "mrow__title" }, [h("strong", { text: e.title }), e.ext ? h("span", { class: "ext-badge", text: e.calendarName }) : null, catChip(e.categoryId), ...tagChips(e.tagIds).slice(0, 2),
         e.openTasks ? h("span", { class: "mini-badge" }, [icon("check"), `할 일 ${e.openTasks}`]) : null,
         e.importantMemos ? h("span", { class: "mini-badge mini-badge--star" }, [icon("star"), String(e.importantMemos)]) : null]),
       h("span", { class: "mrow__people" }, [h("span", { class: "avatars" }, (e.attendeeIds.length ? e.attendeeIds : e.createdBy ? [e.createdBy] : []).slice(0, 3).map((id) => avatar(id, "sm"))), e.attendeeIds.length > 3 ? h("small", { text: `+${e.attendeeIds.length - 3}` }) : null]),
@@ -1843,13 +1968,27 @@
           }) })
         ])
       ]));
+      const backupBox = h("div", { class: "card card--pad backup-card" });
       setMain("members", h("div", { class: "stack" }, [
         h("div", { class: "page-head" }, [h("h1", {}, ["멤버 ", h("span", { class: "muted", text: String(r.users.length) })]), h("button", { class: "btn btn--primary", type: "button", onclick: addMember }, [icon("plus"), "계정 발급"])]),
         h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
           h("thead", {}, h("tr", {}, ["이름", "직책", "아이디", "권한", "비밀번호", "최근 로그인", ""].map((t) => h("th", { text: t })))),
           h("tbody", {}, rows)
-        ]))
+        ])),
+        backupBox
       ]));
+      const drawBackups = (b) => {
+        const last = b.backups[0];
+        const now = h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "지금 백업" });
+        now.addEventListener("click", () => busy(now, async () => drawBackups(await act(() => api("/admin/backups", { method: "POST" }), "백업했어요."))));
+        backupBox.replaceChildren(
+          h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "자동 백업" }), now]),
+          h("p", { class: "muted small", text: b.keepDays
+            ? `매일 ${b.hour}시 이후 서버에 하루 한 개씩 저장하고 ${b.keepDays}일 지난 것은 지워요. 지금 ${b.backups.length}개 보관 중${last ? ` · 가장 최근 ${last.date} (${Math.max(1, Math.round(last.size / 1024))}KB)` : ""}.`
+            : "자동 백업이 꺼져 있어요 (BACKUP_KEEP_DAYS=0)." })
+        );
+      };
+      quiet(api("/admin/backups").then(drawBackups));
     }
     page = { name: "members", reload: load };
     try { await load(); } catch (e) { if (e.status !== 401) setMain("members", failed(e)); }
@@ -1857,7 +1996,7 @@
 
   async function reloadTeam() {
     const me = await api("/me");
-    state.user = me.user; state.team = me.team; state.tags = me.tags; state.categories = me.categories || [];
+    state.user = me.user; state.team = me.team; state.tags = me.tags; state.categories = me.categories || []; state.calendars = me.calendars || [];
   }
 
   function showIssued(title, p) {
@@ -1953,7 +2092,7 @@
   async function boot() {
     app.replaceChildren(h("div", { class: "loading loading--full", text: "불러오는 중…" }));
     const r = await api("/me");
-    state.user = r.user; state.team = r.team; state.tags = r.tags;
+    state.user = r.user; state.team = r.team; state.tags = r.tags; state.calendars = r.calendars || [];
     setCategories(r.categories);
     layout.main = null;
     render();

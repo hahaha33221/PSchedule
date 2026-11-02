@@ -5,13 +5,18 @@
  *   node server/admin.mjs list                              계정 목록
  *   node server/admin.mjs add <아이디> <이름> [admin]        계정 발급 (임시 비밀번호 6자리)
  *   node server/admin.mjs reset-password <아이디>            임시 비밀번호 새로 발급
+ *   node server/admin.mjs backup                            지금 백업 (BACKUP_DIR, 기본 data/backups)
+ *   node server/admin.mjs backups                           백업 목록
  *
  * VPS 에서:  ssh root@srv1809055.hstgr.cloud 'cd /opt/pschedule && docker compose exec -T api node --disable-warning=ExperimentalWarning server/admin.mjs list'
  */
 import { join, resolve } from "node:path";
 import { openDb, hashPassword, tempPassword } from "./db.mjs";
+import { backupNow, listBackups } from "./backup.mjs";
 
-const db = openDb(join(resolve(process.env.DATA_DIR || "data"), "pschedule.db"));
+const DATA_DIR = resolve(process.env.DATA_DIR || "data");
+const BACKUP_DIR = resolve(process.env.BACKUP_DIR || join(DATA_DIR, "backups"));
+const db = openDb(join(DATA_DIR, "pschedule.db"));
 const [cmd, ...args] = process.argv.slice(2);
 const ROLE = { member: "멤버", admin: "관리자" };
 
@@ -48,7 +53,19 @@ switch (cmd) {
     break;
   }
 
+  case "backup": {
+    console.log(`백업했어요 → ${backupNow(db, BACKUP_DIR)}`);
+    break;
+  }
+
+  case "backups": {
+    const list = listBackups(BACKUP_DIR);
+    if (!list.length) console.log("(백업 없음)");
+    for (const b of list) console.log(`${b.name}  ${(b.size / 1024).toFixed(0)}KB`);
+    break;
+  }
+
   default:
-    console.log("사용법: node server/admin.mjs list | add <아이디> <이름> [admin] | reset-password <아이디>");
+    console.log("사용법: node server/admin.mjs list | add <아이디> <이름> [admin] | reset-password <아이디> | backup | backups");
     process.exit(cmd ? 1 : 0);
 }

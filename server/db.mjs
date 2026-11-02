@@ -45,6 +45,36 @@ export function openDb(file) {
     );
     CREATE INDEX IF NOT EXISTS categories_parent ON categories (parent_id);
 
+    -- 외부 캘린더 (구글 캘린더 '비공개 주소(iCal 형식)'). url 은 비밀번호처럼: 관리자 화면에도 가려서만 보여 줌
+    CREATE TABLE IF NOT EXISTS calendars (
+      id           INTEGER PRIMARY KEY,
+      name         TEXT NOT NULL,
+      url          TEXT NOT NULL,
+      color        INTEGER NOT NULL DEFAULT 5,
+      category_id  INTEGER REFERENCES categories(id) ON DELETE SET NULL,
+      last_sync_at TEXT,    -- 마지막으로 읽으려고 한 때
+      last_ok_at   TEXT,    -- 마지막으로 성공한 때
+      last_error   TEXT,
+      event_count  INTEGER NOT NULL DEFAULT 0,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    -- 외부 캘린더에서 읽어 온 일정 (읽기 전용, 다시 읽을 때마다 통째로 바뀜). 반복 일정은 회차마다 한 줄
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id          INTEGER PRIMARY KEY,
+      calendar_id INTEGER NOT NULL REFERENCES calendars(id) ON DELETE CASCADE,
+      uid         TEXT NOT NULL,
+      inst        TEXT NOT NULL, -- 회차 (시작 시각)
+      title       TEXT NOT NULL,
+      start_date  TEXT NOT NULL,
+      end_date    TEXT NOT NULL,
+      start_time  TEXT,
+      end_time    TEXT,
+      location    TEXT NOT NULL DEFAULT '',
+      description TEXT NOT NULL DEFAULT '',
+      UNIQUE (calendar_id, uid, inst)
+    );
+    CREATE INDEX IF NOT EXISTS calendar_events_range ON calendar_events (start_date, end_date);
+
     -- 일정: kind 'meeting'(회의) | 'event'(일반 일정). 날짜 'YYYY-MM-DD', 시간 'HH:MM' (없으면 종일)
     CREATE TABLE IF NOT EXISTS events (
       id          INTEGER PRIMARY KEY,
