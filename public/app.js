@@ -543,7 +543,6 @@
     const submit = h("button", { class: "btn btn--primary btn--block", type: "submit", text: "로그인" });
     const form = h("form", { class: "auth__card stack", novalidate: true }, [
       h("div", { class: "brand brand--lg" }, [h("img", { src: "favicon.svg", alt: "" }), h("span", { text: TITLE })]),
-      h("p", { class: "muted", text: "회의, 할 일, 메모를 한 화면에서." }),
       field("아이디", login), field("비밀번호", pw), err, submit,
       h("p", { class: "auth__foot", text: "계정이 없거나 비밀번호를 잊었다면 관리자에게 문의해 주세요." })
     ]);
