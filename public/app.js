@@ -261,7 +261,8 @@
     const first = dialogBody.querySelector("[autofocus]");
     if (first) first.focus();
   }
-  function closeDialog() { if (dialog.open) dialog.close(); }
+  function closeDialog() { closePop(); if (dialog.open) dialog.close(); }
+  dialog.addEventListener("close", () => closePop());
   dialog.addEventListener("click", (e) => {
     if (e.target === dialog || e.target.closest("[data-close]")) closeDialog();
   });
@@ -292,7 +293,8 @@
   function popover(anchor, content) {
     closePop();
     const el = h("div", { class: "pop", role: "dialog" }, content);
-    document.body.append(el);
+    // 모달 대화상자가 열려 있으면 그 안에 붙임 (body 에 붙이면 대화상자 뒤에 그려져 보이지도, 눌리지도 않음)
+    (dialog.open ? dialog : document.body).append(el);
     const r = anchor.getBoundingClientRect();
     const w = el.offsetWidth, hgt = el.offsetHeight;
     let left = Math.min(r.left, window.innerWidth - w - 12);
@@ -309,7 +311,9 @@
   document.addEventListener("mousedown", (e) => {
     if (openPop && !openPop.el.contains(e.target) && !openPop.anchor.contains(e.target)) closePop();
   });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openPop) { e.stopPropagation(); closePop(); } }, true);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openPop) { e.stopPropagation(); e.preventDefault(); closePop(); } }, true);
+  // 대화상자 안 팝업이 열려 있을 때 Esc 는 팝업만 닫음
+  dialog.addEventListener("cancel", (e) => { if (openPop) { e.preventDefault(); closePop(); } });
 
   // 태그 고르기 (여러 개) — 고를 때마다 onChange(ids)
   function tagPicker(anchor, selected, onChange) {
