@@ -38,6 +38,8 @@
     user: null,
     team: [],
     tags: [],
+    units: [],        // 조직도 [{ id, parentId, name, short, leadId }] — 멤버의 소속 (분류와는 따로)
+    ourUnit: store.get("ps.ours", "0") === "1", // 대시보드·할 일·회의에서 '우리 소속'만
     calendars: [],    // 외부(구글) 캘린더 [{ id, name, color, categoryId }] — 가져온 일정은 읽기 전용
     categories: [],   // 분류 [{ id, parentId, name }] (대분류 › 중분류 › 소분류)
     cat: Number(store.get("ps.cat", "")) || null, // 왼쪽에서 고른 분류 (그 아래 분류까지 걸러 보기)
@@ -183,6 +185,10 @@
     trash: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M10 7V4.5h4V7M7 7l1 13h8l1-13"/></svg>',
     edit: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"/></svg>',
     folder: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v7.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg>',
+    lock: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="10.5" width="14" height="10" rx="2.5"/><path d="M8.5 10.5V7.5a3.5 3.5 0 0 1 7 0v3"/></svg>',
+    grip: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/></svg>',
+    org: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3.5" width="6" height="5" rx="1.2"/><rect x="3" y="15.5" width="6" height="5" rx="1.2"/><rect x="15" y="15.5" width="6" height="5" rx="1.2"/><path d="M12 8.5v3.5M6 15.5V12h12v3.5"/></svg>',
+    db: '<svg viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="6" rx="7" ry="2.5"/><path d="M5 6v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5"/></svg>',
     gear: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v2.5M12 18.5V21M3 12h2.5M18.5 12H21M5.6 5.6l1.8 1.8M16.6 16.6l1.8 1.8M5.6 18.4l1.8-1.8M16.6 7.4l1.8-1.8"/></svg>'
   };
   const icon = (name, cls) => h("span", { class: "ic" + (cls ? " " + cls : ""), html: ICON[name], "aria-hidden": "true" });
@@ -246,6 +252,53 @@
     const c = catOf(id);
     return c ? h("span", { class: "cat", title: catLabel(id) }, [icon("folder"), h("span", { text: c.name })]) : null;
   }
+  /* ---------- 조직도 (소속) ---------- */
+  const unitOf = (id) => state.units.find((u) => u.id === id);
+  const unitChildren = (pid) => state.units.filter((u) => (u.parentId || null) === (pid || null));
+  function unitPath(id) {
+    const out = [];
+    for (let u = unitOf(id); u; u = u.parentId ? unitOf(u.parentId) : null) out.unshift(u);
+    return out;
+  }
+  const unitLabel = (id) => unitPath(id).map((u) => u.name).join(" › ");
+  const unitShort = (id) => { const u = unitOf(id); return u ? u.short || u.name : ""; }; // 참석자·담당자 옆 (약칭 먼저)
+  function unitSubtree(id) {
+    const out = [id];
+    for (let i = 0; i < out.length; i++) for (const u of unitChildren(out[i])) out.push(u.id);
+    return new Set(out);
+  }
+  function unitRows(pid, depth, out) {
+    out = out || [];
+    for (const u of unitChildren(pid)) { out.push({ u, depth: depth || 0 }); unitRows(u.id, (depth || 0) + 1, out); }
+    return out;
+  }
+  const personSub = (m) => (m && m.unitId && unitOf(m.unitId) ? unitShort(m.unitId) : "");
+  // '우리 소속' 거르기: 내 소속(과 그 아래)의 팀원이 참석·담당하는 것, 그 소속에 연결한 구글 캘린더
+  const myUnit = () => {
+    const t = state.team.find((m) => m.id === state.user.id); // 관리자가 내 소속을 바꿨을 때 팀 목록이 최신
+    if (t) state.user.unitId = t.unitId;
+    return state.user.unitId && unitOf(state.user.unitId) ? state.user.unitId : null;
+  };
+  function ourFilter() {
+    if (!state.ourUnit || !myUnit()) return () => true;
+    const units = unitSubtree(myUnit());
+    const ids = new Set(state.team.filter((m) => units.has(m.unitId)).map((m) => m.id));
+    return (x) => {
+      if (x.ext) { const c = state.calendars.find((k) => k.id === x.calendarId); return !!(c && units.has(c.unitId)); }
+      if ("assigneeId" in x) return ids.has(x.assigneeId);
+      return (x.attendeeIds || []).some((id) => ids.has(id)) || ids.has(x.createdBy);
+    };
+  }
+  function ourToggle(onChange) {
+    if (!myUnit()) return null;
+    return h("div", { class: "seg seg--sm", title: `우리 소속: ${unitLabel(myUnit())}` }, [[false, "전체"], [true, "우리 소속"]].map(([k, label]) => h("button", {
+      type: "button", "aria-selected": String(state.ourUnit === k), text: label,
+      onclick: () => { state.ourUnit = k; store.set("ps.ours", k ? "1" : "0"); onChange(); }
+    })));
+  }
+  // 관리자 전용 표시 (주황)
+  const adminBadge = (label) => h("span", { class: "admin-badge" }, [icon("lock"), label || "관리자 전용"]);
+
   function setCategories(list) {
     state.categories = list || [];
     if (state.cat && !catOf(state.cat)) { state.cat = null; store.remove("ps.cat"); }
@@ -255,8 +308,10 @@
   /* ---------- 대화 상자 ---------- */
   function openDialog(title, body, opts) {
     dialogTitle.textContent = title;
+    if (opts && opts.admin) dialogTitle.append(" ", adminBadge());
     dialogBody.replaceChildren(body);
     dialog.classList.toggle("dialog--wide", !!(opts && opts.wide));
+    dialog.classList.toggle("dialog--admin", !!(opts && opts.admin));
     if (!dialog.open) dialog.showModal();
     const first = dialogBody.querySelector("[autofocus]");
     if (first) first.focus();
@@ -378,15 +433,57 @@
     return b;
   }
 
+  // 소속(조직) 고르기 — opts.noneLabel 이 있으면 맨 위에 '없음' 줄
+  function unitPicker(anchor, selected, onChange, opts) {
+    const o = opts || {};
+    const noneLabel = o.noneLabel === undefined ? "소속 없음" : o.noneLabel;
+    const list = h("div", { class: "pop__list" });
+    const input = h("input", { placeholder: "조직 찾기", "aria-label": "조직 찾기" });
+    const pick = (id) => { closePop(); onChange(id); };
+    function draw() {
+      const qv = input.value.trim();
+      const rows = unitRows(null).filter(({ u }) => !qv || unitLabel(u.id).includes(qv) || (u.short || "").includes(qv));
+      fill(list,
+        !qv && noneLabel ? h("button", { type: "button", class: "pop__item muted" + (!selected ? " is-on" : ""), onclick: () => pick(null) }, [h("span", { class: "pop__check", html: !selected ? ICON.check : "" }), noneLabel]) : null,
+        ...rows.map(({ u, depth }) => h("button", { type: "button", class: "pop__item" + (u.id === selected ? " is-on" : ""), style: qv ? null : `padding-left:${8 + depth * 16}px`, onclick: () => pick(u.id) }, [
+          h("span", { class: "pop__check", html: u.id === selected ? ICON.check : "" }),
+          h("span", { class: "pop__name" }, [h("span", { class: depth === 0 ? "strong" : null, text: u.name }), qv && u.parentId ? h("small", { text: unitLabel(u.parentId) }) : null])
+        ]))
+      );
+      if (!rows.length) list.append(h("p", { class: "pop__empty", text: state.units.length ? "찾는 조직이 없어요." : isAdmin() ? "아직 조직도가 없어요. 관리자 메뉴의 '조직도'에서 만들어 주세요." : "아직 조직도가 없어요." }));
+    }
+    input.addEventListener("input", draw);
+    draw();
+    popover(anchor, [state.units.length > 8 ? input : null, list].filter(Boolean));
+  }
+
   // 사람 고르기: multi 면 여러 명, 아니면 한 명 (빼기 포함)
   function personPicker(anchor, selected, multi, onChange) {
     const sel = new Set(selected || []);
     const list = h("div", { class: "pop__list" });
+    const person = (u) => h("button", { type: "button", class: "pop__item" + (sel.has(u.id) ? " is-on" : ""), onclick: () => {
+      if (multi) { sel.has(u.id) ? sel.delete(u.id) : sel.add(u.id); onChange([...sel]); draw(); }
+      else { closePop(); onChange(sel.has(u.id) ? null : u.id); }
+    } }, [h("span", { class: "pop__check", html: sel.has(u.id) ? ICON.check : "" }), avatar(u.id, "sm"), h("span", { class: "pop__name" }, [u.name, personSub(u) ? h("small", { text: personSub(u) }) : null])]);
     function draw() {
-      const items = state.team.map((u) => h("button", { type: "button", class: "pop__item" + (sel.has(u.id) ? " is-on" : ""), onclick: () => {
-        if (multi) { sel.has(u.id) ? sel.delete(u.id) : sel.add(u.id); onChange([...sel]); draw(); }
-        else { closePop(); onChange(sel.has(u.id) ? null : u.id); }
-      } }, [h("span", { class: "pop__check", html: sel.has(u.id) ? ICON.check : "" }), avatar(u.id, "sm"), h("span", { class: "pop__name" }, [u.name, u.title ? h("small", { text: u.title }) : null])]));
+      const items = [];
+      if (!state.units.length) items.push(...state.team.map(person));
+      else {
+        // 소속별로 묶음 (조직도 순서), 여러 명 고를 땐 '○○ 전체 넣기'
+        const groups = unitRows(null).map(({ u }) => [u, state.team.filter((m) => m.unitId === u.id)]).filter(([, l]) => l.length);
+        const none = state.team.filter((m) => !m.unitId || !unitOf(m.unitId));
+        if (none.length) groups.push([null, none]);
+        for (const [u, people] of groups) {
+          const allIn = people.every((m) => sel.has(m.id));
+          items.push(h("div", { class: "pop__group" }, [
+            h("span", { text: u ? unitShort(u.id) : "소속 미지정", title: u ? unitLabel(u.id) : null }),
+            multi ? h("button", { type: "button", class: "link-btn", text: allIn ? "전체 빼기" : `${u ? unitShort(u.id) : "미지정"} 전체 넣기`, onclick: () => {
+              people.forEach((m) => (allIn ? sel.delete(m.id) : sel.add(m.id)));
+              onChange([...sel]); draw();
+            } }) : null
+          ]), ...people.map(person));
+        }
+      }
       if (!multi && sel.size) items.push(h("button", { type: "button", class: "pop__item muted", onclick: () => { closePop(); onChange(null); } }, [h("span", { class: "pop__check" }), "담당자 빼기"]));
       list.replaceChildren(...items);
     }
@@ -516,8 +613,11 @@
     layout.mini = h("div", { class: "mini" });
     layout.tags = h("div", { class: "side__tags" });
     layout.cats = h("div", { class: "side__cats" });
+    layout.unitNav = h("div", { class: "side__units" });
+    layout.admin = isAdmin() ? h("section", { class: "side__admin", "aria-label": "관리자 전용 메뉴" }) : null;
     layout.cals = h("div", { class: "side__cals" });
-    const account = h("button", { class: "side__account", type: "button" }, [avatar(state.user.id), h("span", { class: "side__who" }, [h("strong", { text: state.user.name }), h("small", { text: state.user.role === "admin" ? "관리자" : state.user.title || "멤버" })])]);
+    const account = h("button", { class: "side__account", type: "button" }, [avatar(state.user.id), h("span", { class: "side__who" }, [h("strong", { text: state.user.name }),
+      h("small", { text: personSub(state.user) || (isAdmin() ? "" : "소속 없음") }), isAdmin() ? h("small", { class: "side__adminmark" }, [icon("lock"), "관리자 권한"]) : null])]);
     account.addEventListener("click", () => popover(account, h("div", { class: "pop__list" }, [
       h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); openDialog("비밀번호 변경", passwordForm(closeDialog)); } }, "비밀번호 변경"),
       h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); logout(); } }, "로그아웃")
@@ -529,12 +629,14 @@
       ]),
       h("button", { class: "btn btn--dark btn--block", type: "button", onclick: () => quickAdd() }, [icon("plus"), "일정 / 할 일 추가"]),
       layout.nav,
+      h("div", { class: "side__section" }, [h("div", { class: "side__label", text: "내 소속" }), layout.unitNav]),
+      layout.admin,
       h("div", { class: "side__section" }, [
-        h("div", { class: "side__label" }, ["분류", isAdmin() ? h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "분류 관리", title: "분류 관리", html: ICON.gear, onclick: () => manageCategories() }) : null]),
+        h("div", { class: "side__label" }, ["분류", isAdmin() ? h("button", { class: "icon-btn icon-btn--xs icon-btn--admin", type: "button", "aria-label": "분류 관리 (관리자 전용)", title: "분류 관리 (관리자 전용)", html: ICON.gear, onclick: () => manageCategories() }) : null]),
         layout.cats
       ]),
       h("div", { class: "side__section" }, [
-        h("div", { class: "side__label" }, ["내 캘린더", isAdmin() ? h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "구글 캘린더 연결", title: "구글 캘린더 연결", html: ICON.gear, onclick: () => manageCalendars() }) : null]),
+        h("div", { class: "side__label" }, ["내 캘린더", isAdmin() ? h("button", { class: "icon-btn icon-btn--xs icon-btn--admin", type: "button", "aria-label": "구글 캘린더 연결 (관리자 전용)", title: "구글 캘린더 연결 (관리자 전용)", html: ICON.gear, onclick: () => manageCalendars() }) : null]),
         layout.cals
       ]),
       layout.mini,
@@ -567,13 +669,46 @@
       { id: "tasks", label: "할 일", icon: "check" },
       { id: "meetings", label: "회의", icon: "people" },
       { id: "memos", label: "메모", icon: "note" },
-      { id: "notices", label: "공지", icon: "bell" },
-      state.user.role === "admin" ? { id: "members", label: "멤버", icon: "user" } : null
-    ].filter(Boolean);
+      { id: "notices", label: "공지", icon: "bell" }
+    ];
     layout.nav.replaceChildren(...items.map((it) => h("a", {
       class: "side__link" + (it.id === active ? " is-active" : ""), href: "#/" + it.id, "aria-current": it.id === active ? "page" : null,
       onclick: () => toggleNav(false)
     }, [icon(it.icon), h("span", { text: it.label })])));
+    navActive = active;
+    drawUnitNav(active);
+    drawAdminNav(active);
+  }
+  let navActive = null;
+  const drawNavAll = () => drawNav(navActive);
+  // 내 소속 + 다른 소속 보기
+  function drawUnitNav(active) {
+    if (!layout.unitNav) return;
+    const mine = myUnit();
+    const viewing = active === "unit" ? Number(route().id) || mine : null;
+    const other = h("button", { class: "side__sublink", type: "button", text: "다른 소속 보기" });
+    other.addEventListener("click", () => unitPicker(other, viewing, (id) => { if (id) { toggleNav(false); go(`#/unit/${id}`); } }, { noneLabel: null }));
+    fill(layout.unitNav,
+      mine ? h("a", { class: "side__link side__link--unit" + (viewing === mine ? " is-active" : ""), href: `#/unit/${mine}`, title: unitLabel(mine), onclick: () => toggleNav(false) }, [h("i", { class: "dot c0" }), h("span", { text: unitPath(mine).map((u) => u.short || u.name).slice(-2).join(" › ") })])
+        : h("p", { class: "muted small side__catempty", text: "아직 소속이 없어요" }),
+      viewing && viewing !== mine && unitOf(viewing) ? h("a", { class: "side__link side__link--unit is-active", href: `#/unit/${viewing}` }, [h("i", { class: "dot c4" }), h("span", { text: unitShort(viewing) })]) : null,
+      state.units.length ? other : null
+    );
+  }
+  // 관리자 메뉴: 주황 상자 하나에 (멤버에게는 아예 안 보임)
+  function drawAdminNav(active) {
+    if (!layout.admin) return;
+    const link = (id, label, ic, onclick) => (onclick
+      ? h("button", { class: "side__link side__link--admin", type: "button", onclick: () => { toggleNav(false); onclick(); } }, [icon(ic), h("span", { text: label })])
+      : h("a", { class: "side__link side__link--admin" + (id === active ? " is-active" : ""), href: "#/" + id, "aria-current": id === active ? "page" : null, onclick: () => toggleNav(false) }, [icon(ic), h("span", { text: label })]));
+    layout.admin.replaceChildren(
+      h("div", { class: "side__adminhead" }, [icon("lock"), "관리자 전용"]),
+      link("org", "조직도", "org"),
+      link("members", "멤버 · 소속 지정", "user"),
+      link("cats", "분류 관리", "folder", manageCategories),
+      link("cals", "구글 캘린더 연결", "cal", manageCalendars),
+      link("backup", "백업", "db")
+    );
   }
   function drawCalsNav() {
     if (!layout.cals) return;
@@ -599,6 +734,7 @@
 
   // 분류 트리: 누르면 오늘·대시보드·할 일·회의·메모를 그 분류(와 그 아래)로 걸러 봄
   const CAT_PAGES = new Set(["today", "dashboard", "tasks", "meetings", "memos"]);
+  const ADMIN_PAGES = new Set(["org", "members", "backup"]);
   function setCat(id) {
     state.cat = id;
     id ? store.set("ps.cat", String(id)) : store.remove("ps.cat");
@@ -669,7 +805,8 @@
       icon("folder"), h("span", {}, ["분류 ", h("strong", { text: catLabel(state.cat) }), " 만 보는 중 (아래 분류 포함)"]),
       h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "전체 보기", onclick: () => setCat(null) })
     ]) : null;
-    fill(layout.main, bar, content);
+    // 관리자 전용 화면: 맨 위 주황 줄
+    fill(layout.main, ADMIN_PAGES.has(name) ? h("div", { class: "admin-bar", "aria-hidden": "true" }) : null, bar, content);
   }
   const loading = () => h("div", { class: "loading", text: "불러오는 중…" });
   const failed = (e) => h("div", { class: "card empty", text: e.message });
@@ -818,7 +955,7 @@
       const box = attendees.querySelector(".attendees");
       box.replaceChildren(...(e.attendeeIds.length ? e.attendeeIds.map((uid) => {
         const u = member(uid);
-        return h("div", { class: "attendee" }, [avatar(uid), h("span", { text: u ? u.name : "?" }), u && u.title ? h("small", { text: u.title }) : null]);
+        return h("div", { class: "attendee" }, [avatar(uid), h("span", { text: u ? u.name : "?" }), personSub(u) ? h("small", { text: personSub(u) }) : null]);
       }) : [h("p", { class: "muted small", text: "참석자를 추가해 주세요." })]));
     }
     if (attendees) drawAtt();
@@ -1323,7 +1460,7 @@
         h("summary", { text: "여러 줄 한 번에 넣기" }),
         h("div", { class: "stack stack--sm" }, [bulk, h("p", { class: "muted small", text: "이미 있는 분류는 건너뛰고 없는 것만 만들어요." }), h("div", { class: "actions" }, bulkBtn)])
       ])
-    ]), { wide: true });
+    ]), { wide: true, admin: true });
   }
 
   // 구글 캘린더 연결 (관리자): 비공개 iCal 주소 등록·이름·색·분류·지금 읽기·주소 바꾸기·지우기
@@ -1332,7 +1469,7 @@
     if (!isAdmin()) return;
     const list = h("ul", { class: "calman" });
     const body = h("div", { class: "stack" }, [loading()]);
-    openDialog("구글 캘린더 연결", body, { wide: true });
+    openDialog("구글 캘린더 연결", body, { wide: true, admin: true });
     let cals = [];
     const after = async () => { const me = await api("/me"); state.calendars = me.calendars || []; drawCalsNav(); refresh(); };
     const report = (r, okMsg) => {
@@ -1377,7 +1514,9 @@
           h("span", { class: "mono small muted", title: "비공개 주소는 가려서 보여 줘요", text: c.address }),
           h("button", { class: "link-btn", type: "button", text: "주소 바꾸기", onclick: (ev) => changeUrl(ev.currentTarget, c) }),
           h("div", { class: "swatches swatches--sm" }, COLOR_NAMES.map((cn, i) => h("button", { class: `swatch c${i}`, type: "button", "aria-label": cn, "aria-pressed": String(c.color === i), onclick: () => patch(c, { color: i }) }))),
-          categoryButton(c.categoryId, (id) => patch(c, { categoryId: id }), "select-btn calman__cat")
+          categoryButton(c.categoryId, (id) => patch(c, { categoryId: id }), "select-btn calman__cat"),
+          (() => { const b = h("button", { class: "select-btn calman__cat", type: "button", title: "이 캘린더를 쓰는 소속 (소속 화면·'우리 소속'에 반영)" }, c.unitId && unitOf(c.unitId) ? [icon("org"), h("span", { text: unitShort(c.unitId) })] : h("span", { class: "muted", text: "소속 고르기" }));
+            b.addEventListener("click", () => unitPicker(b, c.unitId, (id) => patch(c, { unitId: id }))); return b; })()
         ]),
         status(c)
       ])) : [h("p", { class: "muted small", text: "아직 연결한 캘린더가 없어요." })]));
@@ -1387,7 +1526,7 @@
     const err = errorLine();
     const name = h("input", { maxlength: "30", placeholder: "예: 조직위 공용 캘린더" });
     const url = h("input", { type: "url", placeholder: "https://calendar.google.com/calendar/ical/…/private-…/basic.ics", autocomplete: "off", spellcheck: "false" });
-    let color = 5, categoryId = null;
+    let color = 5, categoryId = null, unitId = null;
     const swatches = h("div", { class: "swatches swatches--sm" });
     const drawSw = () => swatches.replaceChildren(...COLOR_NAMES.map((cn, i) => h("button", { class: `swatch c${i}`, type: "button", "aria-label": cn, "aria-pressed": String(color === i), onclick: () => { color = i; drawSw(); } })));
     drawSw();
@@ -1395,6 +1534,7 @@
     const form = h("form", { class: "card calman__new stack", novalidate: true }, [
       h("h3", { class: "card__title", text: "새 캘린더 연결" }),
       h("div", { class: "row2" }, [field("이름", name), field("분류", categoryButton(null, (id) => { categoryId = id; }), "가져온 일정에 붙일 분류 (선택)")]),
+      state.units.length ? field("소속", unitButton(null, (id) => { unitId = id; }, "소속 고르기 (선택)"), "이 캘린더를 쓰는 소속 — '우리 소속' 거르기와 조직도에 반영") : null,
       field("비공개 주소 (iCal 형식)", url, "구글 캘린더 → 설정 → 왼쪽에서 캘린더 선택 → '캘린더 통합' → '비공개 주소(iCal 형식)' 를 복사해 붙여 넣어 주세요. 이 주소를 아는 사람은 누구나 일정을 볼 수 있으니 비밀번호처럼 다뤄 주세요."),
       field("색", swatches), err,
       h("div", { class: "actions" }, submit)
@@ -1403,7 +1543,7 @@
       e.preventDefault();
       busy(submit, async () => {
         try {
-          const r = await api("/admin/calendars", { method: "POST", body: { name: name.value, url: url.value, color, categoryId } });
+          const r = await api("/admin/calendars", { method: "POST", body: { name: name.value, url: url.value, color, categoryId, unitId } });
           name.value = ""; url.value = "";
           report(r, "연결했어요.");
           await load(); await after();
@@ -1619,8 +1759,8 @@
     async function load() {
       const { start, end } = monthRange(state.month);
       const [ev, tk] = await Promise.all([api(`/events?from=${ymd(start)}&to=${ymd(end)}`), api(`/tasks?from=${ymd(start)}&to=${ymd(end)}`)]);
-      const inCat = catFilter();
-      data = { events: allEvents(ev).filter(inCat), tasks: tk.tasks.filter(inCat) };
+      const inCat = catFilter(), ours = ourFilter();
+      data = { events: allEvents(ev).filter((e) => inCat(e) && ours(e)), tasks: tk.tasks.filter((t) => inCat(t) && ours(t)) };
       draw();
     }
 
@@ -1637,7 +1777,7 @@
           h("button", { class: "icon-btn", type: "button", "aria-label": "다음 달", html: ICON.right, onclick: () => setMonth(new Date(state.month.getFullYear(), state.month.getMonth() + 1, 1)) })
         ]),
         h("h1", { class: "cal-title", text: title }),
-        h("div", { class: "cal-tools" }, [views, search])
+        h("div", { class: "cal-tools" }, [ourToggle(() => quiet(load())), views, search])
       ]);
     }
 
@@ -1779,7 +1919,7 @@
       tagSel.value = taskFilter.tag ? String(taskFilter.tag) : "";
       tagSel.addEventListener("change", () => { taskFilter.tag = tagSel.value ? Number(tagSel.value) : null; drawList(); });
       const search = h("label", { class: "search" }, [icon("search"), h("input", { type: "search", value: taskFilter.q, placeholder: "할 일 검색", "aria-label": "검색", oninput: (e) => { taskFilter.q = e.target.value; drawList(); } })]);
-      filters.replaceChildren(seg("status", [["open", "미완료"], ["done", "완료"], ["all", "전체"]], "ps.taskStatus"), seg("who", [["all", "모두"], ["me", "내 담당"]], "ps.taskWho"), tagSel, search);
+      fill(filters, seg("status", [["open", "미완료"], ["done", "완료"], ["all", "전체"]], "ps.taskStatus"), ourToggle(() => { drawFilters(); quiet(load()); }), seg("who", [["all", "모두"], ["me", "내 담당"]], "ps.taskWho"), tagSel, search);
     }
     function drawList() {
       const f = taskFilter;
@@ -1802,7 +1942,7 @@
       ])) : [h("p", { class: "empty", text: "조건에 맞는 할 일이 없어요." })]));
       markPeeked();
     }
-    async function load() { all = (await api("/tasks")).tasks.filter(catFilter()); drawList(); }
+    async function load() { const ours = ourFilter(); all = (await api("/tasks")).tasks.filter(catFilter()).filter(ours); drawList(); }
     page = { name: "tasks", reload: load };
     drawFilters();
     try { await load(); } catch (e) { if (e.status !== 401) box.replaceChildren(failed(e)); }
@@ -1815,7 +1955,7 @@
     const box = h("div", { class: "card mlist-card" }, loading());
     let qv = "";
     const search = h("label", { class: "search" }, [icon("search"), h("input", { type: "search", placeholder: "회의 검색", "aria-label": "회의 검색", oninput: (e) => { qv = e.target.value; draw(); } })]);
-    setMain("meetings", [h("div", { class: "page-head" }, [h("h1", { text: "회의" }), h("button", { class: "btn btn--primary", type: "button", onclick: () => editEvent(null, { kind: "meeting" }) }, [icon("plus"), "회의 추가"])]), h("div", { class: "filters" }, search), box]);
+    setMain("meetings", [h("div", { class: "page-head" }, [h("h1", { text: "회의" }), h("button", { class: "btn btn--primary", type: "button", onclick: () => editEvent(null, { kind: "meeting" }) }, [icon("plus"), "회의 추가"])]), h("div", { class: "filters" }, [ourToggle(() => render()), search]), box]);
     let all = [];
     function draw() {
       const list = all.filter((e) => e.kind === "meeting" && (!qv || e.title.includes(qv)));
@@ -1835,7 +1975,7 @@
     }
     async function load() {
       const t = today();
-      all = (await api(`/events?from=${shiftYmd(t, -180)}&to=${shiftYmd(t, 180)}`)).events.filter(catFilter());
+      all = (await api(`/events?from=${shiftYmd(t, -180)}&to=${shiftYmd(t, 180)}`)).events.filter(catFilter()).filter(ourFilter());
       draw();
     }
     page = { name: "meetings", reload: load };
@@ -1874,7 +2014,7 @@
     async function load() {
       const r = await api("/notices");
       setMain("notices", h("div", { class: "narrow stack" }, [
-        h("div", { class: "page-head" }, [h("h1", { text: "공지" }), isAdmin ? h("button", { class: "btn btn--primary", type: "button", onclick: () => editNotice(null) }, [icon("plus"), "공지 쓰기"]) : null]),
+        h("div", { class: "page-head" }, [h("h1", { text: "공지" }), isAdmin ? h("button", { class: "btn btn--admin", type: "button", title: "관리자 전용", onclick: () => editNotice(null) }, [icon("lock"), "공지 쓰기"]) : null]),
         r.notices.length ? h("ul", { class: "notice-list" }, r.notices.map((n) => h("li", {}, h("a", { class: "card notice-item" + (n.pinned ? " is-pinned" : ""), href: `#/notices/${n.id}` }, [
           h("div", { class: "notice-item__title" }, [n.pinned ? icon("pin", "pin") : null, h("strong", { text: n.title })]),
           h("p", { class: "notice-item__preview", text: n.preview }),
@@ -1942,57 +2082,88 @@
         } catch (ex) { showError(err, ex.message); }
       });
     });
-    openDialog(isNew ? "공지 쓰기" : "공지 수정", form, { wide: true });
+    openDialog(isNew ? "공지 쓰기" : "공지 수정", form, { wide: true, admin: true });
   }
 
-  /* ---------- 멤버 관리 (관리자) ---------- */
+  /* ---------- 멤버 · 소속 지정 (관리자) ---------- */
+  const memberFilter = { kind: "all", unit: null };
   async function pageMembers() {
-    if (state.user.role !== "admin") return go("#/today");
+    if (!isAdmin()) return go("#/today");
     document.title = `멤버 · ${TITLE}`;
     drawMini(null);
     setMain("members", loading());
+    const picked = new Set();
     async function load() {
       const r = await api("/admin/users");
-      const rows = r.users.map((u) => h("tr", {}, [
-        h("td", {}, h("span", { class: "person" }, [avatar(u.id, "sm"), h("strong", { text: u.name }), u.me ? h("span", { class: "badge", text: "나" }) : null])),
-        h("td", { class: "muted", text: u.title || "—" }),
-        h("td", { class: "mono", text: u.login }),
-        h("td", {}, h("span", { class: "badge" + (u.role === "admin" ? " badge--accent" : ""), text: u.role === "admin" ? "관리자" : "멤버" })),
-        h("td", { class: "muted" }, u.pwChanged ? "변경함" : h("span", { class: "warn", text: "임시 비밀번호" })),
-        h("td", { class: "muted", text: u.lastLoginAt ? ago(u.lastLoginAt) : "아직 없음" }),
-        h("td", { class: "td-actions" }, [
-          h("button", { class: "link-btn", type: "button", text: "수정", onclick: () => editMember(u) }),
-          h("button", { class: "link-btn", type: "button", text: "비밀번호 재발급", onclick: () => confirmDialog("임시 비밀번호 발급", `${u.name}님(${u.login})의 비밀번호를 새 임시 비밀번호로 바꿀까요? 지금 로그인된 기기는 로그아웃돼요.`, "발급", async () => {
-            const p = await api(`/admin/users/${u.id}/reset-password`, { method: "POST" });
-            showIssued("임시 비밀번호", p);
-          }) }),
-          u.me ? null : h("button", { class: "link-btn link-btn--danger", type: "button", text: "삭제", onclick: () => confirmDialog("멤버 삭제", `${u.name}님(${u.login}) 계정을 지울까요? 올린 일정·할 일·메모는 남고 작성자·담당자만 비워져요.`, "삭제", async () => {
-            await api(`/admin/users/${u.id}`, { method: "DELETE" });
-            closeDialog(); toast("계정을 지웠어요."); await reloadTeam(); load();
-          }) })
-        ])
-      ]));
-      const backupBox = h("div", { class: "card card--pad backup-card" });
-      setMain("members", h("div", { class: "stack" }, [
-        h("div", { class: "page-head" }, [h("h1", {}, ["멤버 ", h("span", { class: "muted", text: String(r.users.length) })]), h("button", { class: "btn btn--primary", type: "button", onclick: addMember }, [icon("plus"), "계정 발급"])]),
+      const users = r.users;
+      for (const id of [...picked]) if (!users.some((u) => u.id === id)) picked.delete(id);
+      const body = h("div", { class: "stack" });
+      const counts = { all: users.length, none: users.filter((u) => !u.unitId).length, admin: users.filter((u) => u.role === "admin").length };
+      const filterUnits = memberFilter.unit && unitOf(memberFilter.unit) ? unitSubtree(memberFilter.unit) : null;
+      const shown = users.filter((u) => (memberFilter.kind === "all" || (memberFilter.kind === "none" ? !u.unitId : u.role === "admin")) && (!filterUnits || filterUnits.has(u.unitId)));
+
+      const notice = store.get("ps.unitNotice", "") === "1" ? null : h("div", { class: "infobar", role: "status" }, [
+        h("strong", { text: "'직책' 칸이 '소속'으로 바뀌었어요." }),
+        h("span", { text: "예전에 적은 직책은 '메모'로 남겨 두었어요 (이름 아래 작게 보여요). 소속은 조직도에서 골라 주세요." }),
+        h("a", { href: "#/org", text: "조직도 열기 →" }),
+        h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "안내 닫기", html: ICON.close, onclick: () => { store.set("ps.unitNotice", "1"); load(); } })
+      ]);
+      const seg = h("div", { class: "seg seg--sm" }, [["all", "전체"], ["none", "소속 미지정"], ["admin", "관리자"]].map(([k, label]) => h("button", {
+        type: "button", "aria-selected": String(memberFilter.kind === k), class: k === "none" && counts.none ? "seg__warn" : null,
+        onclick: () => { memberFilter.kind = k; load(); }
+      }, `${label} ${counts[k]}`)));
+      const unitSel = h("button", { class: "select-btn select-btn--sm", type: "button" }, memberFilter.unit && unitOf(memberFilter.unit) ? unitLabel(memberFilter.unit) : h("span", { class: "muted", text: "모든 소속" }));
+      unitSel.addEventListener("click", () => unitPicker(unitSel, memberFilter.unit, (id) => { memberFilter.unit = id; load(); }, { noneLabel: "모든 소속" }));
+      const bulk = picked.size ? h("div", { class: "bulkbar" }, [
+        h("strong", { text: `${picked.size}명 선택` }),
+        h("button", { class: "btn btn--admin btn--sm", type: "button", text: "소속 바꾸기", onclick: (ev) => unitPicker(ev.currentTarget, null, async (id) => {
+          const res = await act(() => api("/admin/users/unit", { method: "POST", body: { userIds: [...picked], unitId: id } }), id ? `${picked.size}명의 소속을 '${unitShort(id)}'(으)로 바꿨어요.` : `${picked.size}명의 소속을 뺐어요.`);
+          state.team = res.team; picked.clear(); drawNavAll(); load();
+        }, { noneLabel: "소속 빼기" }) }),
+        h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "선택 해제", onclick: () => { picked.clear(); load(); } })
+      ]) : h("span", { class: "muted small", text: "여러 명을 골라 한 번에 소속을 바꿀 수 있어요" });
+
+      const all = h("input", { type: "checkbox", "aria-label": "보이는 멤버 모두 고르기", checked: shown.length > 0 && shown.every((u) => picked.has(u.id)) });
+      all.addEventListener("change", () => { shown.forEach((u) => (all.checked ? picked.add(u.id) : picked.delete(u.id))); load(); });
+      const rows = shown.map((u) => {
+        const c = h("input", { type: "checkbox", "aria-label": `${u.name} 고르기`, checked: picked.has(u.id) });
+        c.addEventListener("change", () => { c.checked ? picked.add(u.id) : picked.delete(u.id); load(); });
+        const unitBtn = h("button", { class: "unit-btn" + (u.unitId ? "" : " unit-btn--empty"), type: "button", title: u.unitId ? unitLabel(u.unitId) : "소속을 골라 주세요" }, [h("span", { text: u.unitId ? unitLabel(u.unitId) : "소속 고르기" }), h("span", { class: "unit-btn__caret", "aria-hidden": "true", text: "▾" })]);
+        unitBtn.addEventListener("click", () => unitPicker(unitBtn, u.unitId, async (id) => {
+          await act(() => api(`/admin/users/${u.id}`, { method: "PATCH", body: { unitId: id } }));
+          await reloadTeam(); drawNavAll(); load();
+        }, { noneLabel: "소속 빼기" }));
+        return h("tr", { class: picked.has(u.id) ? "is-picked" : null }, [
+          h("td", {}, c),
+          h("td", {}, h("span", { class: "person person--stack" }, [avatar(u.id, "sm"), h("span", {}, [h("strong", { text: u.name }), u.me ? h("span", { class: "badge", text: "나" }) : null, u.note ? h("small", { class: "muted person__note", text: u.note }) : null])])),
+          h("td", {}, unitBtn),
+          h("td", { class: "mono", text: u.login }),
+          h("td", {}, u.role === "admin" ? adminBadge("관리자") : h("span", { class: "badge", text: "멤버" })),
+          h("td", { class: "muted" }, u.pwChanged ? "변경함" : h("span", { class: "warn", text: "임시 비밀번호" })),
+          h("td", { class: "muted", text: u.lastLoginAt ? ago(u.lastLoginAt) : "아직 없음" }),
+          h("td", { class: "td-actions" }, [
+            h("button", { class: "link-btn", type: "button", text: "수정", onclick: () => editMember(u) }),
+            h("button", { class: "link-btn", type: "button", text: "비밀번호 재발급", onclick: () => confirmDialog("임시 비밀번호 발급", `${u.name}님(${u.login})의 비밀번호를 새 임시 비밀번호로 바꿀까요? 지금 로그인된 기기는 로그아웃돼요.`, "발급", async () => {
+              const p = await api(`/admin/users/${u.id}/reset-password`, { method: "POST" });
+              showIssued("임시 비밀번호", p);
+            }) }),
+            u.me ? null : h("button", { class: "link-btn link-btn--danger", type: "button", text: "삭제", onclick: () => confirmDialog("멤버 삭제", `${u.name}님(${u.login}) 계정을 지울까요? 올린 일정·할 일·메모는 남고 작성자·담당자만 비워져요.`, "삭제", async () => {
+              await api(`/admin/users/${u.id}`, { method: "DELETE" });
+              closeDialog(); toast("계정을 지웠어요."); await reloadTeam(); load();
+            }) })
+          ])
+        ]);
+      });
+      fill(body,
+        h("div", { class: "page-head" }, [h("h1", {}, ["멤버 ", h("span", { class: "muted", text: String(users.length) })]), adminBadge(), h("button", { class: "btn btn--admin page-head__end", type: "button", onclick: addMember }, [icon("plus"), "계정 발급"])]),
+        notice,
+        h("div", { class: "filters" }, [seg, unitSel, h("span", { class: "filters__end" }, bulk)]),
         h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
-          h("thead", {}, h("tr", {}, ["이름", "직책", "아이디", "권한", "비밀번호", "최근 로그인", ""].map((t) => h("th", { text: t })))),
-          h("tbody", {}, rows)
-        ])),
-        backupBox
-      ]));
-      const drawBackups = (b) => {
-        const last = b.backups[0];
-        const now = h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "지금 백업" });
-        now.addEventListener("click", () => busy(now, async () => drawBackups(await act(() => api("/admin/backups", { method: "POST" }), "백업했어요."))));
-        backupBox.replaceChildren(
-          h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "자동 백업" }), now]),
-          h("p", { class: "muted small", text: b.keepDays
-            ? `매일 ${b.hour}시 이후 서버에 하루 한 개씩 저장하고 ${b.keepDays}일 지난 것은 지워요. 지금 ${b.backups.length}개 보관 중${last ? ` · 가장 최근 ${last.date} (${Math.max(1, Math.round(last.size / 1024))}KB)` : ""}.`
-            : "자동 백업이 꺼져 있어요 (BACKUP_KEEP_DAYS=0)." })
-        );
-      };
-      quiet(api("/admin/backups").then(drawBackups));
+          h("thead", {}, h("tr", {}, [h("th", { class: "th-check" }, all), ...["이름", "소속", "아이디", "권한", "비밀번호", "최근 로그인", ""].map((t) => h("th", { text: t }))])),
+          h("tbody", {}, rows.length ? rows : h("tr", {}, h("td", { colspan: "8", class: "muted empty", text: "조건에 맞는 멤버가 없어요." })))
+        ]))
+      );
+      setMain("members", body);
     }
     page = { name: "members", reload: load };
     try { await load(); } catch (e) { if (e.status !== 401) setMain("members", failed(e)); }
@@ -2000,7 +2171,7 @@
 
   async function reloadTeam() {
     const me = await api("/me");
-    state.user = me.user; state.team = me.team; state.tags = me.tags; state.categories = me.categories || []; state.calendars = me.calendars || [];
+    state.user = me.user; state.team = me.team; state.units = me.units || []; state.tags = me.tags; state.categories = me.categories || []; state.calendars = me.calendars || [];
   }
 
   function showIssued(title, p) {
@@ -2014,21 +2185,30 @@
       h("p", { class: "muted", text: `${p.name}님에게 아래 내용을 전해 주세요. 이 창을 닫으면 다시 볼 수 없어요.` }),
       h("div", { class: "issued" }, [h("div", {}, [h("span", { text: "아이디" }), h("strong", { class: "mono", text: p.login })]), h("div", {}, [h("span", { text: "비밀번호" }), h("strong", { class: "mono", text: p.password })])]),
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "닫기", "data-close": true }), copy])
-    ]));
+    ]), { admin: true });
     dialog.addEventListener("close", () => { if (route().name === "members" && page) quiet(page.reload()); }, { once: true });
+  }
+
+  // 폼 안의 소속 고르기 버튼
+  function unitButton(selected, onChange, noneLabel) {
+    const b = h("button", { class: "select-btn", type: "button" });
+    const draw = () => b.replaceChildren(selected && unitOf(selected) ? h("span", { text: unitLabel(selected) }) : h("span", { class: "muted", text: noneLabel || "소속 고르기" }));
+    b.addEventListener("click", () => unitPicker(b, selected, (id) => { selected = id; draw(); onChange(id); }, { noneLabel: "소속 없음" }));
+    draw();
+    return b;
   }
 
   function addMember() {
     const err = errorLine();
     const name = h("input", { maxlength: "20", autofocus: true, placeholder: "예: 김지현" });
-    const title = h("input", { maxlength: "20", placeholder: "예: 운영팀 팀장" });
+    let unitId = memberFilter.unit && unitOf(memberFilter.unit) ? memberFilter.unit : null;
     const login = h("input", { maxlength: "20", autocapitalize: "none", spellcheck: "false", placeholder: "예: jihyun" });
     const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "admin", text: "관리자" })]);
-    const submit = h("button", { class: "btn btn--primary", type: "submit", text: "발급" });
+    const submit = h("button", { class: "btn btn--admin", type: "submit", text: "발급" });
     const form = h("form", { class: "stack", novalidate: true }, [
-      h("div", { class: "row2" }, [field("이름", name), field("직책·부서", title, "선택")]),
+      h("div", { class: "row2" }, [field("이름", name), field("소속", unitButton(unitId, (id) => { unitId = id; }), "조직도에서 고르기 (나중에 정해도 돼요)")]),
       field("아이디", login, "영문 소문자·숫자·._- 3~20자"),
-      field("권한", role, "관리자는 공지 쓰기와 멤버 관리를 할 수 있어요"),
+      field("권한", role, "관리자는 조직도·멤버·분류·캘린더·백업 관리와 공지 쓰기를 할 수 있어요"),
       err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), submit])
     ]);
@@ -2036,38 +2216,379 @@
       e.preventDefault();
       busy(submit, async () => {
         try {
-          const p = await api("/admin/users", { method: "POST", body: { name: name.value, title: title.value, login: login.value, role: role.value } });
+          const p = await api("/admin/users", { method: "POST", body: { name: name.value, unitId, login: login.value, role: role.value } });
           await reloadTeam();
           showIssued("계정을 만들었어요", p);
         } catch (ex) { showError(err, ex.message); (ex.field === "login" ? login : name).focus(); }
       });
     });
-    openDialog("계정 발급", form);
+    openDialog("계정 발급", form, { admin: true });
   }
 
   function editMember(u) {
     const err = errorLine();
     const name = h("input", { value: u.name, maxlength: "20", autofocus: true });
-    const title = h("input", { value: u.title, maxlength: "20" });
+    let unitId = u.unitId;
+    const note = h("input", { value: u.note || "", maxlength: "200", placeholder: "예: 예전 직책, 연락 메모" });
     const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "admin", text: "관리자" })]);
     role.value = u.role;
-    const submit = h("button", { class: "btn btn--primary", type: "submit", text: "저장" });
+    const submit = h("button", { class: "btn btn--admin", type: "submit", text: "저장" });
     const form = h("form", { class: "stack", novalidate: true }, [
-      h("div", { class: "row2" }, [field("이름", name), field("직책·부서", title)]), field("권한", role), err,
+      h("div", { class: "row2" }, [field("이름", name), field("소속", unitButton(unitId, (id) => { unitId = id; }))]),
+      field("메모", note, "관리자만 보는 메모예요. 예전 '직책'은 여기로 옮겨 두었어요."),
+      field("권한", role), err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), submit])
     ]);
     form.addEventListener("submit", (e) => {
       e.preventDefault();
       busy(submit, async () => {
         try {
-          await api(`/admin/users/${u.id}`, { method: "PATCH", body: { name: name.value, title: title.value, role: role.value } });
+          await api(`/admin/users/${u.id}`, { method: "PATCH", body: { name: name.value, unitId, note: note.value, role: role.value } });
           closeDialog(); toast("저장했어요.");
           await reloadTeam();
-          if (state.user.role === "admin") { buildLayout(); render(); } else go("#/today");
+          if (isAdmin()) { buildLayout(); render(); } else go("#/today");
         } catch (ex) { showError(err, ex.message); }
       });
     });
-    openDialog(`${u.login} 수정`, form);
+    openDialog(`${u.login} 수정`, form, { admin: true });
+  }
+
+  /* ---------- 조직도 (관리자) ---------- */
+  const org = { sel: null, q: "", open: new Set(JSON.parse(store.get("ps.orgClosed", "[]") || "[]")) }; // open 에는 '접은' 조직
+  async function pageOrg() {
+    if (!isAdmin()) return go("#/today");
+    document.title = `조직도 · ${TITLE}`;
+    drawMini(null);
+    const treeBox = h("section", { class: "card org-tree", "aria-label": "조직 트리" });
+    const detail = h("section", { class: "card org-detail", "aria-label": "선택한 조직" });
+    const search = h("label", { class: "search" }, [icon("search"), h("input", { type: "search", value: org.q, placeholder: "조직·멤버 찾기", "aria-label": "조직·멤버 찾기", oninput: (e) => { org.q = e.target.value.trim(); drawTree(); } })]);
+    setMain("org", [
+      h("div", { class: "page-head page-head--wrap" }, [h("h1", { text: "조직도" }), adminBadge(), h("span", { class: "muted small", text: "멤버에게는 이 화면이 보이지 않아요. 여기서 만든 조직이 멤버의 '소속'이 돼요." })]),
+      h("div", { class: "filters" }, [
+        h("button", { class: "btn btn--admin", type: "button", onclick: (ev) => addUnitPop(ev.currentTarget, null) }, [icon("plus"), "최상위 조직 추가"]),
+        h("button", { class: "btn btn--ghost", type: "button", text: "여러 줄 한 번에 넣기", onclick: bulkUnits }),
+        h("span", { class: "filters__end" }, search)
+      ]),
+      h("div", { class: "org-grid" }, [treeBox, detail])
+    ]);
+    const saved = (r) => { if (r.units) state.units = r.units; if (r.team) state.team = r.team; drawNavAll(); drawTree(); drawDetail(); return r; };
+    const directCount = (id) => state.team.filter((m) => m.unitId === id).length;
+
+    function addUnitPop(anchor, parent) {
+      const input = h("input", { placeholder: parent ? `'${parent.name}' 아래 조직 이름` : "최상위 조직 이름 (예: 조직위원회)", maxlength: "30" });
+      const err = errorLine();
+      const ok = h("button", { class: "btn btn--admin btn--sm", type: "submit", text: "추가" });
+      const form = h("form", { class: "pop__form" }, [input, err, ok]);
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        busy(ok, async () => {
+          try {
+            const r = await api("/admin/units", { method: "POST", body: { parentId: parent ? parent.id : null, name: input.value } });
+            if (parent) org.open.delete(parent.id);
+            org.sel = r.id; closePop(); saved(r);
+          } catch (ex) { showError(err, ex.message); }
+        });
+      });
+      popover(anchor, form);
+      input.focus();
+    }
+    function bulkUnits() {
+      const ta = h("textarea", { rows: "8", maxlength: "20000", autofocus: true, placeholder: "한 줄에 하나씩, > 로 단계를 나눠요\n조직위원회 > 운영총괄부 > 식음료팀\n조직위원회 > 운영총괄부 > 숙박팀\n조직위원회 > 기획본부 > 행사팀" });
+      const err = errorLine();
+      const ok = h("button", { class: "btn btn--admin", type: "submit", text: "한 번에 넣기" });
+      const form = h("form", { class: "stack", novalidate: true }, [ta, h("p", { class: "muted small", text: "3단계까지, 이미 있는 조직은 건너뛰고 없는 것만 만들어요." }), err,
+        h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])]);
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        if (!ta.value.trim()) return ta.focus();
+        busy(ok, async () => {
+          try {
+            const r = await api("/admin/units/bulk", { method: "POST", body: { text: ta.value } });
+            closeDialog(); saved(r);
+            toast(r.added ? `조직 ${r.added}개를 만들었어요.` : "새로 만든 조직이 없어요 (이미 있어요).");
+          } catch (ex) { showError(err, ex.message); }
+        });
+      });
+      openDialog("조직 여러 줄 한 번에 넣기", form, { admin: true, wide: true });
+    }
+
+    // 트리: 끌어서 놓기 — 행의 위쪽 1/4 은 앞에, 아래쪽 1/4 은 뒤에, 가운데는 그 조직 아래로
+    let dragId = null;
+    function drawTree() {
+      const qv = org.q;
+      const match = (u) => !qv || u.name.includes(qv) || (u.short || "").includes(qv) || state.team.some((m) => m.unitId === u.id && m.name.includes(qv));
+      const visible = new Set();
+      if (qv) for (const u of state.units) if (match(u)) for (const a of unitPath(u.id)) visible.add(a.id);
+      const rows = [];
+      const walk = (pid, depth) => {
+        for (const u of unitChildren(pid)) {
+          if (qv && !visible.has(u.id)) continue;
+          const kids = unitChildren(u.id);
+          const closed = !qv && org.open.has(u.id);
+          rows.push(treeRow(u, depth, kids.length, closed));
+          if (!closed) walk(u.id, depth + 1);
+        }
+      };
+      walk(null, 0);
+      const none = state.team.filter((m) => !m.unitId).length;
+      fill(treeBox,
+        h("div", { class: "org-tree__head" }, [h("span", { text: `조직 ${state.units.length}개 · 소속 멤버 ${state.team.filter((m) => m.unitId).length}명` }), h("span", { text: "끌어서 순서·위치 바꾸기" })]),
+        rows.length ? rows : h("p", { class: "muted small org-empty", text: qv ? "찾는 조직이 없어요." : "아직 조직이 없어요. '최상위 조직 추가'나 '여러 줄 한 번에 넣기'로 만들어 주세요." }),
+        h("button", { class: "org-row org-row--none" + (org.sel === "none" ? " is-sel" : ""), type: "button", onclick: () => { org.sel = "none"; drawTree(); drawDetail(); } }, [
+          h("span", { class: "org-row__name", text: "소속 미지정" }), h("span", { class: "org-row__count" + (none ? " is-warn" : ""), text: `${none}명` })
+        ]),
+        (() => {
+          const selUnit = org.sel && org.sel !== "none" ? unitOf(org.sel) : null;
+          const can = selUnit && unitPath(selUnit.id).length < 3;
+          return h("button", { class: "org-addchild", type: "button", disabled: !can, title: selUnit && !can ? "3단계까지만 만들 수 있어요" : null, onclick: (ev) => addUnitPop(ev.currentTarget, selUnit) }, selUnit ? `+ '${selUnit.name}' 아래에 추가` : "+ 선택한 조직 아래에 추가");
+        })()
+      );
+    }
+    function treeRow(u, depth, kidCount, closed) {
+      const lead = u.leadId && member(u.leadId);
+      const row = h("div", { class: "org-row" + (org.sel === u.id ? " is-sel" : ""), draggable: "true", style: `padding-left:${8 + depth * 22}px`, "data-id": u.id, role: "button", tabindex: "0", "aria-label": `${unitLabel(u.id)} 선택` }, [
+        h("span", { class: "org-row__grip", html: ICON.grip, "aria-hidden": "true" }),
+        kidCount ? h("button", { class: "org-row__chev" + (closed ? "" : " is-open"), type: "button", "aria-label": `${u.name} ${closed ? "펼치기" : "접기"}`, html: ICON.right, onclick: (e) => {
+          e.stopPropagation();
+          closed ? org.open.delete(u.id) : org.open.add(u.id);
+          store.set("ps.orgClosed", JSON.stringify([...org.open]));
+          drawTree();
+        } }) : h("span", { class: "org-row__chev" }),
+        h("span", { class: `org-row__name org-row__name--d${depth}`, text: u.name }),
+        u.short ? h("small", { class: "muted", text: u.short }) : null,
+        h("span", { class: "org-row__lead muted", text: lead ? `책임 ${lead.name}` : "" }),
+        h("span", { class: "org-row__count", text: `${directCount(u.id)}명` })
+      ]);
+      const select = () => { org.sel = u.id; drawTree(); drawDetail(); };
+      row.addEventListener("click", select);
+      row.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(); } });
+      row.addEventListener("dragstart", (e) => { dragId = u.id; e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", String(u.id)); row.classList.add("is-drag"); });
+      row.addEventListener("dragend", () => { dragId = null; treeBox.querySelectorAll(".org-row").forEach((r) => r.classList.remove("is-drag", "drop-before", "drop-after", "drop-inside")); });
+      const zone = (e) => { const r = row.getBoundingClientRect(); const y = (e.clientY - r.top) / r.height; return y < 0.25 ? "before" : y > 0.75 ? "after" : "inside"; };
+      row.addEventListener("dragover", (e) => {
+        if (!dragId || dragId === u.id) return;
+        e.preventDefault();
+        row.classList.remove("drop-before", "drop-after", "drop-inside");
+        row.classList.add("drop-" + zone(e));
+      });
+      row.addEventListener("dragleave", () => row.classList.remove("drop-before", "drop-after", "drop-inside"));
+      row.addEventListener("drop", async (e) => {
+        e.preventDefault();
+        const id = dragId, z = zone(e);
+        dragId = null;
+        if (!id || id === u.id) return;
+        let parentId, index;
+        if (z === "inside") { parentId = u.id; index = unitChildren(u.id).filter((x) => x.id !== id).length; org.open.delete(u.id); }
+        else {
+          parentId = u.parentId || null;
+          const sibs = unitChildren(parentId).filter((x) => x.id !== id);
+          index = sibs.indexOf(u) + (z === "after" ? 1 : 0);
+        }
+        try { saved(await api(`/admin/units/${id}`, { method: "PATCH", body: { parentId, index } })); }
+        catch (ex) { toast(ex.message); drawTree(); }
+      });
+      return row;
+    }
+
+    async function drawDetail() {
+      if (org.sel === "none") {
+        const list = state.team.filter((m) => !m.unitId);
+        fill(detail,
+          h("div", { class: "org-detail__head" }, [h("h2", { text: "소속 미지정" }), h("span", { class: "muted small", text: `${list.length}명` })]),
+          h("p", { class: "muted small", text: "아직 소속이 없는 멤버예요. 소속을 넣으면 소속 화면에 함께 모여요." }),
+          list.length ? h("ul", { class: "org-members" }, list.map((m) => h("li", {}, [avatar(m.id, "sm"), h("strong", { text: m.name }),
+            h("button", { class: "btn btn--admin btn--sm org-members__end", type: "button", text: "소속 넣기", onclick: (ev) => unitPicker(ev.currentTarget, null, async (id) => {
+              if (!id) return;
+              saved(await act(() => api("/admin/users/unit", { method: "POST", body: { userIds: [m.id], unitId: id } })));
+            }, { noneLabel: null }) })
+          ]))) : h("p", { class: "muted small", text: "모든 멤버에게 소속이 있어요." })
+        );
+        return;
+      }
+      const u = org.sel && unitOf(org.sel);
+      if (!u) {
+        fill(detail, h("div", { class: "org-detail__empty" }, [icon("people"), h("p", { class: "muted", text: state.units.length ? "왼쪽에서 조직을 고르면 이름·책임자·소속 멤버를 고칠 수 있어요." : "조직을 만들면 여기에서 고칠 수 있어요." })]));
+        return;
+      }
+      const path = unitPath(u.id);
+      const name = h("input", { value: u.name, maxlength: "30" });
+      const short = h("input", { value: u.short || "", maxlength: "12", placeholder: "예: 식음료" });
+      const subtree = unitSubtree(u.id);
+      const height = (id) => 1 + Math.max(0, ...unitChildren(id).map((k) => height(k.id)));
+      const h0 = height(u.id);
+      const parent = h("select", {}, [h("option", { value: "", text: "(최상위)" }), ...unitRows(null).filter(({ u: x }) => !subtree.has(x.id) && unitPath(x.id).length + h0 <= 3).map(({ u: x }) => h("option", { value: String(x.id), text: unitLabel(x.id) }))]);
+      parent.value = u.parentId ? String(u.parentId) : "";
+      const lead = h("select", {}, [h("option", { value: "", text: "없음" }), ...state.team.map((m) => h("option", { value: String(m.id), text: m.unitId ? `${m.name} · ${unitShort(m.unitId)}` : m.name }))]);
+      lead.value = u.leadId ? String(u.leadId) : "";
+      const members = state.team.filter((m) => m.unitId === u.id);
+      const err = errorLine();
+      const save = h("button", { class: "btn btn--admin", type: "button", text: "저장" });
+      save.addEventListener("click", () => busy(save, async () => {
+        try {
+          const body = { name: name.value, short: short.value, leadId: lead.value ? Number(lead.value) : null };
+          if ((parent.value || "") !== String(u.parentId || "")) body.parentId = parent.value ? Number(parent.value) : null;
+          saved(await api(`/admin/units/${u.id}`, { method: "PATCH", body }));
+          showError(err, ""); toast("저장했어요.");
+        } catch (ex) { showError(err, ex.message); }
+      }));
+      const stats = h("div", { class: "org-stats" }, [0, 1, 2].map(() => h("span", { class: "org-stat is-loading" })));
+      const addMemberBtn = h("button", { class: "link-btn", type: "button", text: "+ 멤버 넣기" });
+      addMemberBtn.addEventListener("click", () => {
+        const others = state.team.filter((m) => m.unitId !== u.id);
+        popover(addMemberBtn, h("div", { class: "pop__list" }, others.length ? others.map((m) => h("button", { type: "button", class: "pop__item", onclick: async () => {
+          closePop();
+          saved(await act(() => api("/admin/users/unit", { method: "POST", body: { userIds: [m.id], unitId: u.id } }), `${m.name}님을 넣었어요.`));
+        } }, [avatar(m.id, "sm"), h("span", { class: "pop__name" }, [m.name, h("small", { text: m.unitId ? unitLabel(m.unitId) : "소속 미지정" })])])) : [h("p", { class: "pop__empty", text: "넣을 멤버가 없어요." })]));
+      });
+      fill(detail,
+        h("div", { class: "org-detail__head" }, [
+          path.length > 1 ? h("span", { class: "muted small", text: path.slice(0, -1).map((x) => x.name).join(" › ") + " ›" }) : null,
+          h("div", { class: "org-detail__title" }, [h("h2", { text: u.name }), h("span", { class: "muted small", text: `${path.length}단계` })])
+        ]),
+        h("div", { class: "row2" }, [field("조직 이름", name), field("상위 조직", parent), field("책임자", lead), field("약칭 (목록에 짧게)", short)]),
+        h("div", { class: "org-block" }, [
+          h("div", { class: "org-block__head" }, [h("h3", { text: `소속 멤버 ${members.length}명` }), addMemberBtn]),
+          members.length ? h("ul", { class: "org-members" }, members.map((m) => h("li", {}, [avatar(m.id, "sm"), h("strong", { text: m.name }),
+            u.leadId === m.id ? h("span", { class: "badge badge--accent", text: "책임자" }) : null,
+            h("button", { class: "link-btn link-btn--muted org-members__end", type: "button", text: "빼기", onclick: async () => {
+              saved(await act(() => api("/admin/users/unit", { method: "POST", body: { userIds: [m.id], unitId: null } }), `${m.name}님을 뺐어요 (소속 미지정).`));
+            } })
+          ]))) : h("p", { class: "muted small", text: "아직 소속 멤버가 없어요." })
+        ]),
+        h("div", { class: "org-block" }, [h("h3", { text: "이 조직과 연결된 것 (아래 조직 포함)" }), stats, h("a", { class: "small", href: `#/unit/${u.id}`, text: "소속 화면에서 보기 →" })]),
+        err,
+        h("div", { class: "org-detail__foot" }, [
+          h("span", { class: "muted small", text: u.parentId ? `지우면 아래 조직·소속 멤버는 '${unitOf(u.parentId).name}'(으)로 옮겨져요.` : "지우면 아래 조직은 최상위로, 소속 멤버는 '소속 미지정'으로 옮겨져요." }),
+          h("button", { class: "btn btn--danger-outline", type: "button", text: "조직 지우기", onclick: () => confirmDialog("조직 지우기", `'${unitLabel(u.id)}' 을(를) 지울까요?`, "지우기", async () => {
+            const r = await api(`/admin/units/${u.id}`, { method: "DELETE" });
+            org.sel = u.parentId || null; closeDialog(); toast("지웠어요."); saved(r);
+          }) }),
+          save
+        ])
+      );
+      try {
+        const s = await api(`/admin/units/${u.id}/stats?today=${today()}`);
+        if (org.sel !== u.id) return;
+        stats.replaceChildren(...[[s.meetings, "이번 달 회의"], [s.openTasks, "남은 할 일"], [s.calendars, "구글 캘린더"]].map(([n, label]) => h("a", { class: "org-stat", href: `#/unit/${u.id}` }, [h("strong", { text: String(n) }), h("span", { text: label })])));
+      } catch (e) { stats.replaceChildren(h("span", { class: "muted small", text: e.message })); }
+    }
+
+    page = { name: "org", reload: async () => { await reloadTeam(); drawTree(); drawDetail(); } };
+    if (org.sel && org.sel !== "none" && !unitOf(org.sel)) org.sel = null;
+    drawTree();
+    drawDetail();
+  }
+
+  /* ---------- 소속 화면 (모두): 팀원이 참석하는 회의 · 맡은 할 일 · 쓴 메모 ---------- */
+  async function pageUnit(id) {
+    drawMini(null);
+    if (!id) id = state.user.unitId && unitOf(state.user.unitId) ? state.user.unitId : null;
+    if (!id || !unitOf(id)) {
+      document.title = `소속 · ${TITLE}`;
+      const rows = unitRows(null);
+      setMain("unit", h("div", { class: "narrow stack" }, [
+        h("div", { class: "page-head" }, [h("h1", { text: "소속 보기" })]),
+        h("p", { class: "muted", text: state.user.unitId ? "내 소속을 찾을 수 없어요. 아래에서 소속을 골라 주세요." : "아직 내 소속이 없어요. 관리자가 정해 줄 수 있어요. 아래에서 다른 소속을 볼 수 있어요." }),
+        rows.length ? h("div", { class: "card unit-list" }, rows.map(({ u, depth }) => h("a", { class: "unit-list__row", href: `#/unit/${u.id}`, style: `padding-left:${14 + depth * 20}px` }, [h("span", { text: u.name }), h("small", { class: "muted", text: `${state.team.filter((m) => m.unitId === u.id).length}명` })])))
+          : h("div", { class: "card empty", text: "아직 조직도가 없어요." })
+      ]));
+      page = { name: "unit", reload: async () => {} };
+      return;
+    }
+    const u = unitOf(id);
+    document.title = `${u.name} · ${TITLE}`;
+    let sub = store.get("ps.unitSub", "0") === "1";
+    let taskView = store.get("ps.unitTaskView", "who");
+    const head = h("div", { class: "unit-head" });
+    const statsBox = h("div", { class: "unit-stats" });
+    const meetBox = h("section", { class: "card unit-card" }, loading());
+    const taskBox = h("section", { class: "card unit-card" });
+    const memoBox = h("section", { class: "card unit-card" });
+    setMain("unit", [head, statsBox, h("div", { class: "unit-grid" }, [meetBox, taskBox, memoBox])]);
+    let data = null;
+
+    function drawHead() {
+      const scope = sub ? unitSubtree(u.id) : new Set([u.id]);
+      const people = state.team.filter((m) => scope.has(m.unitId));
+      const lead = u.leadId && member(u.leadId);
+      const path = unitPath(u.id);
+      const other = h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "다른 소속" });
+      other.addEventListener("click", () => unitPicker(other, u.id, (nid) => { if (nid) go(`#/unit/${nid}`); }, { noneLabel: null }));
+      fill(head,
+        path.length > 1 ? h("nav", { class: "muted small", "aria-label": "소속 경로" }, path.slice(0, -1).map((x) => x.name).join(" › ") + " ›") : null,
+        h("div", { class: "unit-head__row" }, [
+          h("h1", { text: u.name }),
+          h("span", { class: "avatars avatars--lg" }, people.slice(0, 8).map((m) => avatar(m.id))),
+          h("span", { class: "muted small", text: `멤버 ${people.length}명${lead ? ` · 책임 ${lead.name}` : ""}` }),
+          h("span", { class: "unit-head__end" }, [
+            unitChildren(u.id).length ? h("div", { class: "seg seg--sm" }, [[false, "이 팀만"], [true, "하위 조직 포함"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String(sub === k), text: label, onclick: () => { sub = k; store.set("ps.unitSub", k ? "1" : "0"); drawHead(); quiet(load()); } }))) : null,
+            other
+          ])
+        ]),
+        h("p", { class: "muted small unit-head__desc", text: "팀원이 참석하는 회의, 팀원이 맡은 할 일, 팀원이 쓴 메모를 모아 보여 줘요. 팀원의 소속만 정하면 자동으로 모여요." })
+      );
+    }
+
+    function drawBody() {
+      const s = data.stats;
+      statsBox.replaceChildren(...[[s.weekMeetings, "이번 주 회의"], [s.openTasks, "남은 할 일"], [s.lateTasks, "마감 지난 할 일", s.lateTasks > 0], [s.importantMemos, "중요 메모"]].map(([n, label, warn]) =>
+        h("div", { class: "card unit-stat" + (warn ? " is-warn" : "") }, [h("strong", { text: String(n) }), h("span", { text: label })])));
+      const week = `${shortDate(data.week.from)} ~ ${shortDate(data.week.to)}`;
+      fill(meetBox,
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title" }, ["이번 주 회의 ", h("span", { class: "muted small", text: week })]), h("a", { class: "btn btn--ghost btn--sm", href: "#/dashboard" }, ["대시보드", icon("arrow")])]),
+        data.meetings.length ? h("ul", { class: "mrows" }, data.meetings.map((e) => meetingRow(e))) : h("p", { class: "muted small", text: data.memberIds.length ? "이번 주에 팀원이 참석하는 회의가 없어요." : "아직 이 소속에 멤버가 없어요." })
+      );
+      const tasks = data.tasks;
+      const viewSeg = h("div", { class: "seg seg--sm" }, [["who", "담당자별"], ["due", "마감일순"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String(taskView === k), text: label, onclick: () => { taskView = k; store.set("ps.unitTaskView", k); drawBody(); } })));
+      let list;
+      if (!tasks.length) list = h("p", { class: "muted small", text: "남은 할 일이 없어요." });
+      else if (taskView === "due") list = taskRows(tasks, { assignee: true });
+      else {
+        list = h("div", { class: "stack stack--sm" }, data.memberIds.filter((mid) => tasks.some((t) => t.assigneeId === mid)).map((mid) => h("div", { class: "tgroup" }, [
+          h("div", { class: "tgroup__head" }, [personLine(mid), h("span", { class: "count", text: String(tasks.filter((t) => t.assigneeId === mid).length) })]),
+          taskRows(tasks.filter((t) => t.assigneeId === mid), {})
+        ])));
+      }
+      fill(taskBox, h("div", { class: "card__head" }, [h("h2", { class: "card__title" }, ["팀 할 일 ", h("span", { class: "count count--lg", text: String(tasks.length) })]), viewSeg]), list);
+      fill(memoBox, h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "최근 메모 · 중요 먼저" })]), memoRows(data.memos, { showDate: true, empty: "팀원이 쓴 메모가 없어요." }));
+      markPeeked();
+    }
+
+    async function load() {
+      data = await api(`/units/${u.id}?sub=${sub ? 1 : 0}&today=${today()}`);
+      drawBody();
+    }
+    page = { name: "unit", reload: load };
+    drawHead();
+    try { await load(); } catch (e) { if (e.status !== 401) meetBox.replaceChildren(failed(e)); }
+  }
+
+  /* ---------- 백업 (관리자) ---------- */
+  async function pageBackup() {
+    if (!isAdmin()) return go("#/today");
+    document.title = `백업 · ${TITLE}`;
+    drawMini(null);
+    const box = h("div", { class: "card card--pad backup-card" }, loading());
+    setMain("backup", h("div", { class: "narrow stack" }, [
+      h("div", { class: "page-head page-head--wrap" }, [h("h1", { text: "백업" }), adminBadge()]),
+      box,
+      h("div", { class: "card card--pad" }, [
+        h("h2", { class: "card__title", text: "내 Mac 으로 받기 · 복구" }),
+        h("p", { class: "muted small", text: "저장소의 tools/pull-backups.sh 로 서버 백업을 내 Mac 으로 받을 수 있어요. 자동으로 받는 방법과 복구 순서는 README 의 '백업' 부분에 있어요. 백업 파일에는 일정·메모와 구글 캘린더 비공개 주소가 들어 있으니 비밀번호처럼 다뤄 주세요." })
+      ])
+    ]));
+    const draw = (b) => {
+      const now = h("button", { class: "btn btn--admin btn--sm", type: "button", text: "지금 백업" });
+      now.addEventListener("click", () => busy(now, async () => draw(await act(() => api("/admin/backups", { method: "POST" }), "백업했어요."))));
+      fill(box,
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "서버 자동 백업" }), now]),
+        h("p", { class: "muted small", text: b.keepDays ? `매일 ${b.hour}시 이후 서버에 하루 한 개씩 저장하고 ${b.keepDays}일 지난 것은 지워요.` : "자동 백업이 꺼져 있어요 (BACKUP_KEEP_DAYS=0)." }),
+        b.backups.length ? h("ul", { class: "backup-list" }, b.backups.slice(0, 14).map((x) => h("li", {}, [h("span", { class: "mono", text: x.name }), h("span", { class: "muted small", text: `${Math.max(1, Math.round(x.size / 1024))}KB` })]))) : h("p", { class: "muted small", text: "아직 백업이 없어요." }),
+        b.backups.length > 14 ? h("p", { class: "muted small", text: `외 ${b.backups.length - 14}개` }) : null
+      );
+    };
+    page = { name: "backup", reload: async () => draw(await api("/admin/backups")) };
+    try { await page.reload(); } catch (e) { if (e.status !== 401) box.replaceChildren(failed(e)); }
   }
 
   /* ---------- 시작 ---------- */
@@ -2088,6 +2609,9 @@
     if (name === "notices" && id) return pageNotice(Number(id));
     if (name === "notices") return pageNotices();
     if (name === "members") return pageMembers();
+    if (name === "org") return pageOrg();
+    if (name === "backup") return pageBackup();
+    if (name === "unit") return pageUnit(id ? Number(id) : null);
     return go("#/today");
   }
 
@@ -2096,7 +2620,7 @@
   async function boot() {
     app.replaceChildren(h("div", { class: "loading loading--full", text: "불러오는 중…" }));
     const r = await api("/me");
-    state.user = r.user; state.team = r.team; state.tags = r.tags; state.calendars = r.calendars || [];
+    state.user = r.user; state.team = r.team; state.units = r.units || []; state.tags = r.tags; state.calendars = r.calendars || [];
     setCategories(r.categories);
     layout.main = null;
     render();

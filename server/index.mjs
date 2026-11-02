@@ -32,11 +32,12 @@ const PASSWORD_MIN = 6, PASSWORD_MAX = 64;
 const MAX_BODY = 64 * 1024;
 const LIMITS = {
   title: 80, location: 80, description: 3000, agendaItem: 200, agendaItems: 30, notice: 5000,
-  comment: 1000, name: 20, userTitle: 20, memo: 3000, tag: 20, category: 30, calendarName: 30, taskNote: 2000, linkTitle: 80, url: 1000
+  comment: 1000, name: 20, userTitle: 20, memo: 3000, tag: 20, category: 30, calendarName: 30, unitName: 30, unitShort: 12, userNote: 200, taskNote: 2000, linkTitle: 80, url: 1000
 };
 const COLORS = 6; // 태그 색 개수 (public/styles.css 의 --c0 ~ --c5)
 const STATUSES = ["todo", "doing", "done"];
 const CATEGORY_DEPTH = 3; // 대분류 › 중분류 › 소분류
+const UNIT_DEPTH = 3;     // 조직도도 3단계까지 (예: 조직위원회 › 운영총괄부 › 식음료팀)
 
 const db = openDb(join(DATA_DIR, "pschedule.db"));
 const created = ensureAdmin(db);
@@ -49,7 +50,7 @@ const q = {
   userByLogin: db.prepare("SELECT * FROM users WHERE login = ?"),
   userById: db.prepare("SELECT * FROM users WHERE id = ?"),
   session: db.prepare(`
-    SELECT u.id, u.login, u.role, u.name, u.title, u.pw_changed, u.pw_hash FROM sessions s
+    SELECT u.id, u.login, u.role, u.name, u.unit_id, u.pw_changed, u.pw_hash FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ? AND s.expires_at > ?`),
   addSession: db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)"),
@@ -60,7 +61,7 @@ const q = {
   setPassword: db.prepare("UPDATE users SET pw_hash = ?, pw_changed = 1 WHERE id = ?"),
   resetPassword: db.prepare("UPDATE users SET pw_hash = ?, pw_changed = 2 WHERE id = ?"),
   touchLogin: db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?"),
-  team: db.prepare("SELECT id, name, title FROM users ORDER BY name, id"),
+  team: db.prepare("SELECT id, name, unit_id FROM users ORDER BY name, id"),
   userExists: db.prepare("SELECT 1 FROM users WHERE id = ?"),
 
   // 태그
@@ -70,6 +71,23 @@ const q = {
   addTag: db.prepare("INSERT INTO tags (name, color, sort) VALUES (?, ?, (SELECT coalesce(max(sort), 0) + 1 FROM tags))"),
   setTag: db.prepare("UPDATE tags SET name = ?, color = ? WHERE id = ?"),
   delTag: db.prepare("DELETE FROM tags WHERE id = ?"),
+
+  // 조직도
+  units: db.prepare("SELECT id, parent_id, name, short_name, lead_id FROM org_units ORDER BY sort, id"),
+  unit: db.prepare("SELECT * FROM org_units WHERE id = ?"),
+  unitByName: db.prepare("SELECT * FROM org_units WHERE name = ? AND parent_id IS ?"),
+  unitSiblings: db.prepare("SELECT * FROM org_units WHERE parent_id IS ? ORDER BY sort, id"),
+  addUnit: db.prepare("INSERT INTO org_units (parent_id, name, short_name, lead_id, sort) VALUES (?, ?, ?, ?, (SELECT coalesce(max(sort), 0) + 1 FROM org_units WHERE parent_id IS ?))"),
+  setUnit: db.prepare("UPDATE org_units SET name = ?, short_name = ?, lead_id = ? WHERE id = ?"),
+  setUnitPlace: db.prepare("UPDATE org_units SET parent_id = ?, sort = ? WHERE id = ?"),
+  delUnit: db.prepare("DELETE FROM org_units WHERE id = ?"),
+  // 지우는 조직의 아래 조직·멤버·캘린더는 한 단계 위로
+  liftUnitChildren: db.prepare("UPDATE org_units SET parent_id = ? WHERE parent_id = ?"),
+  liftUnitUsers: db.prepare("UPDATE users SET unit_id = ? WHERE unit_id = ?"),
+  liftUnitCalendars: db.prepare("UPDATE calendars SET unit_id = ? WHERE unit_id = ?"),
+  setUserUnit: db.prepare("UPDATE users SET unit_id = ? WHERE id = ?"),
+  usersInUnits: db.prepare("SELECT id FROM users WHERE unit_id IN (SELECT value FROM json_each(?)) ORDER BY name, id"),
+  calendarsInUnits: db.prepare("SELECT count(*) AS n FROM calendars WHERE unit_id IN (SELECT value FROM json_each(?))"),
 
   // 분류
   categories: db.prepare("SELECT id, parent_id, name FROM categories ORDER BY sort, id"),
@@ -86,8 +104,8 @@ const q = {
   // 외부 캘린더 (주소 url 은 관리자 API 에서도 maskUrl 로만 내보냄)
   calendars: db.prepare("SELECT * FROM calendars ORDER BY id"),
   calendar: db.prepare("SELECT * FROM calendars WHERE id = ?"),
-  addCalendar: db.prepare("INSERT INTO calendars (name, url, color, category_id) VALUES (?, ?, ?, ?)"),
-  setCalendar: db.prepare("UPDATE calendars SET name = ?, url = ?, color = ?, category_id = ? WHERE id = ?"),
+  addCalendar: db.prepare("INSERT INTO calendars (name, url, color, category_id, unit_id) VALUES (?, ?, ?, ?, ?)"),
+  setCalendar: db.prepare("UPDATE calendars SET name = ?, url = ?, color = ?, category_id = ?, unit_id = ? WHERE id = ?"),
   delCalendar: db.prepare("DELETE FROM calendars WHERE id = ?"),
   externalRange: db.prepare(`SELECT x.*, c.name AS calendar_name, c.color, c.category_id FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id
     WHERE x.start_date <= ? AND x.end_date >= ? ORDER BY x.start_date, x.start_time IS NOT NULL, x.start_time, x.id LIMIT 3000`),
@@ -170,9 +188,9 @@ const q = {
   delComments: db.prepare("DELETE FROM comments WHERE target_type = ? AND target_id = ?"),
 
   // 멤버 (관리자)
-  users: db.prepare("SELECT id, login, role, name, title, pw_changed, created_at, last_login_at FROM users ORDER BY role = 'admin' DESC, name, id"),
-  addUser: db.prepare("INSERT INTO users (login, pw_hash, role, name, title) VALUES (?, ?, ?, ?, ?)"),
-  setUser: db.prepare("UPDATE users SET name = ?, title = ?, role = ? WHERE id = ?"),
+  users: db.prepare("SELECT id, login, role, name, unit_id, note, pw_changed, created_at, last_login_at FROM users ORDER BY role = 'admin' DESC, name, id"),
+  addUser: db.prepare("INSERT INTO users (login, pw_hash, role, name, unit_id, note) VALUES (?, ?, ?, ?, ?, ?)"),
+  setUser: db.prepare("UPDATE users SET name = ?, unit_id = ?, note = ?, role = ? WHERE id = ?"),
   delUser: db.prepare("DELETE FROM users WHERE id = ?"),
   adminCount: db.prepare("SELECT count(*) AS n FROM users WHERE role = 'admin'")
 };
@@ -197,6 +215,22 @@ Object.assign(q, {
     WHERE m.meeting_id = ? ORDER BY m.important DESC, m.created_at, m.id`),
   memosAll: db.prepare(`SELECT ${q.memoCols} FROM memos m LEFT JOIN users u ON u.id = m.created_by LEFT JOIN events e ON e.id = m.meeting_id
     WHERE (:important = 0 OR m.important = 1) ORDER BY m.memo_date DESC, m.created_at DESC, m.id DESC LIMIT 1000`)
+});
+
+// 소속 화면: 팀원(json 배열)이 참석하는 회의 · 맡은 할 일 · 쓴 메모
+const EVENT_COLS = `e.*, u.name AS author,
+      (SELECT count(*) FROM tasks t WHERE t.meeting_id = e.id AND t.status <> 'done') AS open_tasks,
+      (SELECT count(*) FROM memos m WHERE m.meeting_id = e.id AND m.important = 1) AS important_memos,
+      (SELECT count(*) FROM comments c WHERE c.target_type = 'event' AND c.target_id = e.id) AS comments`;
+const MEMO_FROM = `FROM memos m LEFT JOIN users u ON u.id = m.created_by LEFT JOIN events e ON e.id = m.meeting_id`;
+Object.assign(q, {
+  unitMeetings: db.prepare(`SELECT ${EVENT_COLS} FROM events e LEFT JOIN users u ON u.id = e.created_by
+    WHERE e.kind = 'meeting' AND e.start_date <= :to AND e.end_date >= :from
+      AND EXISTS (SELECT 1 FROM event_attendees a WHERE a.event_id = e.id AND a.user_id IN (SELECT value FROM json_each(:ids)))
+    ORDER BY e.start_date, e.start_time IS NOT NULL, e.start_time, e.id`),
+  unitTasks: db.prepare(`SELECT ${q.taskCols} ${TASK_FROM} WHERE t.status <> 'done' AND t.assignee_id IN (SELECT value FROM json_each(?)) ${TASK_ORDER}`),
+  unitMemos: db.prepare(`SELECT ${q.memoCols} ${MEMO_FROM} WHERE m.created_by IN (SELECT value FROM json_each(?)) ORDER BY m.important DESC, m.created_at DESC, m.id DESC LIMIT 30`),
+  unitImportant: db.prepare("SELECT count(*) AS n FROM memos WHERE important = 1 AND created_by IN (SELECT value FROM json_each(?))")
 });
 
 /* ---------- 로그인 시도 제한 (IP별, 아이디별) ---------- */
@@ -273,7 +307,8 @@ function auth(req) {
 }
 const tokenOf = (req) => String(req.headers.authorization).split(/\s+/)[1];
 
-const publicUser = (u) => ({ id: u.id, login: u.login, role: u.role, name: u.name, title: u.title, mustChangePassword: u.pw_changed !== 1 });
+const publicUser = (u) => ({ id: u.id, login: u.login, role: u.role, name: u.name, unitId: u.unit_id, mustChangePassword: u.pw_changed !== 1 });
+const teamOut = () => q.team.all().map((u) => ({ id: u.id, name: u.name, unitId: u.unit_id }));
 
 // 입력 정리
 const text = (v, max, label, required) => {
@@ -301,10 +336,51 @@ function inTx(fn) {
   try { const r = fn(); db.exec("COMMIT"); return r; } catch (e) { db.exec("ROLLBACK"); throw e; }
 }
 
+/* ----- 조직도 ----- */
+const unitsOut = () => q.units.all().map((u) => ({ id: u.id, parentId: u.parent_id, name: u.name, short: u.short_name, leadId: u.lead_id }));
+function unitDepth(id) { // 맨 위가 1
+  let n = 0;
+  for (let u = q.unit.get(id); u; u = u.parent_id ? q.unit.get(u.parent_id) : null) n++;
+  return n;
+}
+function unitSubtree(id) {
+  const all = q.units.all(), out = [id];
+  for (let i = 0; i < out.length; i++) for (const u of all) if (u.parent_id === out[i]) out.push(u.id);
+  return out;
+}
+function unitHeight(id) { // 자기 포함 아래로 몇 단계
+  const kids = q.unitSiblings.all(id);
+  return 1 + (kids.length ? Math.max(...kids.map((k) => unitHeight(k.id))) : 0);
+}
+const unitIdOrNull = (v) => {
+  const id = idOrNull(v);
+  if (id && !q.unit.get(id)) throw bad("조직을 찾을 수 없어요. 지워졌을 수 있어요.");
+  return id;
+};
+function addUnit(parentId, raw, short = "", leadId = null) {
+  const name = text(raw, LIMITS.unitName, "조직 이름", true);
+  if (parentId && !q.unit.get(parentId)) throw bad("상위 조직을 찾을 수 없어요.");
+  if (parentId && unitDepth(parentId) >= UNIT_DEPTH) throw bad("조직은 3단계까지 만들 수 있어요.");
+  const same = q.unitByName.get(name, parentId);
+  if (same) return { id: same.id, created: false };
+  return { id: Number(q.addUnit.run(parentId, name, text(short, LIMITS.unitShort, "약칭"), leadId, parentId).lastInsertRowid), created: true };
+}
+// 조직을 parentId 아래 index 번째로 옮기기 (끌어서 놓기)
+function placeUnit(u, parentId, index) {
+  if (parentId) {
+    if (unitSubtree(u.id).includes(parentId)) throw bad("자기 아래 조직으로는 옮길 수 없어요.");
+    if (unitDepth(parentId) + unitHeight(u.id) > UNIT_DEPTH) throw bad("옮기면 3단계를 넘어요.");
+  }
+  const sibs = q.unitSiblings.all(parentId).filter((x) => x.id !== u.id);
+  const at = Number.isInteger(index) ? Math.max(0, Math.min(index, sibs.length)) : sibs.length;
+  sibs.splice(at, 0, u);
+  sibs.forEach((x, i) => q.setUnitPlace.run(parentId, i + 1, x.id));
+}
+
 /* ----- 외부 캘린더 ----- */
-const calendarsPublic = () => q.calendars.all().map((c) => ({ id: c.id, name: c.name, color: c.color, categoryId: c.category_id }));
+const calendarsPublic = () => q.calendars.all().map((c) => ({ id: c.id, name: c.name, color: c.color, categoryId: c.category_id, unitId: c.unit_id }));
 const calendarAdminOut = (c) => ({
-  id: c.id, name: c.name, color: c.color, categoryId: c.category_id, address: maskUrl(c.url),
+  id: c.id, name: c.name, color: c.color, categoryId: c.category_id, unitId: c.unit_id, address: maskUrl(c.url),
   lastSyncAt: c.last_sync_at, lastOkAt: c.last_ok_at, lastError: c.last_error, eventCount: c.event_count
 });
 // 가져온 일정: 우리 일정과 같은 모양 + ext(읽기 전용) 표시
@@ -324,7 +400,8 @@ function calendarInput(b, cur) {
   const color = has(b, "color") ? (Number.isInteger(b.color) && b.color >= 0 && b.color < COLORS ? b.color : 5) : cur?.color ?? 5;
   const category = has(b, "categoryId") ? idOrNull(b.categoryId) : cur?.category_id ?? null;
   if (category && !q.category.get(category)) throw bad("분류를 찾을 수 없어요.");
-  return { values: [name, url, color, category], warn };
+  const unit = has(b, "unitId") ? unitIdOrNull(b.unitId) : cur?.unit_id ?? null;
+  return { values: [name, url, color, category, unit], warn };
 }
 
 /* ----- 분류 ----- */
@@ -492,7 +569,7 @@ async function api(req, res, path) {
 
   // 화면을 그리는 데 늘 필요한 것: 나, 팀원, 태그, 분류
   if (path === "/api/me" && method === "GET") {
-    return send(res, 200, { user: publicUser(user), team: q.team.all(), tags: q.tags.all(), categories: categoriesOut(), calendars: calendarsPublic() });
+    return send(res, 200, { user: publicUser(user), team: teamOut(), units: unitsOut(), tags: q.tags.all(), categories: categoriesOut(), calendars: calendarsPublic() });
   }
 
   // 비밀번호 변경 (본인)
@@ -541,6 +618,27 @@ async function api(req, res, path) {
       return send(res, 200, { tags: q.tags.all() });
     }
     return send(res, 405, { error: "Method not allowed" });
+  }
+
+  /* ----- 소속 화면 (모두): 팀원이 참석하는 회의 · 맡은 할 일 · 쓴 메모 ----- */
+  const om = path.match(/^\/api\/units\/(\d+)$/);
+  if (om && method === "GET") {
+    const u = q.unit.get(Number(om[1]));
+    if (!u) return send(res, 404, { error: "조직을 찾을 수 없어요. 지워졌을 수 있어요." });
+    const scope = param("sub") === "1" ? unitSubtree(u.id) : [u.id];
+    const memberIds = q.usersInUnits.all(JSON.stringify(scope)).map((x) => x.id);
+    const ids = JSON.stringify(memberIds);
+    const day = isDate(param("today")) ? param("today") : new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+    const d = new Date(day + "T00:00:00Z");
+    const shift = (n) => new Date(d.getTime() + n * 86400e3).toISOString().slice(0, 10);
+    const from = shift(-((d.getUTCDay() + 6) % 7)), to = shift(6 - ((d.getUTCDay() + 6) % 7)); // 이번 주 월~일
+    const tasks = tasksOut(q.unitTasks.all(ids), user);
+    const meetings = eventsOut(q.unitMeetings.all({ from, to, ids }), user);
+    return send(res, 200, {
+      unitId: u.id, scope, memberIds, week: { from, to },
+      meetings, tasks, memos: q.unitMemos.all(ids).map((m) => memoOut(m, user)),
+      stats: { weekMeetings: meetings.length, openTasks: tasks.length, lateTasks: tasks.filter((t) => t.dueDate && t.dueDate < day).length, importantMemos: q.unitImportant.get(ids).n }
+    });
   }
 
   /* ----- 분류 (관리자만 고침) ----- */
@@ -816,7 +914,7 @@ async function api(req, res, path) {
     if (path === "/api/admin/users" && method === "GET") {
       return send(res, 200, {
         users: q.users.all().map((u) => ({
-          id: u.id, login: u.login, role: u.role, name: u.name, title: u.title, pwChanged: u.pw_changed === 1,
+          id: u.id, login: u.login, role: u.role, name: u.name, unitId: u.unit_id, note: u.note, pwChanged: u.pw_changed === 1,
           createdAt: u.created_at, lastLoginAt: u.last_login_at, me: u.id === user.id
         }))
       });
@@ -826,11 +924,11 @@ async function api(req, res, path) {
       const login = normalizeLogin(b.login);
       if (!/^[a-z0-9._-]{3,20}$/.test(login)) throw bad("아이디는 영문 소문자·숫자·._- 로 3~20자로 정해 주세요.", "login");
       const name = text(b.name, LIMITS.name, "이름", true);
-      const title = text(b.title, LIMITS.userTitle, "직책");
+      const unit = unitIdOrNull(b.unitId);
       const role = b.role === "admin" ? "admin" : "member";
       if (q.userByLogin.get(login)) throw bad("이미 있는 아이디예요.", "login");
       const password = tempPassword();
-      q.addUser.run(login, hashPassword(password), role, name, title);
+      q.addUser.run(login, hashPassword(password), role, name, unit, text(b.note, LIMITS.userNote, "메모"));
       console.log(`[admin] ${user.login} → ${login} 계정 발급`);
       return send(res, 201, { login, name, password });
     }
@@ -879,6 +977,82 @@ async function api(req, res, path) {
       return send(res, 200, { backups: listBackups(BACKUP_DIR), keepDays: BACKUP_KEEP_DAYS, hour: BACKUP_HOUR });
     }
 
+    // 여러 명 한 번에 소속 바꾸기
+    if (path === "/api/admin/users/unit" && method === "POST") {
+      const b = await readJson(req);
+      const unit = unitIdOrNull(b.unitId);
+      const list = ids(b.userIds);
+      inTx(() => { for (const id of list) q.setUserUnit.run(unit, id); });
+      return send(res, 200, { changed: list.length, team: teamOut() });
+    }
+
+    /* 조직도 */
+    if (path === "/api/admin/units" && method === "POST") {
+      const b = await readJson(req);
+      const lead = idOrNull(b.leadId);
+      if (lead && !q.userExists.get(lead)) throw bad("책임자를 찾을 수 없어요.");
+      const r = addUnit(idOrNull(b.parentId), b.name, b.short, lead);
+      if (!r.created) throw bad("같은 자리에 이미 있는 조직이에요.");
+      return send(res, 201, { id: r.id, units: unitsOut() });
+    }
+    // 여러 줄 한 번에: 한 줄에 '조직위원회 > 운영총괄부 > 식음료팀', 없는 것만 만듦
+    if (path === "/api/admin/units/bulk" && method === "POST") {
+      const lines = String((await readJson(req)).text ?? "").split(/\n/).map((l) => l.trim()).filter(Boolean);
+      if (lines.length > 500) throw bad("한 번에 500줄까지 넣을 수 있어요.");
+      const added = inTx(() => {
+        let n = 0;
+        for (const line of lines) {
+          const parts = line.split(/\s*[>›]\s*/).filter(Boolean);
+          if (parts.length > UNIT_DEPTH) throw bad(`'${line}' — 조직은 3단계까지예요.`);
+          let parent = null;
+          for (const p of parts) { const r = addUnit(parent, p); parent = r.id; if (r.created) n++; }
+        }
+        return n;
+      });
+      return send(res, 200, { added, units: unitsOut() });
+    }
+    const unm = path.match(/^\/api\/admin\/units\/(\d+)(\/stats)?$/);
+    if (unm) {
+      const u = q.unit.get(Number(unm[1]));
+      if (!u) return send(res, 404, { error: "조직을 찾을 수 없어요." });
+      // 이 조직(아래 조직 포함)과 연결된 것: 이번 달 회의, 남은 할 일, 구글 캘린더
+      if (unm[2] && method === "GET") {
+        const scope = JSON.stringify(unitSubtree(u.id));
+        const ids = JSON.stringify(q.usersInUnits.all(scope).map((x) => x.id));
+        const month = (isDate(param("today")) ? param("today") : new Date().toISOString().slice(0, 10)).slice(0, 7);
+        return send(res, 200, {
+          meetings: q.unitMeetings.all({ from: month + "-01", to: month + "-31", ids }).length,
+          openTasks: q.unitTasks.all(ids).length,
+          calendars: q.calendarsInUnits.get(scope).n
+        });
+      }
+      if (!unm[2] && method === "PATCH") {
+        const b = await readJson(req);
+        inTx(() => {
+          const name = has(b, "name") ? text(b.name, LIMITS.unitName, "조직 이름", true) : u.name;
+          const parent = has(b, "parentId") ? idOrNull(b.parentId) : u.parent_id;
+          if (parent && !q.unit.get(parent)) throw bad("상위 조직을 찾을 수 없어요.");
+          const same = q.unitByName.get(name, parent);
+          if (same && same.id !== u.id) throw bad("같은 자리에 이미 있는 조직이에요.");
+          const lead = has(b, "leadId") ? idOrNull(b.leadId) : u.lead_id;
+          if (lead && !q.userExists.get(lead)) throw bad("책임자를 찾을 수 없어요.");
+          q.setUnit.run(name, has(b, "short") ? text(b.short, LIMITS.unitShort, "약칭") : u.short_name, lead, u.id);
+          if (has(b, "parentId") || has(b, "index")) placeUnit(u, parent, b.index);
+        });
+        return send(res, 200, { units: unitsOut() });
+      }
+      if (!unm[2] && method === "DELETE") {
+        inTx(() => {
+          q.liftUnitChildren.run(u.parent_id, u.id);
+          q.liftUnitUsers.run(u.parent_id, u.id);
+          q.liftUnitCalendars.run(u.parent_id, u.id);
+          q.delUnit.run(u.id);
+        });
+        return send(res, 200, { units: unitsOut(), team: teamOut() });
+      }
+      return send(res, 405, { error: "Method not allowed" });
+    }
+
     const um = path.match(/^\/api\/admin\/users\/(\d+)(\/reset-password)?$/);
     if (um) {
       const target = q.userById.get(Number(um[1]));
@@ -894,10 +1068,11 @@ async function api(req, res, path) {
       if (!um[2] && method === "PATCH") {
         const b = await readJson(req);
         const name = b.name === undefined ? target.name : text(b.name, LIMITS.name, "이름", true);
-        const title = b.title === undefined ? target.title : text(b.title, LIMITS.userTitle, "직책");
+        const unit = has(b, "unitId") ? unitIdOrNull(b.unitId) : target.unit_id;
+        const note = has(b, "note") ? text(b.note, LIMITS.userNote, "메모") : target.note;
         const role = b.role === "admin" || b.role === "member" ? b.role : target.role;
         if (lastAdmin && role !== "admin") throw bad("관리자가 한 명은 있어야 해요.");
-        q.setUser.run(name, title, role, target.id);
+        q.setUser.run(name, unit, note, role, target.id);
         return send(res, 200, { ok: true });
       }
       if (!um[2] && method === "DELETE") {

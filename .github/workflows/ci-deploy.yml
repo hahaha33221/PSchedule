@@ -59,6 +59,10 @@ jobs:
           curl -fs -H "$H" -XPOST -d '{"title":"공지","body":"내용"}' $B/notices | grep -q '"id":1'
           curl -fs -H "$H" -XPOST -d '{"login":"member1","name":"멤버"}' $B/admin/users | grep -q '"password"'
           curl -fs -H "$H" "$B/events?from=2026-01-01&to=2026-01-31" | grep -q '"external":\[\]'
+          curl -fs -H "$H" -XPOST -d '{"text":"조직위원회 > 운영총괄부 > 식음료팀"}' $B/admin/units/bulk | grep -q '"added":3'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"text":"a > b > c > d"}' $B/admin/units/bulk)" = 400
+          curl -fs -H "$H" -XPOST -d '{"userIds":[1],"unitId":3}' $B/admin/users/unit | grep -q '"changed":1'
+          curl -fs -H "$H" "$B/units/1?sub=1" | grep -q '"memberIds":\[1'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"name":"x","url":"http://127.0.0.1/a.ics"}' $B/admin/calendars)" = 400
           curl -fs -H "$H" -XPOST $B/admin/backups | grep -q 'pschedule-'
           test -s /tmp/ps/backups/pschedule-*.db

@@ -36,6 +36,17 @@ export function openDb(file) {
       sort  INTEGER NOT NULL DEFAULT 0
     );
 
+    -- 조직도: 조직 단위 (3단계까지, 관리자가 관리). 멤버의 '소속' (users.unit_id) 이 됨. 분류(업무 주제)와는 따로
+    CREATE TABLE IF NOT EXISTS org_units (
+      id         INTEGER PRIMARY KEY,
+      parent_id  INTEGER REFERENCES org_units(id) ON DELETE CASCADE,
+      name       TEXT NOT NULL,
+      short_name TEXT NOT NULL DEFAULT '', -- 약칭 (참석자·담당자 옆 등 짧게)
+      lead_id    INTEGER REFERENCES users(id) ON DELETE SET NULL, -- 책임자
+      sort       INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS org_units_parent ON org_units (parent_id);
+
     -- 분류: 대분류 › 중분류 › 소분류 (parent_id 로 3단계까지, 관리자가 관리). 회의·할 일·메모에 하나씩
     CREATE TABLE IF NOT EXISTS categories (
       id        INTEGER PRIMARY KEY,
@@ -173,8 +184,21 @@ export function openDb(file) {
     CREATE INDEX IF NOT EXISTS comments_target ON comments (target_type, target_id);
   `);
   addCategoryColumns(db);
+  addUnitColumns(db);
   seedTags(db);
   return db;
+}
+
+// 조직도가 생기기 전에 만든 DB: users 에 소속(unit_id)·메모(note), calendars 에 소속 붙이기
+// 예전 '직책'(title) 글자는 지우지 않고 메모로 옮겨 둠
+function addUnitColumns(db) {
+  const has = (t, c) => db.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c);
+  if (!has("users", "unit_id")) db.exec("ALTER TABLE users ADD COLUMN unit_id INTEGER REFERENCES org_units(id) ON DELETE SET NULL");
+  if (!has("users", "note")) {
+    db.exec("ALTER TABLE users ADD COLUMN note TEXT NOT NULL DEFAULT ''");
+    db.exec("UPDATE users SET note = '직책: ' || title WHERE title <> ''");
+  }
+  if (!has("calendars", "unit_id")) db.exec("ALTER TABLE calendars ADD COLUMN unit_id INTEGER REFERENCES org_units(id) ON DELETE SET NULL");
 }
 
 // 분류가 생기기 전에 만든 DB 에 category_id 열 붙이기
