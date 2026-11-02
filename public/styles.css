@@ -1079,3 +1079,21 @@ button.mgroup__head:hover { color: var(--ink); }
 .teamsum tr.is-empty td { color: var(--muted); }
 .teamsum .is-late { color: var(--danger); font-weight: 700; }
 .teamsum__name { display: inline-block; }
+
+/* ---------- 가져온 일정 → 우리 소속으로 ---------- */
+.srcbox { display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap; padding: 8px 12px; border-radius: 10px; background: var(--surface-2); font-size: 12.5px; color: var(--ink-2); }
+.srcbox > span { display: inline-flex; align-items: center; gap: 6px; }
+.srcbox .ic svg { width: 14px; height: 14px; }
+.srcbox.is-warn { background: var(--admin-soft); color: var(--admin-text); }
+.srcbox__msg { font-weight: 700; }
+.import-list { list-style: none; margin: 0; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.import-list li { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.import-list li > span { color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.import-list strong { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-open { justify-content: flex-start; color: var(--c1); }
+.sr-pick { margin-left: auto; }
+.sr-pickbar { justify-content: space-between; background: var(--primary-soft); border-color: transparent; color: var(--primary); }
+.sr-mark--pick { border-color: var(--primary); }
+.sr-mark--pick.is-done { background: var(--primary); }
+.sr-row.is-picked { background: var(--primary-soft); }
+.sr-row.is-dim { opacity: .45; }

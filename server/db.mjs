@@ -221,6 +221,14 @@ function addUnitColumns(db) {
     }
     db.exec(`CREATE INDEX IF NOT EXISTS ${t}_unit ON ${t} (unit_id)`);
   }
+  // 구글 캘린더에서 '우리 소속으로 넣은' 일정: 원본 (캘린더, UID, 회차) 와 넣을 때의 원본 내용 (바뀌었는지 비교용)
+  if (!has("events", "src_calendar_id")) {
+    db.exec("ALTER TABLE events ADD COLUMN src_calendar_id INTEGER");
+    db.exec("ALTER TABLE events ADD COLUMN src_uid TEXT");
+    db.exec("ALTER TABLE events ADD COLUMN src_inst TEXT");
+    db.exec("ALTER TABLE events ADD COLUMN src_snapshot TEXT");
+  }
+  db.exec("CREATE INDEX IF NOT EXISTS events_src ON events (src_calendar_id, src_uid, src_inst)");
   // 같은 이름 자리 구분: '' 아직 안 정함(같은 사람으로 셈), 이름과 같으면 같은 사람(겸직) 확인, '이름#자리id' 면 다른 사람(동명이인)
   if (!has("org_positions", "person")) db.exec("ALTER TABLE org_positions ADD COLUMN person TEXT NOT NULL DEFAULT ''");
 }

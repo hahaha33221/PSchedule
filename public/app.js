@@ -456,7 +456,7 @@
     const pick = (id) => { closePop(); onChange(id); };
     function draw() {
       const qv = input.value.trim();
-      const rows = unitRows(null).filter(({ u }) => !qv || unitLabel(u.id).includes(qv) || (u.short || "").includes(qv));
+      const rows = unitRows(null).filter(({ u }) => (!o.only || o.only.has(u.id)) && (!qv || unitLabel(u.id).includes(qv) || (u.short || "").includes(qv)));
       fill(list,
         !qv && noneLabel ? h("button", { type: "button", class: "pop__item muted" + (!selected ? " is-on" : ""), onclick: () => pick(null) }, [h("span", { class: "pop__check", html: !selected ? ICON.check : "" }), noneLabel]) : null,
         ...rows.map(({ u, depth }) => h("button", { type: "button", class: "pop__item" + (u.id === selected ? " is-on" : ""), style: qv ? null : `padding-left:${8 + depth * 16}px`, onclick: () => pick(u.id) }, [
@@ -1016,6 +1016,14 @@
 
     const body = [
       facts,
+      e.source ? h("div", { class: "srcbox" + (e.source.status !== "same" ? " is-warn" : "") }, [
+        h("span", {}, [icon("cal"), `구글 캘린더에서 가져옴 (${e.source.calendarName})`]),
+        e.source.status === "changed" ? h("span", { class: "srcbox__msg" }, [`원본이 바뀌었어요 (${e.source.changed.join(", ")})`,
+          h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "원본대로 맞추기", onclick: (ev) => busy(ev.currentTarget, async () => {
+            await act(() => api(`/events/${e.id}/source-sync`, { method: "POST" }), "원본대로 맞췄어요."); refresh();
+          }) })]) : null,
+        e.source.status === "deleted" ? h("span", { class: "srcbox__msg", text: "원본에서 지워졌어요" }) : null
+      ]) : null,
       important.length ? h("div", { class: "keybox" }, [h("div", { class: "keybox__head" }, [icon("star"), "중요 메모"]), h("ul", {}, important.map((m) => h("li", { text: m.body })))]) : null,
       attendees,
       section("doc", isMeeting ? "회의 개요" : "설명", null, inlineText(e.description, { multiline: true, rows: 2, placeholder: isMeeting ? "어떤 회의인지 적어 주세요" : "설명 추가", label: "개요", max: 3000, onSave: (v) => patch({ description: v }) })),
@@ -1049,8 +1057,52 @@
       ]),
       e.description ? section("doc", "설명", null, h("p", { class: "prose ext-desc", text: e.description })) : null,
       h("p", { class: "notice-box small" }, [`구글 캘린더 '${e.calendarName}'에서 가져온 일정이에요. 고치려면 구글 캘린더에서 고쳐 주세요. `, e.syncedAt ? `(${ago(e.syncedAt)} 읽음)` : ""]),
-      h("button", { class: "btn btn--ghost btn--block", type: "button", onclick: () => editEvent(null, { kind: "meeting", date: e.startDate, time: e.startTime || "", title: e.title, location: e.location }) }, [icon("plus"), "이 일정으로 PSchedule 회의 만들기"])
+      // 이미 우리 쪽에 넣었으면 열기, 아니면 넣기 (다른 팀에 또 넣는 건 허용)
+      ...(e.imported || []).map((x) => h("button", { class: "btn btn--ghost btn--block import-open", type: "button", onclick: () => openPeek("event", x.eventId) }, [icon("check"), `${x.unitId && unitOf(x.unitId) ? unitShort(x.unitId) : "팀 없음"}에 있음 → 열기`])),
+      h("button", { class: "btn btn--block " + ((e.imported || []).length ? "btn--ghost" : "btn--primary"), type: "button", onclick: () => importExternal([e]) }, [icon("plus"), (e.imported || []).length ? "다른 팀에도 넣기" : "우리 소속으로 넣기"])
     ]);
+  }
+
+  // 가져온 구글 캘린더 일정 → 우리 소속 일정으로 넣기 (하나 또는 여러 개)
+  function importExternal(items) {
+    const err = errorLine();
+    let kind = "meeting";
+    // 넣을 수 있는 팀: 관리자는 모두, 멤버는 내 소속과 그 아래 팀
+    const only = isAdmin() ? null : myUnit() ? unitSubtree(myUnit()) : new Set();
+    let unitId = myUnit(), attendeeIds = [state.user.id];
+    const kindSeg = h("div", { class: "seg seg--sm" }, [["meeting", "회의"], ["event", "일정"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String(k === kind), text: label, onclick: (ev) => { kind = k; kindSeg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-selected", String(b === ev.currentTarget))); } })));
+    const unitBtn = h("button", { class: "select-btn", type: "button" });
+    const drawUnit = () => unitBtn.replaceChildren(h("span", { class: "catpath" }, [icon("org"), h("span", { text: unitId && unitOf(unitId) ? unitLabel(unitId) : "팀 없음 (나·참석자·관리자만)" })]));
+    unitBtn.addEventListener("click", () => unitPicker(unitBtn, unitId, (id) => { unitId = id; drawUnit(); }, { only, noneLabel: "팀 없음 (나·참석자·관리자만)" }));
+    drawUnit();
+    const attBtn = h("button", { class: "select-btn", type: "button" });
+    const drawAtt = () => attBtn.replaceChildren(...(attendeeIds.length ? [h("span", { class: "avatars" }, attendeeIds.slice(0, 6).map((id) => avatar(id, "sm"))), h("span", { text: `${attendeeIds.length}명` })] : [h("span", { class: "muted", text: "참석자 고르기 (선택)" })]));
+    attBtn.addEventListener("click", () => personPicker(attBtn, attendeeIds, true, (ids) => { attendeeIds = ids; drawAtt(); }));
+    drawAtt();
+    const ok = h("button", { class: "btn btn--primary", type: "submit", text: items.length > 1 ? `${items.length}개 넣기` : "넣기" });
+    const form = h("form", { class: "stack", novalidate: true }, [
+      h("ul", { class: "import-list" }, items.slice(0, 8).map((x) => h("li", {}, [h("i", { class: `dot c${x.color}` }), h("span", { text: `${shortDate(x.startDate)} ${x.startTime || "종일"}` }), h("strong", { text: x.title })]))),
+      items.length > 8 ? h("p", { class: "muted small", text: `외 ${items.length - 8}개` }) : null,
+      h("p", { class: "muted small", text: "제목·날짜·시간·장소·설명을 복사해 PSchedule 일정으로 만들어요. 원본은 그대로 두고, 원본이 바뀌면 알려 드려요." }),
+      field("종류", kindSeg),
+      field("팀", unitBtn, isAdmin() ? "이 팀(과 위 조직) 사람들, 참석자, 관리자가 볼 수 있어요" : "내 소속과 그 아래 팀 중에서 고를 수 있어요"),
+      field("참석자", attBtn), err,
+      h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])
+    ]);
+    form.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      busy(ok, async () => {
+        try {
+          const r = await api("/external/import", { method: "POST", body: { ids: items.map((x) => x.id), kind, unitId, attendeeIds } });
+          closeDialog();
+          toast(r.created.length ? `${r.created.length}개를 넣었어요${r.skipped.length ? ` (${r.skipped.length}개는 이미 그 팀에 있어요)` : ""}.` : "이미 그 팀에 있어요.");
+          const first = r.created[0] || r.skipped[0];
+          if (items.length === 1 && first) openPeek("event", first.eventId);
+          refresh({ keepPeek: items.length === 1 });
+        } catch (ex) { showError(err, ex.message); }
+      });
+    });
+    openDialog(items.length > 1 ? `가져온 일정 ${items.length}개를 우리 소속으로` : "우리 소속으로 넣기", form, { wide: true });
   }
 
   function addLink(anchor, eventId) {
@@ -1893,6 +1945,7 @@
     /* ----- 검색: 서버에서 안쪽 내용까지 찾고, 날짜 순서대로 묶어서 ----- */
     let searchTimer = null, searchSeq = 0, searchData = null, searchKind = store.get("ps.searchKind", "all");
     let searchToggle = null, searchFiltersOpen = searchKind !== "all";
+    let pickMode = false; const picked = new Map(); // 가져온 일정 여러 개 골라 우리 소속으로 넣기
     function scheduleSearch() {
       clearTimeout(searchTimer);
       if (!state.search.trim()) { searchData = null; drawBody(); return; }
@@ -1958,8 +2011,13 @@
       return h("div", { class: "sr" }, [
         h("div", { class: "sr-head" }, [
           h("p", { class: "sr-summary" }, [h("strong", { text: `'${searchData.q}'` }), ` ${list.length}건 · 전체 기간`, pending ? h("small", { class: "muted", text: " · 찾는 중…" }) : null, searchData.total > searchData.limit ? h("small", { class: "muted", text: ` (앞 ${searchData.limit}건만, 검색어를 더 자세히 적어 주세요)` }) : null]),
-          searchKind !== "all" && !searchFiltersOpen ? h("span", { class: "sr-kindtag", text: { meeting: "회의·일정만", task: "할 일만", memo: "메모만" }[searchKind] }) : null
+          searchKind !== "all" && !searchFiltersOpen ? h("span", { class: "sr-kindtag", text: { meeting: "회의·일정만", task: "할 일만", memo: "메모만" }[searchKind] }) : null,
+          list.some((r) => r.ext) ? h("button", { class: "btn btn--ghost btn--sm sr-pick", type: "button", text: pickMode ? "고르기 그만" : "가져온 일정 골라 넣기", onclick: () => { pickMode = !pickMode; picked.clear(); drawBody(); } }) : null
         ]),
+        pickMode ? h("div", { class: "bulkbar sr-pickbar" }, [
+          h("span", { text: picked.size ? `가져온 일정 ${picked.size}개 골랐어요` : "넣을 구글 캘린더 일정을 눌러 골라 주세요" }),
+          h("button", { class: "btn btn--primary btn--sm", type: "button", disabled: !picked.size, text: "우리 소속으로 넣기", onclick: () => importExternal([...picked.values()]) })
+        ]) : null,
         searchFiltersOpen ? h("div", { class: "seg seg--sm sr-kinds" }, [["all", "전체"], ["meeting", "회의·일정"], ["task", "할 일"], ["memo", "메모"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String(searchKind === k), onclick: () => { searchKind = k; store.set("ps.searchKind", k); drawBody(); } }, [label, h("span", { class: "count", text: String(count(k)) })]))) : null,
         out.length ? h("div", { class: "card sr-card" }, out) : h("div", { class: "card sr-card" }, h("p", { class: "empty", text: "찾는 내용이 없어요. 다른 낱말로 찾아 보세요." }))
       ]);
@@ -1977,14 +2035,18 @@
     function resultRow(r) {
       const [label, color] = r.ext ? [r.calendarName || "구글 캘린더", r.color] : SR_KIND[r.type];
       const key = r.ext ? `ext:${r.id}` : r.type === "task" ? `task:${r.id}` : r.type === "memo" ? (r.meetingId ? `event:${r.meetingId}` : `day:${r.date}`) : `event:${r.id}`;
-      const open = () => { const [type, id] = key.split(":"); openPeek(type, type === "day" ? id : Number(id)); };
+      const picking = pickMode && r.ext;
+      const open = () => {
+        if (picking) { picked.has(r.id) ? picked.delete(r.id) : picked.set(r.id, { id: r.id, color: r.color, startDate: r.date, startTime: r.time, title: r.title }); drawBody(); return; }
+        const [type, id] = key.split(":"); openPeek(type, type === "day" ? id : Number(id));
+      };
       const inTitle = r.field === "제목" || (r.type === "memo" && r.field === "메모"); // 메모는 본문이 곧 제목
       const done = r.type === "task" && r.status === "done";
-      const mark = r.type === "task" ? h("span", { class: "sr-mark sr-mark--task" + (done ? " is-done" : ""), title: label, html: done ? ICON.check : "" })
+      const mark = picking ? h("span", { class: "sr-mark sr-mark--task sr-mark--pick" + (picked.has(r.id) ? " is-done" : ""), html: picked.has(r.id) ? ICON.check : "" }) : r.type === "task" ? h("span", { class: "sr-mark sr-mark--task" + (done ? " is-done" : ""), title: label, html: done ? ICON.check : "" })
         : r.type === "memo" ? h("span", { class: "sr-mark sr-mark--memo", title: label }, icon("note"))
         : h("span", { class: `sr-mark sr-mark--dot c${color}`, title: label });
       const time = r.type === "task" ? (done ? "완료" : `할 일 · ${STATUS[r.status]}`) : r.type === "memo" ? (r.important ? "중요 메모" : "메모") : koRange(r.time, r.endTime);
-      return h("li", {}, h("button", { class: "sr-row", type: "button", "data-peek": key, onclick: open, title: `${label} · ${r.title}` }, [
+      return h("li", {}, h("button", { class: "sr-row" + (picking && picked.has(r.id) ? " is-picked" : "") + (pickMode && !r.ext ? " is-dim" : ""), type: "button", "data-peek": key, onclick: open, title: `${label} · ${r.title}`, "aria-pressed": picking ? String(picked.has(r.id)) : null }, [
         mark,
         h("span", { class: "sr-time", text: time }),
         h("span", { class: "sr-main" }, [

@@ -90,6 +90,22 @@ jobs:
           curl -fs -H "Authorization: Bearer $A1" -XPATCH -d "{\"attendeeIds\":[$ME]}" $B/events/$EV >/dev/null
           curl -fs -H "Authorization: Bearer $A2" $B/events/$EV | grep -q '비밀안건'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $A2" -XPATCH -d "{\"unitId\":$LG}" $B/events/$EV)" = 403
+          # 구글 캘린더 일정 → 우리 소속으로 넣기: 넣기, 같은 팀 중복 막기, 볼 수 없는 팀 막기, 원본 바뀜 알림·맞추기
+          SQL() { node --disable-warning=ExperimentalWarning -e 'const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync(process.argv[1]);const r=db.prepare(process.argv[2]).run();console.log(Number(r.lastInsertRowid))' /tmp/ps/pschedule.db "$1"; }
+          CAL=$(SQL "INSERT INTO calendars (name, url) VALUES ('WYD', 'https://example.com/x.ics')")
+          XID=$(SQL "INSERT INTO calendar_events (calendar_id, uid, inst, title, start_date, end_date, start_time, end_time, location) VALUES ($CAL, 'u1@test', 'T1', 'WYD 전체 회의', '2026-02-10', '2026-02-10', '10:00', '11:00', '본관')")
+          curl -fs -H "Authorization: Bearer $A1" -XPOST -d "{\"ids\":[$XID]}" $B/external/import | grep -q '"created":\[{'
+          curl -fs -H "Authorization: Bearer $A1" -XPOST -d "{\"ids\":[$XID]}" $B/external/import | grep -q '"created":\[\],"skipped":\[{'
+          TOLG="{\"ids\":[$XID],\"unitId\":$LG}"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $A1" -XPOST -d "$TOLG" $B/external/import)" = 403
+          curl -fs -H "$H" -XPOST -d "$TOLG" $B/external/import | grep -q '"created":\[{'
+          curl -fs -H "Authorization: Bearer $A1" $B/external/$XID | grep -q "\"unitId\":$FB"
+          IM=$(curl -fs -H "Authorization: Bearer $A1" $B/external/$XID | node -pe 'JSON.parse(require("fs").readFileSync(0)).event.imported[0].eventId')
+          curl -fs -H "Authorization: Bearer $A1" $B/events/$IM | grep -q '"status":"same"'
+          SQL "UPDATE calendar_events SET start_time = '14:00', end_time = '15:00' WHERE id = $XID" >/dev/null
+          curl -fs -H "Authorization: Bearer $A1" $B/events/$IM | grep -q '"status":"changed"'
+          curl -fs -H "Authorization: Bearer $A1" -XPOST $B/events/$IM/source-sync | grep -q '"startTime":"14:00"'
+          curl -fs -H "Authorization: Bearer $A2" "$B/events?from=2026-02-01&to=2026-02-28" | grep -q 'WYD 전체 회의'
           curl -fs -H "$H" -XPOST -d '{"userIds":[1],"unitId":3}' $B/admin/users/unit | grep -q '"changed":1'
           curl -fs -H "$H" "$B/units/1?sub=1" | grep -Eq '"memberIds":\[([0-9]+,)*1[],]'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"name":"x","url":"http://127.0.0.1/a.ics"}' $B/admin/calendars)" = 400

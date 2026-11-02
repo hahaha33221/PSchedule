@@ -160,6 +160,12 @@ const q = {
   memoVis: db.prepare(`SELECT 1 FROM memos m WHERE m.id = :id AND ${MEMO_VIS("m")}`),
   extVis: db.prepare(`SELECT 1 FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id WHERE x.id = :id AND ${EXT_VIS("c")}`),
   setEventUnit: db.prepare("UPDATE events SET unit_id = ? WHERE id = ?"),
+  // 구글 캘린더 일정 → 우리 소속 일정 (원본 연결)
+  importedFrom: db.prepare(`SELECT e.id, e.unit_id FROM events e WHERE e.src_calendar_id = :cal AND e.src_uid = :uid_ AND e.src_inst = :inst AND ${EV_VIS("e")}`),
+  importedAny: db.prepare("SELECT id, unit_id FROM events WHERE src_calendar_id = ? AND src_uid = ? AND src_inst = ?"),
+  sourceNow: db.prepare("SELECT x.*, c.name AS calendar_name FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id WHERE x.calendar_id = ? AND x.uid = ? AND x.inst = ?"),
+  setEventSource: db.prepare("UPDATE events SET src_calendar_id = ?, src_uid = ?, src_inst = ?, src_snapshot = ? WHERE id = ?"),
+  setEventFromSource: db.prepare(`UPDATE events SET title = ?, start_date = ?, end_date = ?, start_time = ?, end_time = ?, location = ?, src_snapshot = ?, updated_at = datetime('now') WHERE id = ?`),
   setTaskUnit: db.prepare("UPDATE tasks SET unit_id = ? WHERE id = ?"),
   setMemoUnit: db.prepare("UPDATE memos SET unit_id = ? WHERE id = ?"),
   // 관리자 전체 대시보드: 팀별 요약 (항목의 팀 기준, 팀 없음은 null)
@@ -535,6 +541,28 @@ const externalOut = (x) => ({
   title: x.title, startDate: x.start_date, endDate: x.end_date, startTime: x.start_time, endTime: x.end_time, location: x.location,
   unitId: x.unit_id, tagIds: [], attendeeIds: []
 });
+// 가져온 일정에서 PSchedule 일정으로 옮길 값 (끝 시각 24:00 은 23:59 로)
+const SOURCE_FIELDS = ["title", "startDate", "endDate", "startTime", "endTime", "location"];
+const SOURCE_LABEL = { title: "제목", startDate: "날짜", endDate: "끝 날짜", startTime: "시간", endTime: "끝 시간", location: "장소" };
+function sourceValues(x) {
+  const end = x.end_time === "24:00" ? "23:59" : x.end_time;
+  return { title: x.title.slice(0, LIMITS.title), startDate: x.start_date, endDate: x.end_date, startTime: x.start_time || null, endTime: x.start_time ? end || null : null, location: (x.location || "").slice(0, LIMITS.location), calendarName: x.calendar_name };
+}
+// 넣은 일정의 원본 상태: 같음 / 바뀜(무엇이) / 원본에서 지워짐
+function sourceInfo(e) {
+  if (!e.src_calendar_id) return null;
+  let snap = {};
+  try { snap = JSON.parse(e.src_snapshot || "{}"); } catch {}
+  const now = q.sourceNow.get(e.src_calendar_id, e.src_uid, e.src_inst);
+  const calendarName = now?.calendar_name || snap.calendarName || "구글 캘린더";
+  if (!now) return { calendarName, status: "deleted" };
+  const cur = sourceValues(now);
+  const changed = SOURCE_FIELDS.filter((k) => (cur[k] || "") !== (snap[k] || ""));
+  return { calendarName, status: changed.length ? "changed" : "same", changed: changed.map((k) => SOURCE_LABEL[k]), current: cur, externalId: now.id };
+}
+// 이 팀에 넣을 수 있는지: 관리자는 아무 팀, 멤버는 볼 수 있는 팀(내 소속과 그 아래) 또는 팀 없음
+const canUseUnit = (user, v, unitId) => user.role === "admin" || !unitId || JSON.parse(v.units).includes(unitId);
+
 function calendarInput(b, cur) {
   const name = has(b, "name") || !cur ? text(b.name, LIMITS.calendarName, "캘린더 이름", true) : cur.name;
   let url = cur?.url, warn;
@@ -612,7 +640,7 @@ function eventsOut(rows, user) {
   return rows.map((e) => ({
     id: e.id, kind: e.kind, title: e.title, startDate: e.start_date, endDate: e.end_date, startTime: e.start_time, endTime: e.end_time,
     location: e.location, categoryId: e.category_id, unitId: e.unit_id, tagIds: tags.get(e.id), attendeeIds: att.get(e.id), author: e.author, createdBy: e.created_by,
-    openTasks: e.open_tasks, importantMemos: e.important_memos, comments: e.comments,
+    openTasks: e.open_tasks, importantMemos: e.important_memos, comments: e.comments, fromCalendar: !!e.src_calendar_id,
     canDelete: user.role === "admin" || e.created_by === user.id
   }));
 }
@@ -789,7 +817,7 @@ const commentOut = (c, user) => ({
 
 function eventDetail(e, user) {
   return {
-    event: { ...eventsOut([e], user)[0], description: e.description, agenda: parseAgenda(e.agenda), createdAt: e.created_at, updatedAt: e.updated_at },
+    event: { ...eventsOut([e], user)[0], description: e.description, agenda: parseAgenda(e.agenda), createdAt: e.created_at, updatedAt: e.updated_at, source: sourceInfo(e) },
     tasks: tasksOut(q.tasksMeeting.all(e.id), user),
     memos: q.memosMeeting.all(e.id).map((m) => memoOut(m, user)),
     links: q.links.all(e.id).map((l) => ({ id: l.id, title: l.title, url: l.url, createdAt: l.created_at })),
@@ -1010,7 +1038,7 @@ async function api(req, res, path) {
     });
     return send(res, 201, eventDetail(q.event.get(id), user));
   }
-  const em = path.match(/^\/api\/events\/(\d+)(?:\/(comments|links))?$/);
+  const em = path.match(/^\/api\/events\/(\d+)(?:\/(comments|links|source-sync))?$/);
   if (em) {
     const e = q.event.get(Number(em[1]));
     if (!e || !q.eventVis.get({ id: e.id, ...V })) throw notFound("일정");
@@ -1019,6 +1047,15 @@ async function api(req, res, path) {
       const body = text((await readJson(req)).body, LIMITS.comment, "댓글", true);
       q.addComment.run("event", e.id, user.id, body);
       return send(res, 201, { comments: q.comments.all("event", e.id).map((c) => commentOut(c, user)) });
+    }
+    // 원본(구글 캘린더)이 바뀌었을 때 원본대로 맞추기 (제목·날짜·시간·장소)
+    if (em[2] === "source-sync") {
+      if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
+      const info = sourceInfo(e);
+      if (!info || info.status === "deleted") throw bad("원본 일정을 찾을 수 없어요.");
+      const c = info.current;
+      q.setEventFromSource.run(c.title, c.startDate, c.endDate, c.startTime, c.endTime, c.location, JSON.stringify(c), e.id);
+      return send(res, 200, eventDetail(q.event.get(e.id), user));
     }
     if (em[2] === "links") {
       if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
@@ -1046,12 +1083,42 @@ async function api(req, res, path) {
     }
     return send(res, 405, { error: "Method not allowed" });
   }
+  // 가져온 일정 → 우리 소속 일정으로 넣기 (여러 개 한 번에). 같은 원본을 같은 팀에 두 번 넣지 않음
+  if (path === "/api/external/import" && method === "POST") {
+    const b = await readJson(req);
+    const list = ids(b.ids);
+    if (!list.length) throw bad("넣을 일정을 골라 주세요.");
+    const unit = has(b, "unitId") ? unitIdOrNull(b.unitId) : user.unit_id && q.unit.get(user.unit_id) ? user.unit_id : null;
+    if (!canUseUnit(user, V, unit)) return send(res, 403, { error: "볼 수 있는 팀(내 소속과 그 아래 팀)에만 넣을 수 있어요." });
+    const kind = b.kind === "event" ? "event" : "meeting";
+    const result = inTx(() => {
+      const created = [], skipped = [];
+      for (const xid of list) {
+        const x = q.external.get(xid);
+        if (!x || !q.extVis.get({ id: x.id, ...extV(V) })) throw notFound("가져온 일정");
+        const same = q.importedAny.all(x.calendar_id, x.uid, x.inst).find((e) => (e.unit_id ?? null) === unit);
+        if (same) { skipped.push({ externalId: x.id, eventId: same.id }); continue; }
+        const v = sourceValues(x);
+        const input = eventInput({ kind, title: v.title, startDate: v.startDate, endDate: v.endDate, startTime: v.startTime, endTime: v.endTime, location: v.location, description: (x.description || "").slice(0, LIMITS.description), categoryId: x.category_id ?? null });
+        const id = Number(q.addEvent.run(...input, user.id).lastInsertRowid);
+        q.setEventUnit.run(unit, id);
+        q.setEventSource.run(x.calendar_id, x.uid, x.inst, JSON.stringify(v), id);
+        saveEventRelations(id, { attendeeIds: has(b, "attendeeIds") ? b.attendeeIds : [user.id] });
+        created.push({ externalId: x.id, eventId: id });
+      }
+      return { created, skipped };
+    });
+    return send(res, 201, result);
+  }
+
   // 외부(구글) 캘린더에서 가져온 일정 하나 (읽기 전용)
   const xm = path.match(/^\/api\/external\/(\d+)$/);
   if (xm && method === "GET") {
     const x = q.external.get(Number(xm[1]));
     if (!x || !q.extVis.get({ id: x.id, ...extV(V) })) return send(res, 404, { error: "가져온 일정을 찾을 수 없어요. 캘린더에서 지워졌을 수 있어요." });
-    return send(res, 200, { event: { ...externalOut(x), description: x.description, syncedAt: x.last_ok_at } });
+    // 이미 우리 쪽에 넣은 것 (볼 수 있는 것만)
+    const imported = q.importedFrom.all({ cal: x.calendar_id, uid_: x.uid, inst: x.inst, ...V }).map((e) => ({ eventId: e.id, unitId: e.unit_id }));
+    return send(res, 200, { event: { ...externalOut(x), description: x.description, syncedAt: x.last_ok_at, imported } });
   }
 
   const lm = path.match(/^\/api\/links\/(\d+)$/);
