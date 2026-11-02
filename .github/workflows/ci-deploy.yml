@@ -57,6 +57,8 @@ jobs:
           curl -fs -H "$H" -XPOST -d '{}' $B/memos/1/task | grep -q '"meetingId":1'
           curl -fs -H "$H" "$B/tasks?date=2026-01-10&today=2026-01-10" | grep -q '준비'
           curl -fs -H "$H" -XPOST -d '{"title":"공지","body":"내용"}' $B/notices | grep -q '"id":1'
+          curl -fs -H "$H" "$B/search?q=%EB%8C%93%EA%B8%80" | grep -q '"field":"댓글"'
+          curl -fs -H "$H" "$B/search?q=%EB%A9%94%20%EB%AA%A8" | grep -q '"type":"memo"'
           curl -fs -H "$H" -XPOST -d '{"login":"member1","name":"멤버"}' $B/admin/users | grep -q '"password"'
           curl -fs -H "$H" "$B/events?from=2026-01-01&to=2026-01-31" | grep -q '"external":\[\]'
           curl -fs -H "$H" -XPOST -d '{"text":"조직위원회 > 운영총괄부 > 식음료팀"}' $B/admin/units/bulk | grep -q '"added":3'

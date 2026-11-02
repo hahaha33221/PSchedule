@@ -628,6 +628,98 @@ function memoInput(b, cur) {
   return [body, date, meeting, get("important", !!cur?.important) ? 1 : 0, categoryOf(b, cur, ev?.category_id)];
 }
 
+/* ----- 검색 (대시보드): 회의·일정·할 일·메모·가져온 일정의 안쪽 내용까지, 전체 기간 ----- */
+const SEARCH_LIMIT = 300;
+const searchQ = {
+  events: db.prepare("SELECT id, kind, title, start_date, end_date, start_time, end_time, location, description, agenda, category_id, created_by FROM events"),
+  attendees: db.prepare("SELECT a.event_id, a.user_id, u.name FROM event_attendees a JOIN users u ON u.id = a.user_id"),
+  eventTags: db.prepare("SELECT x.event_id, t.name FROM event_tags x JOIN tags t ON t.id = x.tag_id"),
+  links: db.prepare("SELECT event_id, title, url FROM event_links"),
+  comments: db.prepare("SELECT target_id AS event_id, body FROM comments WHERE target_type = 'event'"),
+  tasks: db.prepare(`SELECT t.id, t.title, t.note, t.due_date, t.status, t.assignee_id, t.meeting_id, t.category_id, e.title AS meeting_title, u.name AS assignee
+    FROM tasks t LEFT JOIN events e ON e.id = t.meeting_id LEFT JOIN users u ON u.id = t.assignee_id`),
+  taskTags: db.prepare("SELECT x.task_id, t.name FROM task_tags x JOIN tags t ON t.id = x.tag_id"),
+  memos: db.prepare(`SELECT m.id, m.body, m.memo_date, m.meeting_id, m.important, m.category_id, m.created_by, e.title AS meeting_title
+    FROM memos m LEFT JOIN events e ON e.id = m.meeting_id`),
+  external: db.prepare(`SELECT x.id, x.title, x.location, x.description, x.start_date, x.end_date, x.start_time, x.end_time, x.calendar_id, c.name AS calendar_name, c.color, c.category_id
+    FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id`)
+};
+// 한글은 그대로, 영문은 대소문자 무시, 띄어쓰기 무시
+const squash = (s) => String(s ?? "").normalize("NFC").toLowerCase().replace(/\s+/g, "");
+function searchPattern(q) {
+  const chars = [...squash(q)].map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  return chars.length ? new RegExp(chars.join("\\s*"), "iu") : null;
+}
+// 찾은 곳 앞뒤를 잘라 보여 줄 조각 + 강조할 위치
+function snippet(text, re) {
+  const t = String(text).replace(/\s+/g, " ").trim();
+  const m = re.exec(t);
+  if (!m) return null;
+  const from = Math.max(0, m.index - 24), to = Math.min(t.length, m.index + m[0].length + 40);
+  const pre = from > 0 ? "…" : "";
+  return { text: pre + t.slice(from, to) + (to < t.length ? "…" : ""), hl: [pre.length + m.index - from, pre.length + m.index - from + m[0].length] };
+}
+function runSearch(q, kind) {
+  const re = searchPattern(q);
+  if (!re) return { results: [], total: 0 };
+  const needle = squash(q);
+  const cats = new Map(q_categoriesPath());
+  const group = (rows, key, val) => { const m = new Map(); for (const r of rows) { if (!m.has(r[key])) m.set(r[key], []); m.get(r[key]).push(val(r)); } return m; };
+  // 필드 목록 [이름표, 글] 중 처음 맞는 곳
+  const hit = (fields) => {
+    for (const [label, value] of fields) {
+      if (!value || !squash(value).includes(needle)) continue;
+      const sn = snippet(value, re);
+      if (sn) return { field: label, ...sn };
+    }
+    return null;
+  };
+  const out = [];
+  if (kind === "all" || kind === "meeting") {
+    const att = group(searchQ.attendees.all(), "event_id", (r) => r);
+    const tags = group(searchQ.eventTags.all(), "event_id", (r) => r.name);
+    const links = group(searchQ.links.all(), "event_id", (r) => r.title);
+    const comments = group(searchQ.comments.all(), "event_id", (r) => r.body);
+    for (const e of searchQ.events.all()) {
+      const fields = [["제목", e.title], ["장소", e.location], ["개요", e.description],
+        ...parseAgenda(e.agenda).map((a) => ["안건", a]), ...(links.get(e.id) || []).map((x) => ["관련 문서", x]),
+        ...(comments.get(e.id) || []).map((x) => ["댓글", x]), ...(tags.get(e.id) || []).map((x) => ["태그", x]),
+        ["분류", cats.get(e.category_id)], ...(att.get(e.id) || []).map((x) => ["참석자", x.name])];
+      const h = hit(fields);
+      if (h) out.push({ type: e.kind, id: e.id, title: e.title, date: e.start_date, endDate: e.end_date, time: e.start_time, endTime: e.end_time,
+        categoryId: e.category_id, createdBy: e.created_by, attendeeIds: (att.get(e.id) || []).map((x) => x.user_id), ...h });
+    }
+    for (const x of searchQ.external.all()) {
+      const h = hit([["제목", x.title], ["장소", x.location], ["설명", x.description]]);
+      if (h) out.push({ type: "ext", id: x.id, title: x.title, date: x.start_date, endDate: x.end_date, time: x.start_time, endTime: x.end_time,
+        calendarId: x.calendar_id, calendarName: x.calendar_name, color: x.color, categoryId: x.category_id, ext: true, ...h });
+    }
+  }
+  if (kind === "all" || kind === "task") {
+    const tags = group(searchQ.taskTags.all(), "task_id", (r) => r.name);
+    for (const t of searchQ.tasks.all()) {
+      const h = hit([["제목", t.title], ["메모", t.note], ["관련 회의", t.meeting_title], ["담당자", t.assignee], ...(tags.get(t.id) || []).map((x) => ["태그", x]), ["분류", cats.get(t.category_id)]]);
+      if (h) out.push({ type: "task", id: t.id, title: t.title, date: t.due_date, status: t.status, assigneeId: t.assignee_id, meetingId: t.meeting_id, categoryId: t.category_id, ...h });
+    }
+  }
+  if (kind === "all" || kind === "memo") {
+    for (const m of searchQ.memos.all()) {
+      const h = hit([["메모", m.body], ["분류", cats.get(m.category_id)]]);
+      if (h) out.push({ type: "memo", id: m.id, title: m.body.split("\n")[0].slice(0, 80), date: m.memo_date, meetingId: m.meeting_id, meetingTitle: m.meeting_title,
+        important: !!m.important, categoryId: m.category_id, createdBy: m.created_by, ...h });
+    }
+  }
+  // 날짜 순서 (날짜 없는 할 일은 맨 끝), 같은 날은 종일 먼저 → 시간 순
+  out.sort((a, b) => (a.date ? 0 : 1) - (b.date ? 0 : 1) || String(a.date).localeCompare(String(b.date)) || (a.time ? 1 : 0) - (b.time ? 1 : 0) || String(a.time).localeCompare(String(b.time)) || a.id - b.id);
+  return { results: out.slice(0, SEARCH_LIMIT), total: out.length };
+}
+// 분류 id → '대분류 › 중분류' 이름
+function q_categoriesPath() {
+  const all = q.categories.all();
+  const byId = new Map(all.map((c) => [c.id, c]));
+  return all.map((c) => { const names = []; for (let x = c; x; x = byId.get(x.parent_id)) names.unshift(x.name); return [c.id, names.join(" › ")]; });
+}
+
 const commentOut = (c, user) => ({
   id: c.id, body: c.body, author: c.author || "(탈퇴한 멤버)", createdAt: c.created_at, mine: c.user_id === user.id,
   canDelete: user.role === "admin" || c.user_id === user.id
@@ -981,6 +1073,12 @@ async function api(req, res, path) {
       return send(res, 204);
     }
     return send(res, 405, { error: "Method not allowed" });
+  }
+
+  if (path === "/api/search" && method === "GET") {
+    const qv = String(param("q") || "").slice(0, 100);
+    const kind = ["meeting", "task", "memo"].includes(param("kind")) ? param("kind") : "all";
+    return send(res, 200, { q: qv, kind, limit: SEARCH_LIMIT, ...runSearch(qv, kind) });
   }
 
   /* ----- 공지 ----- */
