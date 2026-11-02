@@ -95,6 +95,7 @@ const q = {
   addPosition: db.prepare("INSERT INTO org_positions (unit_id, title, name, user_id, note, sort) VALUES (?, ?, ?, ?, ?, ?)"),
   setPosition: db.prepare("UPDATE org_positions SET unit_id = ?, title = ?, name = ?, user_id = ?, note = ? WHERE id = ?"),
   setPositionSort: db.prepare("UPDATE org_positions SET sort = ? WHERE id = ?"),
+  setPositionPerson: db.prepare("UPDATE org_positions SET person = ? WHERE id = ?"),
   delPosition: db.prepare("DELETE FROM org_positions WHERE id = ?"),
   maxPositionSort: db.prepare("SELECT coalesce(max(sort), 0) AS n FROM org_positions"),
   linkedInUnits: db.prepare("SELECT DISTINCT user_id AS id FROM org_positions WHERE user_id IS NOT NULL AND unit_id IN (SELECT value FROM json_each(?))"),
@@ -402,7 +403,7 @@ function unitUserIds(scopeIds) {
 }
 
 /* ----- 조직도 자리 (엑셀 표: 본부 | 부서('부' 또는 '부 / 팀') | 직함 | 이름 | 비고) ----- */
-const positionsOut = () => q.positions.all().map((p) => ({ id: p.id, unitId: p.unit_id, title: p.title, name: p.name, userId: p.user_id, note: p.note, sort: p.sort }));
+const positionsOut = () => q.positions.all().map((p) => ({ id: p.id, unitId: p.unit_id, title: p.title, name: p.name, userId: p.user_id, note: p.note, sort: p.sort, person: p.person }));
 const orgOut = () => ({ units: unitsOut(), positions: positionsOut(), baseDate: q.setting.get("org_base_date")?.value || "" });
 const cleanName = (v) => String(v ?? "").normalize("NFC").replace(/\s+/g, " ").trim();
 function rootUnit() {
@@ -1142,6 +1143,9 @@ async function api(req, res, path) {
           const v = positionInput(b, p);
           q.setPosition.run(...v, p.id);
           if (v[3] && v[3] !== p.user_id) q.setUserUnitIfEmpty.run(v[0], v[3]); // 처음 연결하면 대표 소속으로
+          // 같은 이름 자리: 'same' 같은 사람(겸직), 'other' 다른 사람(동명이인), '' 다시 안 정함
+          if (has(b, "person")) q.setPositionPerson.run(b.person === "same" ? v[2] : b.person === "other" ? `${v[2]}#${p.id}` : "", p.id);
+          else if (v[2] !== p.name && p.person) q.setPositionPerson.run("", p.id); // 이름이 바뀌면 구분 다시
           if (Number.isInteger(b.index)) { // 끌어서 순서 바꾸기
             const ids = q.positions.all().map((x) => x.id).filter((x) => x !== p.id);
             ids.splice(Math.max(0, Math.min(b.index, ids.length)), 0, p.id);

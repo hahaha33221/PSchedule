@@ -2286,10 +2286,12 @@
   }
   const setOrg = (r) => { if (r.units) state.units = r.units; if (r.positions) state.positions = r.positions; if (r.baseDate !== undefined) state.orgBaseDate = r.baseDate; if (r.team) state.team = r.team; };
   const posIn = (ids) => state.positions.filter((p) => ids.has(p.unitId));
+  // 같은 사람인지: 연결한 계정 → 동명이인 구분(person) → 이름 순서로
+  const personKey = (p) => (p.userId ? "u" + p.userId : "n" + (p.person || p.name));
+  const isNamesake = (p) => (p.person || "").includes("#");
   // 인원: 공석 빼고, 한 조직 안에서는 같은 사람(겸직)을 한 번만
   function headCount(unitId) {
-    const names = new Set(posIn(unitSubtree(unitId)).filter((p) => p.name).map((p) => (p.userId ? "u" + p.userId : "n" + p.name)));
-    return names.size;
+    return new Set(posIn(unitSubtree(unitId)).filter((p) => p.name).map(personKey)).size;
   }
   const unitDepthOf = (id) => unitPath(id).length; // 1 위원회, 2 본부, 3 부, 4 분과·팀, 5 팀
   // 엑셀식 위치: 본부 / 부 / 팀(맨 끝)
@@ -2400,12 +2402,14 @@
     if (!state.positions.some((p) => p.id === id)) await loadOrg();
     const p = state.positions.find((x) => x.id === id);
     if (!p) throw Object.assign(new Error("조직도에서 그 자리를 찾을 수 없어요."), { status: 404 });
-    const same = p.name ? state.positions.filter((x) => (p.userId ? x.userId === p.userId : !x.userId && x.name === p.name)) : [p];
+    const same = p.name ? state.positions.filter((x) => x.name && personKey(x) === personKey(p)) : [p];
+    const namesakes = p.name ? state.positions.filter((x) => x.name === p.name && personKey(x) !== personKey(p)) : [];
     const head = [h("div", { class: "peek__kind" }, [icon("org"), h("span", { text: "조직도" })]), h("h2", { class: "peek__h", text: p.name || `${p.title} (공석)` })];
     const body = [
       section("org", same.length > 1 ? `자리 ${same.length}개 (겸직)` : "자리", null, h("ul", { class: "pos-list" }, same.map((x) => h("li", {}, [
         h("strong", { text: x.title || "직함 없음" }), h("a", { href: `#/unit/${x.unitId}`, text: unitLabel(x.unitId) }), x.note ? h("small", { class: "muted", text: x.note }) : null
-      ]))))
+      ])))),
+      namesakes.length ? h("p", { class: "muted small", text: `이름이 같은 다른 사람: ${namesakes.map((x) => `${x.name} (${unitOf(x.unitId)?.name || "?"} ${x.title})`).join(", ")}` }) : null
     ];
     if (p.userId) {
       const r = await api(`/people/${p.userId}?today=${today()}`);
@@ -2474,7 +2478,7 @@
         out.push(positionRow(p, no.get(p.id)));
       }
       const users = state.team;
-      const unlinkedSuggest = all.filter((p) => p.name && !p.userId && users.some((u) => u.name === p.name)).length;
+      const unlinkedSuggest = all.filter((p) => p.name && !p.userId && users.filter((u) => u.name === p.name).length === 1 && !all.some((x) => x.name === p.name && personKey(x) !== personKey(p))).length;
       fill(tableBox,
         h("div", { class: "ot-toolbar" }, [
           h("div", { class: "seg seg--sm" }, [["all", `전체 ${all.length}`], ...hqs.map((u) => [u.id, `${u.name} ${all.filter((p) => hqOf(p) === u.id).length}`])].map(([k, label]) => h("button", { type: "button", "aria-selected": String(orgEdit.hq === k), text: label, onclick: () => { orgEdit.hq = k; drawTable(); } }))),
@@ -2508,11 +2512,14 @@
       inputs.hq = cellInput(pl.hq || "공통", { list: "ot-hq", label: "본부", onSave: savePath });
       inputs.dept = cellInput(pl.dept || (pl.hq ? "본부 직속" : "위원회 직속"), { list: "ot-dept", label: "부", onSave: savePath });
       inputs.team = cellInput(pl.team, { list: "ot-team", label: "팀·분과", placeholder: "—", onSave: savePath });
-      const sameUser = !p.userId && p.name && state.team.find((u) => u.name === p.name);
-      const acc = h("button", { class: "ot-acc" + (p.userId ? " is-linked" : sameUser ? " is-suggest" : ""), type: "button", title: p.userId ? "연결 바꾸기·끊기" : sameUser ? "이름이 같은 계정이 있어요" : "계정 연결" },
-        p.userId ? `● ${member(p.userId)?.name || "연결됨"}` : sameUser ? `연결 제안: ${sameUser.name}` : "+ 연결");
+      // 이름이 같은 계정이 하나뿐이고 동명이인 자리가 아니면 바로 연결 제안, 여럿이면 소속을 보고 고르게
+      const sameUsers = !p.userId && p.name ? state.team.filter((u) => u.name === p.name) : [];
+      const ambiguous = sameUsers.length > 1 || (sameUsers.length === 1 && state.positions.some((x) => x.name === p.name && personKey(x) !== personKey(p)));
+      const linked = p.userId && member(p.userId);
+      const acc = h("button", { class: "ot-acc" + (p.userId ? " is-linked" : sameUsers.length ? " is-suggest" : ""), type: "button", title: p.userId ? "연결 바꾸기·끊기" : ambiguous ? "이름이 같은 계정·사람이 여럿이에요. 소속을 보고 골라 주세요" : sameUsers.length ? "이름이 같은 계정이 있어요" : "계정 연결" },
+        linked ? `● ${linked.name}${personSub(linked) ? ` · ${personSub(linked)}` : ""}` : p.userId ? "● 연결됨" : ambiguous ? `${p.name} 고르기 (${sameUsers.length}명)` : sameUsers.length ? `연결 제안: ${sameUsers[0].name}${personSub(sameUsers[0]) ? ` · ${personSub(sameUsers[0])}` : ""}` : "+ 연결");
       acc.addEventListener("click", () => {
-        if (sameUser) return patch(p, { userId: sameUser.id });
+        if (sameUsers.length && !ambiguous) return patch(p, { userId: sameUsers[0].id });
         personPicker(acc, p.userId ? [p.userId] : [], false, (uid) => patch(p, { userId: uid }));
       });
       const grip = h("td", { class: "ot-no", draggable: "true", title: "끌어서 순서 바꾸기" }, [h("span", { class: "org-row__grip", html: ICON.grip, "aria-hidden": "true" }), String(n)]);
@@ -2533,7 +2540,7 @@
         h("td", {}, inputs.hq), h("td", {}, inputs.dept),
         h("td", {}, [pl.mid ? h("small", { class: "muted ot-mid", text: pl.mid + " ›" }) : null, inputs.team]),
         h("td", {}, cellInput(p.title, { label: "직함", onSave: (v) => patch(p, { title: v }) })),
-        h("td", {}, cellInput(p.name, { label: "이름", placeholder: "공석", cls: "ot-in--name", onSave: (v) => patch(p, { name: v }) })),
+        h("td", {}, [cellInput(p.name, { label: "이름", placeholder: "공석", cls: "ot-in--name", onSave: (v) => patch(p, { name: v }) }), isNamesake(p) ? h("small", { class: "ot-namesake", title: "이름이 같은 다른 사람이에요", text: `동명이인 · ${unitOf(p.unitId)?.name || ""}` }) : null]),
         h("td", {}, acc),
         h("td", {}, cellInput(p.note, { label: "비고", max: "200", cls: "ot-in--note", onSave: (v) => patch(p, { note: v }) })),
         h("td", {}, h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": `${p.name || p.title || "빈"} 줄 지우기`, html: ICON.close, onclick: async () => {
@@ -2554,7 +2561,10 @@
       if (row) { row.scrollIntoView({ block: "center" }); row.querySelector(".ot-in--name").focus(); }
     }
     async function linkSameNames() {
-      const list = orgRowsOrdered().filter((p) => p.name && !p.userId).map((p) => [p, state.team.find((u) => u.name === p.name)]).filter(([, u]) => u);
+      // 이름이 같은 계정이 하나이고, 그 이름이 동명이인으로 나뉘지 않은 자리만 (헷갈리는 건 표에서 직접 고르기)
+      const clear = (p) => state.team.filter((u) => u.name === p.name).length === 1 && !state.positions.some((x) => x.name === p.name && personKey(x) !== personKey(p));
+      const list = orgRowsOrdered().filter((p) => p.name && !p.userId && clear(p)).map((p) => [p, state.team.find((u) => u.name === p.name)]);
+      if (!list.length) return toast("바로 연결할 수 있는 자리가 없어요. 이름이 같은 사람이 여럿이면 표에서 골라 주세요.");
       if (!confirm(`이름이 같은 계정 ${list.length}개를 조직도 자리에 연결할까요?\n${list.map(([p, u]) => `· ${p.title} ${p.name} → ${u.name}`).join("\n")}`)) return;
       let r;
       for (const [p, u] of list) r = await act(() => api(`/admin/org/positions/${p.id}`, { method: "PATCH", body: { userId: u.id } }));
@@ -2566,17 +2576,27 @@
       const named = state.positions.filter((p) => p.name);
       const byName = new Map();
       for (const p of named) { if (!byName.has(p.name)) byName.set(p.name, []); byName.get(p.name).push(p); }
-      const dups = [...byName.entries()].filter(([, l]) => l.length > 1);
+      // 같은 이름 자리: 아직 안 정한 것만 확인할 것으로 (같은 사람/다른 사람 버튼)
+      const dups = [...byName.entries()].filter(([, l]) => l.length > 1 && l.some((p) => !p.person && !p.userId));
+      const decided = [...byName.entries()].filter(([, l]) => l.length > 1 && !dups.some(([n]) => n === l[0].name));
+      const decide = async (l, person) => { let r; for (const p of l) r = await act(() => api(`/admin/org/positions/${p.id}`, { method: "PATCH", body: { person } })); if (r) { saved(r); toast(person === "same" ? "같은 사람(겸직)으로 정했어요." : "다른 사람(동명이인)으로 나눴어요."); } };
       const vacant = state.positions.filter((p) => !p.name);
       const unlinked = new Set(named.filter((p) => !p.userId).map((p) => p.name)).size;
       const items = [
         ...dups.map(([name, l]) => h("li", {}, [h("strong", { text: `${name} ${l.length}자리` }), " — ", l.map((p) => `${p.title}(${unitOf(p.unitId)?.name || "?"})`).join(", "),
-          h("small", { class: "muted", text: l.every((p) => p.userId && p.userId === l[0].userId) ? " 같은 계정으로 연결됨 (겸직)" : " 같은 사람이면 겸직, 다른 사람이면 계정을 따로 연결해 주세요." })])),
+          h("div", { class: "ot-decide" }, [
+            h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "같은 사람 (겸직)", onclick: () => decide(l, "same") }),
+            h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "다른 사람 (동명이인)", onclick: () => decide(l, "other") })
+          ])])),
         vacant.length ? h("li", {}, [h("strong", { text: `공석 ${vacant.length}` }), " — ", vacant.map((p) => `${unitOf(p.unitId)?.name || "?"} ${p.title}`).join(", ")]) : null,
         unlinked ? h("li", {}, [h("strong", { text: `계정 미연결 ${unlinked}명` }), " — 조직도에는 보이지만 회의·할 일과는 아직 이어지지 않아요."]) : null,
         ...(() => { const empty = state.units.filter((u) => !posIn(unitSubtree(u.id)).length); return empty.length ? [h("li", {}, [h("strong", { text: `빈 조직 ${empty.length}` }), " — ", empty.map((u) => unitLabel(u.id)).join(", "), h("small", { class: "muted", text: " 필요 없으면 부서 구조에서 지워 주세요." })])] : []; })()
       ].filter(Boolean);
-      fill(checkBox, h("h2", { class: "card__title", text: `확인할 것 ${items.length}` }), items.length ? h("ul", { class: "ot-checklist" }, items) : h("p", { class: "muted small", text: "확인할 것이 없어요." }));
+      fill(checkBox, h("h2", { class: "card__title", text: `확인할 것 ${items.length}` }), items.length ? h("ul", { class: "ot-checklist" }, items) : h("p", { class: "muted small", text: "확인할 것이 없어요." }),
+        decided.length ? h("p", { class: "muted small ot-decided" }, ["정한 것: ", ...decided.map(([name, l], i) => {
+          const other = l.some(isNamesake);
+          return h("span", {}, [i ? ", " : "", `${name} ${other ? "동명이인" : "겸직"} `, h("button", { class: "link-btn link-btn--muted", type: "button", text: "되돌리기", onclick: () => decide(l, "") })]);
+        })]) : null);
     }
 
     // 부서 구조: 끌어서 위치·순서 바꾸기 (팀을 분과 아래로 넣으면 조직도에서 안쪽에 보여요)

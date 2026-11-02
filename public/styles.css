@@ -1002,3 +1002,6 @@ button.mgroup__head:hover { color: var(--ink); }
 .ot-badge--move { background: var(--c0-soft); color: var(--c0); }
 .ot-badge--remove { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
 @media (max-width: 1180px) { .ot-grid { grid-template-columns: minmax(0, 1fr); } }
+.ot-namesake { display: block; padding: 0 6px; font-size: 11px; line-height: 1.2; color: var(--admin-text); }
+.ot-decide { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+.ot-decided { margin: 2px 0 0; }

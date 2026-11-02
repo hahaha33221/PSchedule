@@ -212,6 +212,8 @@ function addUnitColumns(db) {
     db.exec("UPDATE users SET note = '직책: ' || title WHERE title <> ''");
   }
   if (!has("calendars", "unit_id")) db.exec("ALTER TABLE calendars ADD COLUMN unit_id INTEGER REFERENCES org_units(id) ON DELETE SET NULL");
+  // 같은 이름 자리 구분: '' 아직 안 정함(같은 사람으로 셈), 이름과 같으면 같은 사람(겸직) 확인, '이름#자리id' 면 다른 사람(동명이인)
+  if (!has("org_positions", "person")) db.exec("ALTER TABLE org_positions ADD COLUMN person TEXT NOT NULL DEFAULT ''");
 }
 
 // 분류가 생기기 전에 만든 DB 에 category_id 열 붙이기
