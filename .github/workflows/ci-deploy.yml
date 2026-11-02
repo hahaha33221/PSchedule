@@ -90,6 +90,11 @@ jobs:
           curl -fs -H "Authorization: Bearer $A1" -XPATCH -d "{\"attendeeIds\":[$ME]}" $B/events/$EV >/dev/null
           curl -fs -H "Authorization: Bearer $A2" $B/events/$EV | grep -q '비밀안건'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $A2" -XPATCH -d "{\"unitId\":$LG}" $B/events/$EV)" = 403
+          # 외부 참석자: 넣기·검색·다른 팀(못 보는 사람)은 못 넣음
+          curl -fs -H "Authorization: Bearer $A1" -XPOST -d '{"name":"외부손님","org":"서울교구","contact":"010-0000-0000"}' $B/events/$EV/guests | grep -q '외부손님'
+          curl -fs -H "Authorization: Bearer $A1" $B/events/$EV | grep -q '"guests":\[{'
+          curl -fs -H "Authorization: Bearer $A1" "$B/search?q=%EC%84%9C%EC%9A%B8%EA%B5%90%EA%B5%AC" | grep -q '"field":"외부 참석자"'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $A4" -XPOST -d '{"name":"x"}' $B/events/$EV/guests)" = 404
           # 구글 캘린더 일정 → 우리 소속으로 넣기: 넣기, 같은 팀 중복 막기, 볼 수 없는 팀 막기, 원본 바뀜 알림·맞추기
           SQL() { node --disable-warning=ExperimentalWarning -e 'const {DatabaseSync}=require("node:sqlite");const db=new DatabaseSync(process.argv[1]);const r=db.prepare(process.argv[2]).run();console.log(Number(r.lastInsertRowid))' /tmp/ps/pschedule.db "$1"; }
           CAL=$(SQL "INSERT INTO calendars (name, url) VALUES ('WYD', 'https://example.com/x.ics')")

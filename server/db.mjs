@@ -128,6 +128,17 @@ export function openDb(file) {
       PRIMARY KEY (event_id, tag_id)
     );
     -- 관련 문서 (링크)
+    -- 외부 참석자 (PSchedule 계정이 없는 사람): 이름, 소속·기관, 연락처(선택)
+    CREATE TABLE IF NOT EXISTS event_guests (
+      id         INTEGER PRIMARY KEY,
+      event_id   INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+      name       TEXT NOT NULL,
+      org        TEXT NOT NULL DEFAULT '',
+      contact    TEXT NOT NULL DEFAULT '',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS event_guests_event ON event_guests (event_id);
     CREATE TABLE IF NOT EXISTS event_links (
       id         INTEGER PRIMARY KEY,
       event_id   INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,

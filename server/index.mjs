@@ -32,7 +32,7 @@ const PASSWORD_MIN = 6, PASSWORD_MAX = 64;
 const MAX_BODY = 64 * 1024;
 const LIMITS = {
   title: 80, location: 80, description: 3000, agendaItem: 200, agendaItems: 30, notice: 5000,
-  comment: 1000, name: 20, userTitle: 20, memo: 3000, tag: 20, category: 30, calendarName: 30, unitName: 30, unitShort: 12, userNote: 200, posTitle: 30, posName: 30, posNote: 200, taskNote: 2000, linkTitle: 80, url: 1000
+  comment: 1000, name: 20, userTitle: 20, memo: 3000, tag: 20, category: 30, calendarName: 30, unitName: 30, unitShort: 12, userNote: 200, guestName: 30, guestOrg: 40, guestContact: 60, guests: 50, posTitle: 30, posName: 30, posNote: 200, taskNote: 2000, linkTitle: 80, url: 1000
 };
 const COLORS = 6; // 태그 색 개수 (public/styles.css 의 --c0 ~ --c5)
 const STATUSES = ["todo", "doing", "done"];
@@ -194,6 +194,11 @@ const q = {
   clearAttendees: db.prepare("DELETE FROM event_attendees WHERE event_id = ?"),
   addAttendee: db.prepare("INSERT OR IGNORE INTO event_attendees (event_id, user_id) SELECT ?, id FROM users WHERE id = ?"),
   links: db.prepare("SELECT id, title, url, created_at FROM event_links WHERE event_id = ? ORDER BY id"),
+  guests: db.prepare("SELECT id, name, org, contact FROM event_guests WHERE event_id = ? ORDER BY id"),
+  guest: db.prepare("SELECT * FROM event_guests WHERE id = ?"),
+  addGuest: db.prepare("INSERT INTO event_guests (event_id, name, org, contact, created_by) VALUES (?, ?, ?, ?, ?)"),
+  delGuest: db.prepare("DELETE FROM event_guests WHERE id = ?"),
+  guestCount: db.prepare("SELECT event_id AS id, name FROM event_guests WHERE event_id IN (SELECT value FROM json_each(?)) ORDER BY id"),
   link: db.prepare("SELECT * FROM event_links WHERE id = ?"),
   addLink: db.prepare("INSERT INTO event_links (event_id, title, url) VALUES (?, ?, ?)"),
   delLink: db.prepare("DELETE FROM event_links WHERE id = ?"),
@@ -637,9 +642,10 @@ function saveEventRelations(id, b) {
 function eventsOut(rows, user) {
   const tags = groupBy(q.eventTags, rows, "tag_id");
   const att = groupBy(q.eventAttendees, rows, "user_id");
+  const guests = groupBy(q.guestCount, rows, "name");
   return rows.map((e) => ({
     id: e.id, kind: e.kind, title: e.title, startDate: e.start_date, endDate: e.end_date, startTime: e.start_time, endTime: e.end_time,
-    location: e.location, categoryId: e.category_id, unitId: e.unit_id, tagIds: tags.get(e.id), attendeeIds: att.get(e.id), author: e.author, createdBy: e.created_by,
+    location: e.location, categoryId: e.category_id, unitId: e.unit_id, tagIds: tags.get(e.id), attendeeIds: att.get(e.id), guestNames: guests.get(e.id), author: e.author, createdBy: e.created_by,
     openTasks: e.open_tasks, importantMemos: e.important_memos, comments: e.comments, fromCalendar: !!e.src_calendar_id,
     canDelete: user.role === "admin" || e.created_by === user.id
   }));
@@ -717,6 +723,7 @@ const searchQ = {
   attendees: db.prepare("SELECT a.event_id, a.user_id, u.name FROM event_attendees a JOIN users u ON u.id = a.user_id"),
   eventTags: db.prepare("SELECT x.event_id, t.name FROM event_tags x JOIN tags t ON t.id = x.tag_id"),
   links: db.prepare("SELECT event_id, title, url FROM event_links"),
+  guests: db.prepare("SELECT event_id, name, org FROM event_guests"),
   comments: db.prepare("SELECT target_id AS event_id, body FROM comments WHERE target_type = 'event'"),
   tasks: db.prepare(`SELECT t.id, t.title, t.note, t.due_date, t.status, t.assignee_id, t.meeting_id, t.category_id, e.title AS meeting_title, u.name AS assignee
     FROM tasks t LEFT JOIN events e ON e.id = t.meeting_id LEFT JOIN users u ON u.id = t.assignee_id`),
@@ -766,12 +773,13 @@ function runSearch(q, kind, v) {
     const tags = group(searchQ.eventTags.all(), "event_id", (r) => r.name);
     const links = group(searchQ.links.all(), "event_id", (r) => r.title);
     const comments = group(searchQ.comments.all(), "event_id", (r) => r.body);
+    const guests = group(searchQ.guests.all(), "event_id", (r) => (r.org ? `${r.name} (${r.org})` : r.name));
     for (const e of searchQ.events.all()) {
       if (!seeEv.has(e.id)) continue;
       const fields = [["제목", e.title], ["장소", e.location], ["개요", e.description],
         ...parseAgenda(e.agenda).map((a) => ["안건", a]), ...(links.get(e.id) || []).map((x) => ["관련 문서", x]),
         ...(comments.get(e.id) || []).map((x) => ["댓글", x]), ...(tags.get(e.id) || []).map((x) => ["태그", x]),
-        ["분류", cats.get(e.category_id)], ...(att.get(e.id) || []).map((x) => ["참석자", x.name])];
+        ["분류", cats.get(e.category_id)], ...(att.get(e.id) || []).map((x) => ["참석자", x.name]), ...(guests.get(e.id) || []).map((x) => ["외부 참석자", x])];
       const h = hit(fields);
       if (h) out.push({ type: e.kind, id: e.id, title: e.title, date: e.start_date, endDate: e.end_date, time: e.start_time, endTime: e.end_time,
         categoryId: e.category_id, unitId: e.unit_id, createdBy: e.created_by, attendeeIds: (att.get(e.id) || []).map((x) => x.user_id), ...h });
@@ -821,6 +829,7 @@ function eventDetail(e, user) {
     tasks: tasksOut(q.tasksMeeting.all(e.id), user),
     memos: q.memosMeeting.all(e.id).map((m) => memoOut(m, user)),
     links: q.links.all(e.id).map((l) => ({ id: l.id, title: l.title, url: l.url, createdAt: l.created_at })),
+    guests: q.guests.all(e.id),
     comments: q.comments.all("event", e.id).map((c) => commentOut(c, user))
   };
 }
@@ -1038,7 +1047,7 @@ async function api(req, res, path) {
     });
     return send(res, 201, eventDetail(q.event.get(id), user));
   }
-  const em = path.match(/^\/api\/events\/(\d+)(?:\/(comments|links|source-sync))?$/);
+  const em = path.match(/^\/api\/events\/(\d+)(?:\/(comments|links|guests|source-sync))?$/);
   if (em) {
     const e = q.event.get(Number(em[1]));
     if (!e || !q.eventVis.get({ id: e.id, ...V })) throw notFound("일정");
@@ -1056,6 +1065,14 @@ async function api(req, res, path) {
       const c = info.current;
       q.setEventFromSource.run(c.title, c.startDate, c.endDate, c.startTime, c.endTime, c.location, JSON.stringify(c), e.id);
       return send(res, 200, eventDetail(q.event.get(e.id), user));
+    }
+    // 외부 참석자 넣기 (회의를 볼 수 있는 사람 누구나, 회의록을 함께 채우듯)
+    if (em[2] === "guests") {
+      if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
+      const b = await readJson(req);
+      if (q.guests.all(e.id).length >= LIMITS.guests) throw bad(`외부 참석자는 ${LIMITS.guests}명까지 넣을 수 있어요.`);
+      q.addGuest.run(e.id, text(b.name, LIMITS.guestName, "이름", true), text(b.org, LIMITS.guestOrg, "소속·기관"), text(b.contact, LIMITS.guestContact, "연락처"), user.id);
+      return send(res, 201, { guests: q.guests.all(e.id) });
     }
     if (em[2] === "links") {
       if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
@@ -1119,6 +1136,14 @@ async function api(req, res, path) {
     // 이미 우리 쪽에 넣은 것 (볼 수 있는 것만)
     const imported = q.importedFrom.all({ cal: x.calendar_id, uid_: x.uid, inst: x.inst, ...V }).map((e) => ({ eventId: e.id, unitId: e.unit_id }));
     return send(res, 200, { event: { ...externalOut(x), description: x.description, syncedAt: x.last_ok_at, imported } });
+  }
+
+  const gm = path.match(/^\/api\/guests\/(\d+)$/);
+  if (gm && method === "DELETE") {
+    const g = q.guest.get(Number(gm[1]));
+    if (g && !q.eventVis.get({ id: g.event_id, ...V })) throw notFound("외부 참석자");
+    q.delGuest.run(Number(gm[1]));
+    return send(res, 200, { guests: g ? q.guests.all(g.event_id) : [] });
   }
 
   const lm = path.match(/^\/api\/links\/(\d+)$/);

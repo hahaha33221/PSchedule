@@ -985,9 +985,44 @@
       btn.textContent = ids.length ? "편집" : "태그 추가";
     }
 
-    const attendees = isMeeting ? section("people", ["참석자 ", h("span", { class: "muted", text: String(e.attendeeIds.length) })],
+    // 외부 참석자 (계정 없는 사람): 이름 · 소속·기관 · 연락처(선택)
+    let guests = r.guests || [];
+    const guestBox = h("div", { class: "guests" });
+    const attCount = h("span", { class: "muted" });
+    const attendees = isMeeting ? section("people", ["참석자 ", attCount],
       h("button", { class: "link-btn", type: "button", text: "편집", onclick: (ev) => personPicker(ev.currentTarget, e.attendeeIds, true, (ids) => { e.attendeeIds = ids; drawAtt(); quiet(patch({ attendeeIds: ids })); }) }),
-      h("div", { class: "attendees" })) : null;
+      h("div", {}, [h("div", { class: "attendees" }), guestBox])) : null;
+    function drawGuests() {
+      attCount.textContent = guests.length ? `${e.attendeeIds.length} + 외부 ${guests.length}` : String(e.attendeeIds.length);
+      const contactLink = (c) => (/^[\d\s+()-]{7,}$/.test(c) ? h("a", { href: `tel:${c.replace(/[^\d+]/g, "")}`, text: c }) : /@/.test(c) ? h("a", { href: `mailto:${c}`, text: c }) : h("span", { text: c }));
+      const name = h("input", { placeholder: "이름", maxlength: "30", "aria-label": "외부 참석자 이름" });
+      const org = h("input", { placeholder: "소속·기관 (선택)", maxlength: "40", "aria-label": "소속·기관" });
+      const contact = h("input", { placeholder: "연락처 (선택)", maxlength: "60", "aria-label": "연락처" });
+      const add = h("button", { class: "btn btn--ghost btn--sm", type: "submit", text: "추가" });
+      const form = h("form", { class: "guest-add" }, [name, org, contact, add]);
+      form.addEventListener("submit", (ev) => {
+        ev.preventDefault();
+        if (!name.value.trim()) return name.focus();
+        busy(add, async () => {
+          const res = await act(() => api(`/events/${e.id}/guests`, { method: "POST", body: { name: name.value, org: org.value, contact: contact.value } }));
+          guests = res.guests; drawGuests(); refresh({ keepPeek: true });
+          guestBox.querySelector(".guest-add input").focus();
+        });
+      });
+      fill(guestBox,
+        h("div", { class: "guests__label" }, [icon("user"), "외부 참석자", h("small", { class: "muted", text: " 계정이 없는 분" })]),
+        guests.length ? h("ul", { class: "guest-list" }, guests.map((g) => h("li", {}, [
+          h("span", { class: "guest-list__name", text: g.name }),
+          g.org ? h("span", { class: "muted", text: g.org }) : null,
+          g.contact ? h("span", { class: "guest-list__contact" }, contactLink(g.contact)) : null,
+          h("button", { class: "icon-btn icon-btn--xs row-del", type: "button", "aria-label": `${g.name} 빼기`, html: ICON.close, onclick: async () => {
+            const res = await act(() => api(`/guests/${g.id}`, { method: "DELETE" }));
+            guests = res.guests; drawGuests(); refresh({ keepPeek: true });
+          } })
+        ]))) : null,
+        form
+      );
+    }
     function drawAtt() {
       const box = attendees.querySelector(".attendees");
       box.replaceChildren(...(e.attendeeIds.length ? e.attendeeIds.map((uid) => {
@@ -995,7 +1030,7 @@
         return h("div", { class: "attendee" }, [avatar(uid), h("span", { text: u ? u.name : "?" }), personSub(u) ? h("small", { text: personSub(u) }) : null]);
       }) : [h("p", { class: "muted small", text: "참석자를 추가해 주세요." })]));
     }
-    if (attendees) drawAtt();
+    if (attendees) { drawAtt(); drawGuests(); }
 
     // 안건: 한 줄씩 고치고, Enter 로 추가
     const agendaList = h("ol", { class: "agenda" });
@@ -1767,7 +1802,7 @@
             h("span", { text: timeRange(e) }),
             e.location ? h("span", {}, [icon("place"), e.location]) : null,
             e.ext ? h("span", {}, [icon("cal"), e.calendarName]) : null,
-            e.kind === "meeting" && e.attendeeIds.length ? h("span", {}, [icon("people"), `${e.attendeeIds.length}명`]) : null,
+            e.kind === "meeting" && (e.attendeeIds.length || (e.guestNames || []).length) ? h("span", { title: (e.guestNames || []).length ? `외부: ${e.guestNames.join(", ")}` : null }, [icon("people"), `${e.attendeeIds.length + (e.guestNames || []).length}명`]) : null,
             e.openTasks ? h("span", {}, [icon("check"), `${e.openTasks}`]) : null
           ])
         ]));
@@ -2162,7 +2197,7 @@
       h("span", { class: "mrow__title" }, [h("strong", { text: e.title }), e.ext ? h("span", { class: "ext-badge", text: e.calendarName }) : null, catChip(e.categoryId), ...tagChips(e.tagIds).slice(0, 2),
         e.openTasks ? h("span", { class: "mini-badge" }, [icon("check"), `할 일 ${e.openTasks}`]) : null,
         e.importantMemos ? h("span", { class: "mini-badge mini-badge--star" }, [icon("star"), String(e.importantMemos)]) : null]),
-      h("span", { class: "mrow__people" }, [h("span", { class: "avatars" }, (e.attendeeIds.length ? e.attendeeIds : e.createdBy ? [e.createdBy] : []).slice(0, 3).map((id) => avatar(id, "sm"))), e.attendeeIds.length > 3 ? h("small", { text: `+${e.attendeeIds.length - 3}` }) : null]),
+      h("span", { class: "mrow__people" }, [h("span", { class: "avatars" }, (e.attendeeIds.length ? e.attendeeIds : e.createdBy ? [e.createdBy] : []).slice(0, 3).map((id) => avatar(id, "sm"))), e.attendeeIds.length > 3 ? h("small", { text: `+${e.attendeeIds.length - 3}` }) : null, (e.guestNames || []).length ? h("small", { class: "muted", title: e.guestNames.join(", "), text: `외부 ${e.guestNames.length}` }) : null]),
       st ? h("span", { class: `status status--${st}`, text: MEETING_STATE[st] }) : h("span")
     ]));
   }
