@@ -28,6 +28,11 @@
   --c3: #e64980; --c3-soft: #fde6ef;
   --c4: #7950f2; --c4-soft: #efe9fe;
   --c5: #0c8599; --c5-soft: #ddf3f6;
+  /* 팀 색 (자동 배정용, 고르는 색 목록에는 없음) */
+  --c6: #c92a2a; --c6-soft: #ffe3e3;
+  --c7: #5c940d; --c7-soft: #eaf6d6;
+  --c8: #9c6644; --c8-soft: #f4e9e1;
+  --c9: #5c677d; --c9-soft: #e9ecf2;
 
   /* 관리자 전용 (주황) — 일반 화면의 파랑과 구별 */
   /* 조직도: 위원회 남색, 본부 파랑, 부 초록, 팀 노랑 */
@@ -70,6 +75,10 @@
     --c3: #f783ac; --c3-soft: #40212d;
     --c4: #a38bff; --c4-soft: #2e2551;
     --c5: #3bc9db; --c5-soft: #16343a;
+    --c6: #ff8787; --c6-soft: #3f1d1d;
+    --c7: #a9e34b; --c7-soft: #273516;
+    --c8: #d4a373; --c8-soft: #392b1f;
+    --c9: #a5b1c8; --c9-soft: #262b35;
     --oc-d1: #2c4f7c; --oc-d1-ink: #ffffff; --oc-d2: #26325a; --oc-d2-ink: #b8c8ff; --oc-d2-box: #191d28; --oc-d2-line: #2b3346;
     --oc-d3: #1c3324; --oc-d3-ink: #a9e5b6; --oc-d3-line: #2f5a3b; --oc-team: #3a2a12; --oc-team-ink: #ffcf8f; --oc-team-line: #5a4320; --oc-line: #4a5266;
     --admin: #f0a03a; --admin-ink: #1f1300; --admin-soft: #3a2810; --admin-text: #ffc37a; --admin-line: #7a5420; --admin-box: #241a0e; --admin-link: #ffb866;
@@ -205,6 +214,10 @@ input[type="checkbox"] { width: 17px; height: 17px; accent-color: var(--primary)
 .c3 { --c: var(--c3); --c-soft: var(--c3-soft); }
 .c4 { --c: var(--c4); --c-soft: var(--c4-soft); }
 .c5 { --c: var(--c5); --c-soft: var(--c5-soft); }
+.c6 { --c: var(--c6); --c-soft: var(--c6-soft); }
+.c7 { --c: var(--c7); --c-soft: var(--c7-soft); }
+.c8 { --c: var(--c8); --c-soft: var(--c8-soft); }
+.c9 { --c: var(--c9); --c-soft: var(--c9-soft); }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--c); flex: none; }
 .tag { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 6px; background: var(--c-soft); color: var(--c); font-size: 11.5px; font-weight: 600; white-space: nowrap; }
 .chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
@@ -1146,3 +1159,5 @@ button.mgroup__head:hover { color: var(--ink); }
 @media (max-width: 900px) {
   .side__collapse, .side__resize { display: none; }
 }
+.team-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 10px 0; font-size: 12px; }
+.team-legend__item { display: inline-flex; align-items: center; gap: 3px; color: var(--ink-2); }

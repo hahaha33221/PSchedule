@@ -218,7 +218,27 @@
   const tagChips = (list) => (list || []).map(tagChip).filter(Boolean);
   const kindDot = (kind) => h("i", { class: `dot c${KIND[kind].color}` });
   // 일정 하나: 우리 일정(회의·일정) 또는 외부 캘린더에서 가져온 일정(ext, 읽기 전용)
-  const evColor = (e) => (e.ext ? e.color : KIND[e.kind].color);
+  // 팀 색: 운영총괄부 › 운영총괄팀 = 주황(고정), 기념품팀 = 원래 색(회의 보라·일정 파랑),
+  // 다른 팀은 남은 색을 조직 순서대로 자동으로 (팀이 늘어도 기존 팀 색은 그대로). 아래 팀은 고정 팀 색을 따름
+  const TEAM_FIXED = [{ path: ["운영총괄부", "운영총괄팀"], color: 2 }, { path: ["운영총괄부", "기념품팀"], color: null }];
+  const TEAM_POOL = [5, 3, 6, 7, 8, 9]; // 주황(고정)·파랑·보라(원래 색)·초록(할 일) 빼고
+  let teamColors = { units: null, map: new Map() };
+  function teamColor(unitId) {
+    if (!unitId) return null;
+    if (teamColors.units !== state.units) {
+      const map = new Map();
+      const fixedOf = (u) => TEAM_FIXED.find((f) => u.name === f.path[1] && unitOf(u.parentId)?.name === f.path[0]);
+      let n = 0;
+      for (const u of [...state.units].sort((a, b) => a.id - b.id)) {
+        let fixed = null;
+        for (let x = u; x && !fixed; x = x.parentId ? unitOf(x.parentId) : null) fixed = fixedOf(x);
+        map.set(u.id, fixed ? fixed.color : TEAM_POOL[n++ % TEAM_POOL.length]);
+      }
+      teamColors = { units: state.units, map };
+    }
+    return teamColors.map.get(unitId) ?? null;
+  }
+  const evColor = (e) => (e.ext ? e.color : teamColor(e.unitId) ?? KIND[e.kind].color);
   // 구글 캘린더에서 우리 소속으로 넣은 일정: 'WYD 캘린더 백업' 표시 (원본은 달력·검색에서 숨김)
   const srcTag = (e, short) => (e.sourceName ? h("span", { class: "src-tag", title: `${e.sourceName} 캘린더 백업 (구글 캘린더에서 가져온 일정)`, text: short ? e.sourceName : `${e.sourceName} 캘린더 백업` }) : null);
   const evDot = (e) => h("i", { class: `dot c${evColor(e)}` });
@@ -777,7 +797,7 @@
     const other = h("button", { class: "side__sublink", type: "button", text: "다른 소속 보기" });
     other.addEventListener("click", () => unitPicker(other, viewing, (id) => { if (id) { toggleNav(false); go(`#/unit/${id}`); } }, { noneLabel: null }));
     fill(layout.unitNav,
-      mine ? h("a", { class: "side__link side__link--unit" + (viewing === mine ? " is-active" : ""), href: `#/unit/${mine}`, title: unitLabel(mine), onclick: () => toggleNav(false) }, [h("i", { class: "dot c0" }), h("span", { text: unitPath(mine).map((u) => u.short || u.name).slice(-2).join(" › ") })])
+      mine ? h("a", { class: "side__link side__link--unit" + (viewing === mine ? " is-active" : ""), href: `#/unit/${mine}`, title: unitLabel(mine), onclick: () => toggleNav(false) }, [h("i", { class: `dot c${teamColor(mine) ?? KIND.event.color}` }), h("span", { text: unitPath(mine).map((u) => u.short || u.name).slice(-2).join(" › ") })])
         : h("p", { class: "muted small side__catempty", text: "아직 소속이 없어요" }),
       viewing && viewing !== mine && unitOf(viewing) ? h("a", { class: "side__link side__link--unit is-active", href: `#/unit/${viewing}` }, [h("i", { class: "dot c4" }), h("span", { text: unitShort(viewing) })]) : null,
       state.units.length ? other : null
@@ -812,8 +832,19 @@
     };
     layout.cals.replaceChildren(
       ...Object.entries(KIND).map(([k, v]) => item(k, v.label, v.color)),
-      ...state.calendars.map((cal) => item("cal" + cal.id, cal.name, cal.color, "구글 캘린더에서 가져온 일정 (읽기 전용)"))
+      ...state.calendars.map((cal) => item("cal" + cal.id, cal.name, cal.color, "구글 캘린더에서 가져온 일정 (읽기 전용)")),
+      teamLegend()
     );
+  }
+  // 팀 색 안내: 고정 팀 + 내 팀 (달력의 회의·일정은 팀 색으로)
+  function teamLegend() {
+    const mine = myUnit();
+    const ids = state.units.filter((u) => TEAM_FIXED.some((f) => u.name === f.path[1] && unitOf(u.parentId)?.name === f.path[0])).map((u) => u.id);
+    if (mine && !ids.includes(mine)) ids.push(mine);
+    if (!ids.length) return null;
+    const dot = (c) => h("i", { class: `dot c${c}` });
+    return h("div", { class: "team-legend", title: "우리 일정(회의·일정)은 팀 색으로 보여요. 다른 팀은 자동으로 다른 색" }, [h("span", { class: "muted", text: "팀 색" }),
+      ...ids.map((id) => { const c = teamColor(id); return h("span", { class: "team-legend__item" }, c == null ? [dot(KIND.meeting.color), dot(KIND.event.color), unitShort(id)] : [dot(c), unitShort(id)]); })]);
   }
   // 자주 쓰는 태그: 칩을 옆으로 이어 붙이고(줄이 차면 다음 줄), 많이 쓴 태그가 앞에. 3줄을 넘으면 '+N' 으로 접기
   let tagsOpen = false;
@@ -1032,7 +1063,7 @@
 
     const title = inlineText(e.title, { cls: "inline--title", label: "제목", max: 80, required: true, onSave: (v) => patch({ title: v }) });
     const st = meetingState(e);
-    const head = [h("div", { class: "peek__kind" }, [kindDot(e.kind), h("span", { text: KIND[e.kind].label }), isMeeting ? h("span", { class: `status status--${st}`, text: MEETING_STATE[st] }) : null]), title];
+    const head = [h("div", { class: "peek__kind" }, [evDot(e), h("span", { text: KIND[e.kind].label }), isMeeting ? h("span", { class: `status status--${st}`, text: MEETING_STATE[st] }) : null]), title];
     const tools = [
       h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => editEvent(e) }, [icon("edit"), "수정"]),
       e.canDelete ? h("button", { class: "icon-btn", type: "button", "aria-label": "삭제", title: "삭제", html: ICON.trash, onclick: () => confirmDialog("삭제", `'${e.title}' 을(를) 지울까요? 연결된 할 일과 메모는 남고 연결만 풀려요.`, "삭제", async () => {
