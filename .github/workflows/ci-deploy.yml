@@ -73,6 +73,12 @@ jobs:
           mk() { curl -fs -H "$H" -XPOST -d "{\"login\":\"$1\",\"name\":\"$1\",\"unitId\":$2}" $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).password'; }
           tok() { curl -fs -XPOST -H 'content-type: application/json' -d "{\"login\":\"$1\",\"password\":\"$2\"}" $B/login | node -pe 'JSON.parse(require("fs").readFileSync(0)).token'; }
           A1=$(tok usera "$(mk usera $FB)"); A2=$(tok userb "$(mk userb $LG)"); A3=$(tok userc "$(mk userc $OP)"); A4=$(tok usern "$(mk usern null)")
+          # 안 읽은 공지 수: 쓴 사람은 0, 다른 사람은 1 → 열어 보면 0
+          curl -fs -H "$H" $B/notices/unread | grep -q '"unreadNotices":0'
+          curl -fs -H "Authorization: Bearer $A1" $B/me | grep -q '"unreadNotices":1'
+          curl -fs -H "Authorization: Bearer $A1" $B/notices | grep -q '"unread":true'
+          curl -fs -H "Authorization: Bearer $A1" $B/notices/1 | grep -q '"unreadNotices":0'
+          curl -fs -H "Authorization: Bearer $A1" $B/notices/unread | grep -q '"unreadNotices":0'
           ME=$(curl -fs -H "Authorization: Bearer $A2" $B/me | node -pe 'JSON.parse(require("fs").readFileSync(0)).user.id')
           EV=$(curl -fs -H "Authorization: Bearer $A1" -XPOST -d '{"title":"식음료 회의","startDate":"2026-02-03","agenda":["비밀안건"]}' $B/events | node -pe 'JSON.parse(require("fs").readFileSync(0)).event.id')
           TK=$(curl -fs -H "Authorization: Bearer $A1" -XPOST -d '{"title":"식음료 할 일","dueDate":"2026-02-03"}' $B/tasks | node -pe 'JSON.parse(require("fs").readFileSync(0)).task.id')

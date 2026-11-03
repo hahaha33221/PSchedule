@@ -1125,3 +1125,24 @@ button.mgroup__head:hover { color: var(--ink); }
 .mrow__title .src-tag, .sr-main .src-tag { height: 18px; font-size: 11px; }
 .chip .src-tag { margin-right: 3px; }
 .mlist-hint { margin: 2px 2px 6px; }
+
+/* 사이드바 접기·폭 조절 (넓은 화면만), 안 읽은 공지 숫자 */
+.nav-badge { margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--danger, #e5484d); color: #fff; font-size: 11.5px; font-weight: 800; line-height: 20px; text-align: center; }
+.new-badge { margin-left: 6px; padding: 1px 7px; border-radius: 999px; background: var(--danger, #e5484d); color: #fff; font-size: 11px; font-weight: 800; vertical-align: 2px; }
+.side__collapse svg { width: 16px; height: 16px; }
+.side__resize { position: fixed; top: 0; bottom: 0; left: calc(var(--side-w) - 3px); width: 6px; z-index: 30; cursor: col-resize; touch-action: none; }
+.side__resize:hover, .side__resize:focus-visible, .shell.is-resizing .side__resize { background: color-mix(in srgb, var(--primary) 35%, transparent); outline: none; }
+.shell.is-resizing { user-select: none; cursor: col-resize; }
+@media (min-width: 901px) {
+  .side-mini .side { padding: 16px 8px; align-items: stretch; }
+  .side-mini .side__top { flex-direction: column; gap: 8px; padding: 2px 0; }
+  .side-mini .side__collapse svg { transform: rotate(180deg); }
+  .side-mini .side__text, .side-mini .side__who, .side-mini .side__section, .side-mini .side__adminhead, .side-mini .mini { display: none; }
+  .side-mini .side__link, .side-mini .side__add { justify-content: center; padding-left: 0; padding-right: 0; position: relative; }
+  .side-mini .side__admin { padding: 4px; }
+  .side-mini .side__account { justify-content: center; }
+  .side-mini .nav-badge { position: absolute; top: 1px; right: 4px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; line-height: 16px; }
+}
+@media (max-width: 900px) {
+  .side__collapse, .side__resize { display: none; }
+}

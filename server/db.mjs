@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import crypto from "node:crypto";
+import { htmlToText } from "./ical.mjs";
 
 export function openDb(file) {
   mkdirSync(dirname(file), { recursive: true });
@@ -59,6 +60,13 @@ export function openDb(file) {
     );
     CREATE INDEX IF NOT EXISTS org_positions_unit ON org_positions (unit_id);
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    -- 공지를 읽은 사람 (사이드바 '공지' 옆 안 읽은 숫자)
+    CREATE TABLE IF NOT EXISTS notice_reads (
+      user_id   INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      notice_id INTEGER NOT NULL REFERENCES notices(id) ON DELETE CASCADE,
+      read_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (user_id, notice_id)
+    );
     -- 추가로 볼 수 있는 조직 (관리자가 멤버마다 지정): 소속 말고도 이 조직의 항목을 봄. sub = 1 이면 그 아래 팀까지
     CREATE TABLE IF NOT EXISTS user_view_units (
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -216,8 +224,23 @@ export function openDb(file) {
   `);
   addCategoryColumns(db);
   addUnitColumns(db);
+  cleanCalendarHtml(db);
   seedTags(db);
   return db;
+}
+
+// 구글 캘린더에서 HTML 그대로 들어온 글 정리 (가져온 일정, 그리고 거기서 넣은 우리 일정 + 비교용 원본 내용)
+function cleanCalendarHtml(db) {
+  const dirty = "(title LIKE '%<%>%' OR description LIKE '%<%>%' OR title LIKE '%&%;%' OR description LIKE '%&%;%')";
+  const fix = (v) => (typeof v === "string" ? htmlToText(v) : v);
+  for (const r of db.prepare(`SELECT id, title, description, location FROM calendar_events WHERE ${dirty}`).all()) {
+    db.prepare("UPDATE calendar_events SET title = ?, description = ?, location = ? WHERE id = ?").run(fix(r.title), fix(r.description), fix(r.location), r.id);
+  }
+  for (const r of db.prepare(`SELECT id, title, description, src_snapshot FROM events WHERE src_calendar_id IS NOT NULL AND (${dirty} OR src_snapshot LIKE '%<%>%')`).all()) {
+    let snap = r.src_snapshot;
+    try { const o = JSON.parse(snap || "{}"); for (const k of ["title", "location"]) if (o[k]) o[k] = fix(o[k]); snap = JSON.stringify(o); } catch {}
+    db.prepare("UPDATE events SET title = ?, description = ?, src_snapshot = ? WHERE id = ?").run(fix(r.title), fix(r.description), snap, r.id);
+  }
 }
 
 // 조직도가 생기기 전에 만든 DB: users 에 소속(unit_id)·메모(note), calendars 에 소속 붙이기

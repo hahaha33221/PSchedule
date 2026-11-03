@@ -126,4 +126,9 @@ assert.equal(by("취소된 일정").length, 0);
 assert.equal(new Set(list.map((x) => x.uid + "|" + x.key)).size, list.length);
 assert.throws(() => expandCalendar("<html>로그인</html>", { from: "2026-01-01", to: "2026-01-31" }));
 
+// 구글 캘린더가 보내는 HTML 설명은 글자만, 방 번호 같은 '<A311>' 은 그대로
+const html = expandCalendar(`BEGIN:VCALENDAR\r\nBEGIN:VEVENT\r\nDTSTART;VALUE=DATE:20261201\r\nUID:h@t\r\nSUMMARY:<A311>주교단 회의\r\nDESCRIPTION:<p>이재호\\, 이유담</p><br>안건 &amp\\; 일정<ul><li>하나</li></ul>\r\nEND:VEVENT\r\nEND:VCALENDAR`, { from: "2026-12-01", to: "2026-12-31" })[0];
+assert.equal(html.title, "<A311>주교단 회의");
+assert.equal(html.description, "이재호, 이유담\n\n안건 & 일정\n• 하나");
+
 console.log(`iCal 검사 통과 (${list.length}개)`);

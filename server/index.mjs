@@ -234,10 +234,13 @@ const q = {
   // 공지
   notices: db.prepare(`
     SELECT n.id, n.title, substr(n.body, 1, 200) AS preview, n.pinned, n.created_at, n.updated_at, u.name AS author,
-      (SELECT count(*) FROM comments c WHERE c.target_type = 'notice' AND c.target_id = n.id) AS comments
+      (SELECT count(*) FROM comments c WHERE c.target_type = 'notice' AND c.target_id = n.id) AS comments,
+      NOT EXISTS (SELECT 1 FROM notice_reads r WHERE r.notice_id = n.id AND r.user_id = ?) AS unread
     FROM notices n LEFT JOIN users u ON u.id = n.created_by
     ORDER BY n.pinned DESC, n.created_at DESC, n.id DESC`),
   notice: db.prepare("SELECT n.*, u.name AS author FROM notices n LEFT JOIN users u ON u.id = n.created_by WHERE n.id = ?"),
+  unreadNotices: db.prepare("SELECT count(*) AS n FROM notices n WHERE NOT EXISTS (SELECT 1 FROM notice_reads r WHERE r.notice_id = n.id AND r.user_id = ?)"),
+  readNotice: db.prepare("INSERT OR IGNORE INTO notice_reads (user_id, notice_id) VALUES (?, ?)"),
   addNotice: db.prepare("INSERT INTO notices (title, body, pinned, created_by) VALUES (?, ?, ?, ?)"),
   setNotice: db.prepare("UPDATE notices SET title = ?, body = ?, pinned = ?, updated_at = datetime('now') WHERE id = ?"),
   delNotice: db.prepare("DELETE FROM notices WHERE id = ?"),
@@ -895,7 +898,7 @@ async function api(req, res, path) {
 
   // 화면을 그리는 데 늘 필요한 것: 나, 팀원, 태그, 분류
   if (path === "/api/me" && method === "GET") {
-    return send(res, 200, { user: publicUser(user), team: teamOut(), units: unitsOut(), tags: q.tags.all(), categories: categoriesOut(), calendars: calendarsPublic() });
+    return send(res, 200, { user: publicUser(user), team: teamOut(), units: unitsOut(), tags: q.tags.all(), categories: categoriesOut(), calendars: calendarsPublic(), unreadNotices: q.unreadNotices.get(user.id).n });
   }
 
   // 비밀번호 변경 (본인)
@@ -1286,16 +1289,20 @@ async function api(req, res, path) {
   /* ----- 공지 ----- */
   if (path === "/api/notices" && method === "GET") {
     return send(res, 200, {
-      notices: q.notices.all().map((n) => ({
+      notices: q.notices.all(user.id).map((n) => ({
         id: n.id, title: n.title, preview: n.preview, pinned: !!n.pinned, author: n.author,
-        comments: n.comments, createdAt: n.created_at, updatedAt: n.updated_at
-      }))
+        comments: n.comments, createdAt: n.created_at, updatedAt: n.updated_at, unread: !!n.unread
+      })),
+      unreadNotices: q.unreadNotices.get(user.id).n
     });
   }
+  // 사이드바 '공지' 옆 숫자 (안 읽은 공지 수)
+  if (path === "/api/notices/unread" && method === "GET") return send(res, 200, { unreadNotices: q.unreadNotices.get(user.id).n });
   const noticeInput = (b) => [text(b.title, LIMITS.title, "제목", true), text(b.body, LIMITS.notice, "내용", true), b.pinned ? 1 : 0];
   if (path === "/api/notices" && method === "POST") {
     if (!isAdmin) return send(res, 403, { error: "공지는 관리자만 쓸 수 있어요." });
     const r = q.addNotice.run(...noticeInput(await readJson(req)), user.id);
+    q.readNotice.run(user.id, Number(r.lastInsertRowid)); // 쓴 사람은 읽은 것으로
     return send(res, 201, { id: Number(r.lastInsertRowid) });
   }
   const nm = path.match(/^\/api\/notices\/(\d+)(\/comments)?$/);
@@ -1309,9 +1316,11 @@ async function api(req, res, path) {
       return send(res, 201, { comments: q.comments.all("notice", n.id).map((c) => commentOut(c, user)) });
     }
     if (method === "GET") {
+      q.readNotice.run(user.id, n.id); // 열어 보면 읽은 것으로 → 사이드바 숫자가 줄어듦
       return send(res, 200, {
         notice: { id: n.id, title: n.title, body: n.body, pinned: !!n.pinned, author: n.author, createdAt: n.created_at, updatedAt: n.updated_at, canEdit: isAdmin },
-        comments: q.comments.all("notice", n.id).map((c) => commentOut(c, user))
+        comments: q.comments.all("notice", n.id).map((c) => commentOut(c, user)),
+        unreadNotices: q.unreadNotices.get(user.id).n
       });
     }
     if (!isAdmin) return send(res, 403, { error: "공지는 관리자만 고칠 수 있어요." });

@@ -51,7 +51,10 @@
     search: "",
     show: JSON.parse(store.get("ps.show", "null") || "null") || { meeting: true, event: true, task: true },
     peek: null,       // 측면 패널 { type: 'event' | 'task' | 'day', id }
-    navOpen: false
+    navOpen: false,
+    unreadNotices: 0,  // 안 읽은 공지 수 (사이드바 '공지' 옆)
+    sideW: Math.max(200, Math.min(380, Number(store.get("ps.sideW", "248")) || 248)), // 사이드바 폭 (끌어서 조절)
+    sideMini: store.get("ps.sideMini", "0") === "1" // 사이드바 접기 (아이콘만)
   };
   let page = null;    // 지금 화면 { name, reload() }
 
@@ -644,6 +647,48 @@
   }
   function go(hash) { if (location.hash !== hash) location.hash = hash; else render(); }
 
+  // 안 읽은 공지 수: 바뀌면 메뉴만 다시 그림. 2분마다·창으로 돌아올 때 새로 확인
+  function setUnreadNotices(n) {
+    if (typeof n !== "number" || n === state.unreadNotices) return;
+    state.unreadNotices = n;
+    if (layout.nav) drawNav(navActive);
+  }
+  const checkNotices = () => { if (state.token && state.user && document.visibilityState === "visible") quiet(api("/notices/unread").then((r) => setUnreadNotices(r.unreadNotices))); };
+  setInterval(checkNotices, 120000);
+  document.addEventListener("visibilitychange", checkNotices);
+
+  // 사이드바: 접기(아이콘만) / 펼치기, 오른쪽 가장자리를 끌어서 폭 조절 (이 브라우저에 기억)
+  function applySide() {
+    const shell = app.querySelector(".shell");
+    if (!shell) return;
+    shell.style.setProperty("--side-w", state.sideMini ? "68px" : state.sideW + "px");
+    shell.classList.toggle("side-mini", state.sideMini);
+    const b = shell.querySelector(".side__collapse");
+    if (b) { b.setAttribute("aria-label", state.sideMini ? "메뉴 펼치기" : "메뉴 접기"); b.title = state.sideMini ? "메뉴 펼치기" : "메뉴 접기"; b.setAttribute("aria-expanded", String(!state.sideMini)); }
+  }
+  function toggleSideMini() {
+    state.sideMini = !state.sideMini;
+    store.set("ps.sideMini", state.sideMini ? "1" : "0");
+    applySide();
+    if (!state.sideMini) requestAnimationFrame(drawTagsNav);
+  }
+  function sideResizer() {
+    const el = h("div", { class: "side__resize", role: "separator", "aria-orientation": "vertical", "aria-label": "메뉴 폭 조절 (좌우 화살표)", tabindex: "0", title: "끌어서 폭 조절 · 두 번 누르면 처음 폭" });
+    const set = (w) => { state.sideW = Math.max(200, Math.min(380, Math.round(w))); store.set("ps.sideW", String(state.sideW)); if (state.sideMini) { state.sideMini = false; store.set("ps.sideMini", "0"); } applySide(); };
+    el.addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      el.setPointerCapture(e.pointerId);
+      app.querySelector(".shell").classList.add("is-resizing");
+      const move = (ev) => set(ev.clientX);
+      const up = () => { el.removeEventListener("pointermove", move); el.removeEventListener("pointerup", up); app.querySelector(".shell")?.classList.remove("is-resizing"); drawTagsNav(); };
+      el.addEventListener("pointermove", move);
+      el.addEventListener("pointerup", up);
+    });
+    el.addEventListener("dblclick", () => { set(248); drawTagsNav(); });
+    el.addEventListener("keydown", (e) => { if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); set(state.sideW + (e.key === "ArrowLeft" ? -16 : 16)); } });
+    return el;
+  }
+
   function buildLayout() {
     layout.main = h("main", { class: "main", id: "main" });
     layout.peek = h("aside", { class: "peek", "aria-label": "상세 패널", hidden: true });
@@ -662,10 +707,11 @@
     ])));
     layout.side = h("aside", { class: "side" }, [
       h("div", { class: "side__top" }, [
-        h("a", { class: "brand", href: "#/today" }, [h("img", { src: "favicon.svg", alt: "" }), h("span", { text: TITLE })]),
+        h("a", { class: "brand", href: "#/today", title: TITLE }, [h("img", { src: "favicon.svg", alt: "" }), h("span", { class: "side__text", text: TITLE })]),
+        h("button", { class: "icon-btn side__collapse", type: "button", html: ICON.left, onclick: toggleSideMini }),
         h("button", { class: "icon-btn side__close", type: "button", "aria-label": "메뉴 닫기", html: ICON.close, onclick: () => toggleNav(false) })
       ]),
-      h("button", { class: "btn btn--dark btn--block", type: "button", onclick: () => quickAdd() }, [icon("plus"), "일정 / 할 일 추가"]),
+      h("button", { class: "btn btn--dark btn--block side__add", type: "button", title: "일정 / 할 일 추가", onclick: () => quickAdd() }, [icon("plus"), h("span", { class: "side__text", text: "일정 / 할 일 추가" })]),
       layout.nav,
       h("div", { class: "side__section" }, [h("div", { class: "side__label", text: "내 소속" }), layout.unitNav]),
       layout.admin,
@@ -682,7 +728,8 @@
         h("div", { class: "side__label" }, ["자주 쓰는 태그", h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "태그 관리", title: "태그 관리", html: ICON.gear, onclick: () => manageTags() })]),
         layout.tags
       ]),
-      account
+      account,
+      sideResizer()
     ]);
     layout.topbar = h("header", { class: "mobilebar" }, [
       h("button", { class: "icon-btn", type: "button", "aria-label": "메뉴", html: ICON.menu, onclick: () => toggleNav(true) }),
@@ -691,6 +738,7 @@
     ]);
     layout.scrim = h("div", { class: "scrim", onclick: () => toggleNav(false) });
     app.replaceChildren(h("div", { class: "shell" }, [layout.side, layout.scrim, h("div", { class: "content" }, [layout.topbar, layout.main]), layout.peek]));
+    applySide();
     drawCalsNav();
     drawTagsNav();
     drawCatsNav();
@@ -708,13 +756,13 @@
       { id: "tasks", label: "할 일", icon: "check" },
       { id: "meetings", label: "회의", icon: "people" },
       { id: "memos", label: "메모", icon: "note" },
-      { id: "notices", label: "공지", icon: "bell" },
-      { id: "orgchart", label: "조직도", icon: "org" }
+      { id: "orgchart", label: "조직도", icon: "org" },
+      { id: "notices", label: "공지", icon: "bell", badge: state.unreadNotices } // 맨 아래, 안 읽은 공지 수
     ];
     layout.nav.replaceChildren(...items.map((it) => h("a", {
       class: "side__link" + (it.id === active ? " is-active" : ""), href: "#/" + it.id, "aria-current": it.id === active ? "page" : null,
-      onclick: () => toggleNav(false)
-    }, [icon(it.icon), h("span", { text: it.label })])));
+      title: it.badge ? `${it.label} · 새 글 ${it.badge}개` : it.label, onclick: () => toggleNav(false)
+    }, [icon(it.icon), h("span", { class: "side__text", text: it.label }), it.badge ? h("span", { class: "nav-badge", "aria-label": `안 읽은 공지 ${it.badge}개`, text: it.badge > 99 ? "99+" : String(it.badge) }) : null])));
     navActive = active;
     drawUnitNav(active);
     drawAdminNav(active);
@@ -739,8 +787,8 @@
   function drawAdminNav(active) {
     if (!layout.admin) return;
     const link = (id, label, ic, onclick) => (onclick
-      ? h("button", { class: "side__link side__link--admin", type: "button", onclick: () => { toggleNav(false); onclick(); } }, [icon(ic), h("span", { text: label })])
-      : h("a", { class: "side__link side__link--admin" + (id === active ? " is-active" : ""), href: "#/" + id, "aria-current": id === active ? "page" : null, onclick: () => toggleNav(false) }, [icon(ic), h("span", { text: label })]));
+      ? h("button", { class: "side__link side__link--admin", type: "button", title: label, onclick: () => { toggleNav(false); onclick(); } }, [icon(ic), h("span", { class: "side__text", text: label })])
+      : h("a", { class: "side__link side__link--admin" + (id === active ? " is-active" : ""), href: "#/" + id, title: label, "aria-current": id === active ? "page" : null, onclick: () => toggleNav(false) }, [icon(ic), h("span", { class: "side__text", text: label })]));
     layout.admin.replaceChildren(
       h("div", { class: "side__adminhead" }, [icon("lock"), "관리자 전용"]),
       link("org", "조직도 편집", "org"),
@@ -2353,10 +2401,11 @@
     const isAdmin = state.user.role === "admin";
     async function load() {
       const r = await api("/notices");
+      setUnreadNotices(r.unreadNotices);
       setMain("notices", h("div", { class: "narrow stack" }, [
         h("div", { class: "page-head" }, [h("h1", { text: "공지" }), isAdmin ? h("button", { class: "btn btn--admin", type: "button", title: "관리자 전용", onclick: () => editNotice(null) }, [icon("lock"), "공지 쓰기"]) : null]),
         r.notices.length ? h("ul", { class: "notice-list" }, r.notices.map((n) => h("li", {}, h("a", { class: "card notice-item" + (n.pinned ? " is-pinned" : ""), href: `#/notices/${n.id}` }, [
-          h("div", { class: "notice-item__title" }, [n.pinned ? icon("pin", "pin") : null, h("strong", { text: n.title })]),
+          h("div", { class: "notice-item__title" }, [n.pinned ? icon("pin", "pin") : null, h("strong", { text: n.title }), n.unread ? h("span", { class: "new-badge", text: "새 글" }) : null]),
           h("p", { class: "notice-item__preview", text: n.preview }),
           h("div", { class: "notice-item__meta muted" }, [h("span", { text: n.author || "관리자" }), h("span", { text: ago(n.createdAt) }), n.comments ? h("span", { class: "with-icon" }, [icon("chat"), String(n.comments)]) : null])
         ])))) : h("div", { class: "card empty", text: isAdmin ? "아직 공지가 없어요. 첫 공지를 써 보세요." : "아직 공지가 없어요." })
@@ -2371,6 +2420,7 @@
     setMain("notices", loading());
     async function load() {
       const r = await api(`/notices/${id}`);
+      setUnreadNotices(r.unreadNotices); // 열어 보면 숫자가 줄어듦
       const n = r.notice;
       document.title = `${n.title} · ${TITLE}`;
       setMain("notices", h("div", { class: "narrow stack" }, [
@@ -3306,7 +3356,7 @@
   async function boot() {
     app.replaceChildren(h("div", { class: "loading loading--full", text: "불러오는 중…" }));
     const r = await api("/me");
-    state.user = r.user; state.team = r.team; state.units = r.units || []; state.tags = r.tags; state.calendars = r.calendars || [];
+    state.user = r.user; state.team = r.team; state.units = r.units || []; state.tags = r.tags; state.calendars = r.calendars || []; state.unreadNotices = r.unreadNotices || 0;
     setCategories(r.categories);
     layout.main = null;
     render();

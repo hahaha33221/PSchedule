@@ -40,6 +40,34 @@ function parseLine(line) {
 
 const unescapeText = (s) => s.replace(/\\([\\;,nN])/g, (_, c) => (c === "n" || c === "N" ? "\n" : c));
 
+// 구글 캘린더는 설명을 HTML 로 보내기도 함 (<p>, <br>, <table>…) → 글자만 남김
+// 이름이 있는 실제 태그만 바꿔서 '<A311>회의' 처럼 일부러 쓴 꺾쇠 글자는 그대로 둠
+const HTML_TAGS = "p|br|div|span|b|strong|i|em|u|s|strike|a|ul|ol|li|table|tbody|thead|tfoot|tr|td|th|colgroup|col|caption|h[1-6]|time|font|img|hr|blockquote|pre|code|sup|sub|small|big|center|label|section|article";
+const TAG_RE = new RegExp(`<\\/?(?:${HTML_TAGS})(?:\\s[^<>]*)?\\/?>`, "gi");
+const ENTITIES = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", nbsp: " " };
+export function htmlToText(input) {
+  let s = String(input ?? "");
+  if (!new RegExp(`<\\/?(?:${HTML_TAGS})\\b`, "i").test(s) && !/&(?:#\d+|#x[0-9a-f]+|[a-z]+);/i.test(s)) return s;
+  s = s.replace(/\r\n?/g, "\n")
+    // 링크: 글자와 주소가 다르면 '글자 (주소)'
+    .replace(/<a\b[^<>]*href\s*=\s*["']([^"']*)["'][^<>]*>([\s\S]*?)<\/a>/gi, (_, href, label) => {
+      const t = label.replace(TAG_RE, "").trim();
+      return !t || t === href ? href : `${t} (${href})`;
+    })
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/t[dh]>\s*(?=<t[dh][\s>])/gi, " | ")
+    .replace(/<li[\s>][^<>]*>|<li>/gi, "• ")
+    .replace(/<\/(?:p|div|li|tr|h[1-6]|table|ul|ol|blockquote|pre|section|article)>/gi, "\n")
+    .replace(/<(?:hr)[^<>]*>/gi, "\n")
+    .replace(/<(?:p|div|ul|ol|table|h[1-6]|blockquote|pre|section|article)(?:\s[^<>]*)?>/gi, "\n")
+    .replace(TAG_RE, "")
+    .replace(/&(#\d+|#x[0-9a-f]+|[a-z]+);/gi, (m, e) => {
+      if (e[0] === "#") { const n = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10); return Number.isFinite(n) ? String.fromCodePoint(n) : m; }
+      return ENTITIES[e.toLowerCase()] ?? m;
+    });
+  return s.split("\n").map((l) => l.replace(/[ \t\u00a0]+/g, " ").trim()).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 // VEVENT 만 모음 (안에 든 VALARM 등은 건너뜀)
 function readEvents(text) {
   const events = [];
@@ -208,7 +236,7 @@ function* ruleDays(rule, start, lastDay) {
 
 /* ---------- 일정 하나 → 기간 안의 회차들 ---------- */
 const first = (p, k) => p[k]?.[0];
-const text = (p, k) => (first(p, k) ? unescapeText(first(p, k).value).trim() : "");
+const text = (p, k) => (first(p, k) ? htmlToText(unescapeText(first(p, k).value)).trim() : "");
 
 function instanceKey(start) {
   return start.allDay ? "D" + ymdOf(start.day) : "T" + new Date(start.utc).toISOString().replace(/\.\d+Z$/, "Z");
