@@ -661,6 +661,7 @@ function eventsOut(rows, user) {
     id: e.id, kind: e.kind, title: e.title, startDate: e.start_date, endDate: e.end_date, startTime: e.start_time, endTime: e.end_time,
     location: e.location, categoryId: e.category_id, unitId: e.unit_id, tagIds: tags.get(e.id), attendeeIds: att.get(e.id), guestNames: guests.get(e.id), author: e.author, createdBy: e.created_by,
     openTasks: e.open_tasks, importantMemos: e.important_memos, comments: e.comments, fromCalendar: !!e.src_calendar_id, sourceName: sourceName(e),
+    sourceKey: e.src_calendar_id ? `${e.src_calendar_id}|${e.src_uid}|${e.src_inst}` : null,
     canDelete: user.role === "admin" || e.created_by === user.id
   }));
 }
@@ -1103,7 +1104,12 @@ async function api(req, res, path) {
       q.addLink.run(e.id, text(b.title, LIMITS.linkTitle, "이름") || link.replace(/^https?:\/\//i, "").slice(0, 60), link);
       return send(res, 201, { links: q.links.all(e.id).map((l) => ({ id: l.id, title: l.title, url: l.url, createdAt: l.created_at })) });
     }
-    if (method === "GET") return send(res, 200, eventDetail(e, user));
+    if (method === "GET") {
+      const d = eventDetail(e, user);
+      // 같은 WYD 원본을 다른 팀도 넣었으면 (볼 수 있는 것만) 패널에서 서로 열 수 있게
+      if (e.src_calendar_id) d.event.sameSource = q.importedFrom.all({ cal: e.src_calendar_id, uid_: e.src_uid, inst: e.src_inst, ...V }).filter((x) => x.id !== e.id).map((x) => ({ eventId: x.id, unitId: x.unit_id }));
+      return send(res, 200, d);
+    }
     // 고치기는 팀 누구나 (회의록을 함께 채우므로), 지우기는 올린 사람·관리자
     if (method === "PATCH") {
       const b = await readJson(req);

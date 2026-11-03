@@ -223,6 +223,21 @@
   const openEv = (e) => openPeek(e.ext ? "ext" : "event", e.id);
   const showEv = (e) => (e.ext ? state.show["cal" + e.calendarId] !== false : state.show[e.kind]);
   const allEvents = (r) => r.events.concat(r.external || []);
+  // 같은 WYD 원본을 여러 팀이 넣었으면 하나만 보여 줌 (내 소속 팀 것 먼저), 나머지는 alsoIn 으로
+  function dedupeImported(list) {
+    const mine = myVisibleUnits(), first = new Map(), out = [];
+    const score = (e) => (e.unitId === myUnit() ? 0 : mine.has(e.unitId) ? 1 : 2);
+    for (const e of list) {
+      if (!e.sourceKey) { out.push(e); continue; }
+      const kept = first.get(e.sourceKey);
+      if (!kept) { const copy = { ...e, alsoIn: [] }; first.set(e.sourceKey, copy); out.push(copy); continue; }
+      if (score(e) < score(kept)) { // 더 가까운 팀 것으로 바꿔 끼움
+        const copy = { ...e, alsoIn: [...kept.alsoIn, { id: kept.id, unitId: kept.unitId }] };
+        out[out.indexOf(kept)] = copy; first.set(e.sourceKey, copy);
+      } else kept.alsoIn.push({ id: e.id, unitId: e.unitId });
+    }
+    return out;
+  }
 
   /* ---------- 분류 ---------- */
   const isAdmin = () => state.user && state.user.role === "admin";
@@ -1066,7 +1081,8 @@
           h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "원본대로 맞추기", onclick: (ev) => busy(ev.currentTarget, async () => {
             await act(() => api(`/events/${e.id}/source-sync`, { method: "POST" }), "원본대로 맞췄어요."); refresh();
           }) })]) : null,
-        e.source.status === "deleted" ? h("span", { class: "srcbox__msg", text: "원본에서 지워졌어요" }) : null
+        e.source.status === "deleted" ? h("span", { class: "srcbox__msg", text: "원본에서 지워졌어요" }) : null,
+        ...(e.sameSource || []).map((x) => h("button", { class: "link-btn", type: "button", onclick: () => openPeek("event", x.eventId) }, `${teamName(x.unitId)}에도 있어요 → 열기`))
       ]) : null,
       important.length ? h("div", { class: "keybox" }, [h("div", { class: "keybox__head" }, [icon("star"), "중요 메모"]), h("ul", {}, important.map((m) => h("li", { text: m.body })))]) : null,
       attendees,
@@ -1321,7 +1337,7 @@
     ]);
     const details = await Promise.all(ev.events.filter((e) => e.kind === "meeting").map((e) => api(`/events/${e.id}`)));
     const byId = new Map(details.map((d) => [d.event.id, d]));
-    const dayEvents = allEvents(ev);
+    const dayEvents = dedupeImported(allEvents(ev));
     const cards = dayEvents.map((e) => {
       const d = e.ext ? null : byId.get(e.id);
       const imp = d ? d.memos.filter((m) => m.important).slice(0, 3) : [];
@@ -1761,7 +1777,7 @@
         api(`/events?from=${day}&to=${day}`), api(`/tasks?date=${day}&today=${today()}`), api(`/memos?date=${day}`)
       ]);
       const inCat = catFilter();
-      const events = allEvents(ev).filter((e) => showEv(e) && inCat(e));
+      const events = dedupeImported(allEvents(ev).filter((e) => showEv(e) && inCat(e)));
       drawTimeline(events);
       drawTasks(tk.tasks.filter(inCat));
       memoList.replaceChildren(memoRows(mm.memos.filter(inCat), { empty: "이 날 남긴 메모가 없어요." }));
@@ -1951,7 +1967,7 @@
       const [ev, tk] = await Promise.all([api(`/events?from=${ymd(start)}&to=${ymd(end)}${scopeQ}`), api(`/tasks?from=${ymd(start)}&to=${ymd(end)}${scopeQ}`)]);
       const inCat = catFilter(), ours = ourFilter(), inTeam = teamOk();
       const keep = (x) => inCat(x) && ours(x) && inTeam(x);
-      data = { events: allEvents(ev).filter(keep), tasks: tk.tasks.filter(keep) };
+      data = { events: dedupeImported(allEvents(ev).filter(keep)), tasks: tk.tasks.filter(keep) };
       draw();
     }
 
@@ -2172,6 +2188,7 @@
       const me = state.user.id;
       const month = state.month.getMonth();
       const all = data.events.filter((e) => e.kind === "meeting" && (parseYmd(e.startDate).getMonth() === month || parseYmd(e.endDate).getMonth() === month) && matches(e));
+      // 내가 만든 회의 = 직접 만들었거나 '우리 소속으로 넣기'로 넣은 회의 (참석자가 아니어도), 참석하는 회의 = 참석자 명단에 내가 있는 회의
       const sets = { all, mine: all.filter((e) => e.createdBy === me), joined: all.filter((e) => e.attendeeIds.includes(me)) };
       const list = sets[listTab] || all;
       const t = today(), tm = shiftYmd(t, 1);
@@ -2188,7 +2205,8 @@
           h("h2", { class: "card__title" }, ["회의 전체 일정 ", h("span", { class: "count count--lg", text: String(all.length) })]),
           h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => editEvent(null, { kind: "meeting", date: t }) }, [icon("plus"), "회의 추가"])
         ]),
-        h("div", { class: "tabs-line", role: "tablist" }, [["all", "전체"], ["mine", "내 회의"], ["joined", "참석 회의"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === listTab), onclick: () => { listTab = k; store.set("ps.listTab", k); drawMeetingList(); markPeeked(); } }, [label, h("span", { class: "count", text: String(sets[k].length) })]))),
+        h("div", { class: "tabs-line", role: "tablist" }, [["all", "전체", "이번 달 보이는 회의 전부 (같은 WYD 원본은 한 번만 셈)"], ["mine", "내가 만든 회의", "내가 직접 만들었거나 '우리 소속으로 넣기'로 넣은 회의 — 참석자가 아니어도 여기에 나와요"], ["joined", "참석하는 회의", "참석자 명단에 내 이름이 있는 회의"]].map(([k, label, tip]) => h("button", { type: "button", role: "tab", title: tip, "aria-selected": String(k === listTab), onclick: () => { listTab = k; store.set("ps.listTab", k); drawMeetingList(); markPeeked(); } }, [label, h("span", { class: "count", text: String(sets[k].length) })]))),
+        h("p", { class: "muted small mlist-hint", text: { all: "이번 달 보이는 회의 전부예요. 같은 WYD 일정을 여러 팀이 넣었으면 한 번만 세요.", mine: "내가 직접 만들었거나 '우리 소속으로 넣기'로 넣은 회의예요. 참석자 명단에 없어도 여기에 나와요.", joined: "참석자 명단에 내 이름이 있는 회의예요. 참석자는 회의 패널의 '참석자 → 편집'에서 바꿔요." }[listTab] || "" }),
         groups.length ? h("div", { class: "mgroups" }, groups.map(([label, l]) => {
           const past = label === "지난 회의";
           const box = h("div", { class: "mgroup" + (past && !pastOpen ? " is-folded" : "") }, [
@@ -2217,7 +2235,8 @@
     return h("li", {}, h("button", { class: "mrow", type: "button", "data-peek": evKey(e), onclick: () => openEv(e) }, [
       h("span", { class: "mrow__time" }, [hideDate ? null : h("small", { text: relDay(e.startDate) || shortDate(e.startDate) }), timeRange(e)]),
       evDot(e),
-      h("span", { class: "mrow__title" }, [h("strong", { text: e.title }), e.ext ? h("span", { class: "ext-badge", text: e.calendarName }) : null, srcTag(e), catChip(e.categoryId), ...tagChips(e.tagIds).slice(0, 2),
+      h("span", { class: "mrow__title" }, [h("strong", { text: e.title }), e.ext ? h("span", { class: "ext-badge", text: e.calendarName }) : null, srcTag(e),
+        (e.alsoIn || []).length ? h("span", { class: "ext-badge", title: `같은 WYD 일정이 ${e.alsoIn.map((x) => teamName(x.unitId)).join(", ")}에도 있어요`, text: `+${e.alsoIn.map((x) => teamName(x.unitId)).join(", ")}` }) : null, catChip(e.categoryId), ...tagChips(e.tagIds).slice(0, 2),
         e.openTasks ? h("span", { class: "mini-badge" }, [icon("check"), `할 일 ${e.openTasks}`]) : null,
         e.importantMemos ? h("span", { class: "mini-badge mini-badge--star" }, [icon("star"), String(e.importantMemos)]) : null]),
       h("span", { class: "mrow__people" }, [h("span", { class: "avatars" }, (e.attendeeIds.length ? e.attendeeIds : e.createdBy ? [e.createdBy] : []).slice(0, 3).map((id) => avatar(id, "sm"))), e.attendeeIds.length > 3 ? h("small", { text: `+${e.attendeeIds.length - 3}` }) : null, (e.guestNames || []).length ? h("small", { class: "muted", title: e.guestNames.join(", "), text: `외부 ${e.guestNames.length}` }) : null]),

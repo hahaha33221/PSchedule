@@ -125,6 +125,9 @@ jobs:
           test "$(EXT "$A1")" = "0/1"
           test "$(EXT "$A4")" = "1/0"
           curl -fs -H "Authorization: Bearer $A1" "$B/search?q=WYD" | grep -q '"sourceName":"WYD"'
+          # 같은 원본을 두 팀이 넣으면 관리자에게는 서로 '다른 팀에도 있어요' 로 이어지고, 둘 다 sourceKey 가 같음
+          curl -fs -H "$H" $B/events/$IM | grep -q '"sameSource":\[{'
+          test "$(curl -fs -H "$H" "$B/events?from=2026-02-01&to=2026-02-28" | node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); new Set(d.events.filter(e=>e.sourceKey).map(e=>e.sourceKey)).size + "/" + d.events.filter(e=>e.sourceKey).length')" = "1/2"
           curl -fs -H "Authorization: Bearer $A1" "$B/search?q=WYD" | grep -vq '"type":"ext"'
           curl -fs -H "$H" -XPOST -d '{"userIds":[1],"unitId":3}' $B/admin/users/unit | grep -q '"changed":1'
           curl -fs -H "$H" "$B/units/1?sub=1" | grep -Eq '"memberIds":\[([0-9]+,)*1[],]'

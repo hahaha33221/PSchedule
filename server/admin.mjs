@@ -9,11 +9,13 @@
  *   node server/admin.mjs view <아이디>                       추가로 볼 수 있는 조직 보기
  *   node server/admin.mjs view-add <아이디> "<조직 경로>" [only]  추가로 볼 조직 넣기 (경로: '운영총괄부 > 기념품팀', only 면 그 조직만)
  *   node server/admin.mjs view-remove <아이디> "<조직 경로>"
+ *   node server/admin.mjs notice-add "<제목>" [pin] < 본문.txt    공지 올리기 (본문은 표준 입력, 작성자는 관리자 계정)
  *   node server/admin.mjs backups                           백업 목록
  *
  * VPS 에서:  ssh root@srv1809055.hstgr.cloud 'cd /opt/pschedule && docker compose exec -T api node --disable-warning=ExperimentalWarning server/admin.mjs list'
  */
 import { join, resolve } from "node:path";
+import { readFileSync } from "node:fs";
 import { openDb, hashPassword, tempPassword } from "./db.mjs";
 import { backupNow, listBackups } from "./backup.mjs";
 
@@ -79,6 +81,17 @@ switch (cmd) {
     break;
   }
 
+  case "notice-add": {
+    const title = String(args[0] || "").trim();
+    const body = readFileSync(0, "utf8").replace(/\r\n?/g, "\n").trim();
+    if (!title || title.length > 80) { console.error("제목을 80자 안으로 적어 주세요."); process.exit(1); }
+    if (!body || body.length > 5000) { console.error("본문(표준 입력)을 5000자 안으로 넣어 주세요."); process.exit(1); }
+    const admin = db.prepare("SELECT id, login FROM users WHERE role = 'admin' ORDER BY login = 'admin' DESC, id LIMIT 1").get();
+    const id = Number(db.prepare("INSERT INTO notices (title, body, pinned, created_by) VALUES (?, ?, ?, ?)").run(title, body, args[1] === "pin" ? 1 : 0, admin?.id ?? null).lastInsertRowid);
+    console.log(`공지 #${id} 를 올렸어요 (작성자 ${admin?.login ?? "-"}${args[1] === "pin" ? ", 맨 위 고정" : ""}).`);
+    break;
+  }
+
   case "backup": {
     console.log(`백업했어요 → ${backupNow(db, BACKUP_DIR)}`);
     break;
@@ -92,6 +105,6 @@ switch (cmd) {
   }
 
   default:
-    console.log("사용법: node server/admin.mjs list | add <아이디> <이름> [admin] | reset-password <아이디> | backup | backups | view <아이디> | view-add <아이디> \"<조직 경로>\" [only] | view-remove <아이디> \"<조직 경로>\"");
+    console.log("사용법: node server/admin.mjs list | add <아이디> <이름> [admin] | reset-password <아이디> | backup | backups | view <아이디> | view-add <아이디> \"<조직 경로>\" [only] | view-remove <아이디> \"<조직 경로>\" | notice-add \"<제목>\" [pin] < 본문");
     process.exit(cmd ? 1 : 0);
 }
