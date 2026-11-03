@@ -120,6 +120,10 @@ const q = {
   setSetting: db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value"),
   setUserUnitIfEmpty: db.prepare("UPDATE users SET unit_id = ? WHERE id = ? AND unit_id IS NULL"),
   setUserUnit: db.prepare("UPDATE users SET unit_id = ? WHERE id = ?"),
+  viewUnits: db.prepare("SELECT unit_id, sub FROM user_view_units WHERE user_id = ? ORDER BY rowid"),
+  allViewUnits: db.prepare("SELECT user_id, unit_id, sub FROM user_view_units ORDER BY rowid"),
+  clearViewUnits: db.prepare("DELETE FROM user_view_units WHERE user_id = ?"),
+  addViewUnit: db.prepare("INSERT OR REPLACE INTO user_view_units (user_id, unit_id, sub) VALUES (?, ?, ?)"),
   usersInUnits: db.prepare("SELECT id FROM users WHERE unit_id IN (SELECT value FROM json_each(?)) ORDER BY name, id"),
   calendarsInUnits: db.prepare("SELECT count(*) AS n FROM calendars WHERE unit_id IN (SELECT value FROM json_each(?))"),
 
@@ -370,7 +374,7 @@ function auth(req) {
 }
 const tokenOf = (req) => String(req.headers.authorization).split(/\s+/)[1];
 
-const publicUser = (u) => ({ id: u.id, login: u.login, role: u.role, name: u.name, unitId: u.unit_id, mustChangePassword: u.pw_changed !== 1 });
+const publicUser = (u) => ({ id: u.id, login: u.login, role: u.role, name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), mustChangePassword: u.pw_changed !== 1 });
 const teamOut = () => q.team.all().map((u) => ({ id: u.id, name: u.name, unitId: u.unit_id }));
 
 // 입력 정리
@@ -700,10 +704,16 @@ function memoInput(b, cur, v) {
 
 /* ----- 보이는 범위: 요청한 사람 기준 조건 값 ----- */
 // mine: 관리자도 '나의 대시보드'에서는 멤버와 같은 규칙으로
-function viewer(user, mine) {
-  const units = user.unit_id && q.unit.get(user.unit_id) ? unitSubtree(user.unit_id) : [];
-  return { admin: user.role === "admin" && !mine ? 1 : 0, uid: user.id, units: JSON.stringify(units) };
+// 볼 수 있는 조직: 내 소속과 그 아래 + 관리자가 추가로 지정한 조직 (sub 면 그 아래까지, 아니면 그 조직만)
+function visibleUnits(user) {
+  const set = new Set(user.unit_id && q.unit.get(user.unit_id) ? unitSubtree(user.unit_id) : []);
+  for (const g of q.viewUnits.all(user.id)) for (const id of g.sub ? unitSubtree(g.unit_id) : [g.unit_id]) set.add(id);
+  return [...set];
 }
+function viewer(user, mine) {
+  return { admin: user.role === "admin" && !mine ? 1 : 0, uid: user.id, units: JSON.stringify(visibleUnits(user)) };
+}
+const viewUnitsOut = (userId) => q.viewUnits.all(userId).map((g) => ({ unitId: g.unit_id, sub: !!g.sub }));
 const notFound = (what) => Object.assign(new Error(`${what}을(를) 찾을 수 없어요. 지워졌거나 볼 수 없는 팀의 항목이에요.`), { status: 404, expose: true });
 // 항목의 팀: 보내면 그 팀 (이미 있는 항목은 만든 사람·관리자만), 안 보내면 새로 만들 땐 연결한 회의의 팀 → 만든 사람의 소속
 function itemUnit(b, user, cur, meetingId) {
@@ -1315,7 +1325,7 @@ async function api(req, res, path) {
     if (path === "/api/admin/users" && method === "GET") {
       return send(res, 200, {
         users: q.users.all().map((u) => ({
-          id: u.id, login: u.login, role: u.role, name: u.name, unitId: u.unit_id, note: u.note, pwChanged: u.pw_changed === 1,
+          id: u.id, login: u.login, role: u.role, name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), note: u.note, pwChanged: u.pw_changed === 1,
           createdAt: u.created_at, lastLoginAt: u.last_login_at, me: u.id === user.id
         }))
       });
@@ -1566,8 +1576,18 @@ async function api(req, res, path) {
         const note = has(b, "note") ? text(b.note, LIMITS.userNote, "메모") : target.note;
         const role = b.role === "admin" || b.role === "member" ? b.role : target.role;
         if (lastAdmin && role !== "admin") throw bad("관리자가 한 명은 있어야 해요.");
-        q.setUser.run(name, unit, note, role, target.id);
-        return send(res, 200, { ok: true });
+        // 추가로 볼 수 있는 조직: [{ unitId, sub }] 로 통째로 바꿈
+        let grants = null;
+        if (has(b, "viewUnits")) {
+          if (!Array.isArray(b.viewUnits) || b.viewUnits.length > 20) throw bad("추가로 볼 조직은 20개까지 정할 수 있어요.");
+          grants = b.viewUnits.map((g) => ({ unit: unitIdOrNull(g?.unitId), sub: g?.sub === false ? 0 : 1 })).filter((g) => g.unit);
+        }
+        inTx(() => {
+          q.setUser.run(name, unit, note, role, target.id);
+          if (grants) { q.clearViewUnits.run(target.id); for (const g of grants) q.addViewUnit.run(target.id, g.unit, g.sub); }
+        });
+        if (grants) console.log(`[admin] ${user.login} → ${target.login} 추가로 볼 조직 ${grants.length}개`);
+        return send(res, 200, { ok: true, viewUnits: viewUnitsOut(target.id) });
       }
       if (!um[2] && method === "DELETE") {
         if (target.id === user.id) throw bad("내 계정은 지울 수 없어요.");

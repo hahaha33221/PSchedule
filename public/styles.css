@@ -1114,3 +1114,9 @@ button.mgroup__head:hover { color: var(--ink); }
 .sr-hidden { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border-radius: 10px; background: var(--admin-soft); color: var(--admin-text); font-size: 13px; }
 .sr-hidden > span { flex: 1 1 200px; }
 .sr-hidden > .ic { flex: none; }
+/* 추가로 볼 수 있는 조직 */
+.member-extra { display: block; margin-top: 3px; font-size: 11.5px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.grants { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.grant-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; width: 100%; }
+.grant-list li { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; background: var(--surface-2); font-size: 13px; }
+.grant-list__name { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

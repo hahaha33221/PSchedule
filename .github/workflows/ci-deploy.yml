@@ -90,6 +90,15 @@ jobs:
           curl -fs -H "Authorization: Bearer $A1" -XPATCH -d "{\"attendeeIds\":[$ME]}" $B/events/$EV >/dev/null
           curl -fs -H "Authorization: Bearer $A2" $B/events/$EV | grep -q '비밀안건'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $A2" -XPATCH -d "{\"unitId\":$LG}" $B/events/$EV)" = 403
+          # 추가로 볼 수 있는 조직: 숙박팀 사람(userb)에게 식음료팀을 추가하면 보이고, 빼면 다시 안 보임
+          UB=$(curl -fs -H "$H" $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).users.find(u=>u.login==="userb").id')
+          GRANT="{\"viewUnits\":[{\"unitId\":$FB,\"sub\":true}]}"
+          curl -fs -H "$H" -XPATCH -d "$GRANT" $B/admin/users/$UB | grep -q '"viewUnits":\[{'
+          curl -fs -H "Authorization: Bearer $A2" "$B/tasks" | grep -q '식음료 할 일'
+          curl -fs -H "Authorization: Bearer $A2" $B/me | grep -q "\"unitId\":$FB"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $A2" -XPATCH -d "$GRANT" $B/admin/users/$UB)" = 403
+          curl -fs -H "$H" -XPATCH -d '{"viewUnits":[]}' $B/admin/users/$UB >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $A2" $B/tasks/$TK)" = 404
           # 외부 참석자: 넣기·검색·다른 팀(못 보는 사람)은 못 넣음
           curl -fs -H "Authorization: Bearer $A1" -XPOST -d '{"name":"외부손님","org":"서울교구","contact":"010-0000-0000"}' $B/events/$EV/guests | grep -q '외부손님'
           curl -fs -H "Authorization: Bearer $A1" $B/events/$EV | grep -q '"guests":\[{'

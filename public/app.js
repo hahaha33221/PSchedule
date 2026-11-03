@@ -281,6 +281,14 @@
     if (t) state.user.unitId = t.unitId;
     return state.user.unitId && unitOf(state.user.unitId) ? state.user.unitId : null;
   };
+  // 관리자가 추가로 지정한 볼 수 있는 조직 [{ unitId, sub }] → '기념품팀, 운영총괄부(부만)'
+  const viewGrantsText = (grants) => (grants || []).filter((g) => unitOf(g.unitId)).map((g) => `${unitShort(g.unitId)}${g.sub || !unitChildren(g.unitId).length ? "" : "(그 조직만)"}`).join(", ");
+  // 내가 볼 수 있는 조직 (서버 규칙과 같게): 내 소속과 그 아래 + 추가 지정
+  function myVisibleUnits() {
+    const set = new Set(myUnit() ? unitSubtree(myUnit()) : []);
+    for (const g of state.user.viewUnits || []) if (unitOf(g.unitId)) for (const id of g.sub ? unitSubtree(g.unitId) : [g.unitId]) set.add(id);
+    return set;
+  }
   function ourFilter() {
     if (!state.ourUnit || !myUnit()) return () => true;
     const units = unitSubtree(myUnit());
@@ -1102,7 +1110,7 @@
     const err = errorLine();
     let kind = "meeting";
     // 넣을 수 있는 팀: 관리자는 모두, 멤버는 내 소속과 그 아래 팀
-    const only = isAdmin() ? null : myUnit() ? unitSubtree(myUnit()) : new Set();
+    const only = isAdmin() ? null : myVisibleUnits();
     let unitId = myUnit(), attendeeIds = [state.user.id];
     const kindSeg = h("div", { class: "seg seg--sm" }, [["meeting", "회의"], ["event", "일정"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String(k === kind), text: label, onclick: (ev) => { kind = k; kindSeg.querySelectorAll("button").forEach((b) => b.setAttribute("aria-selected", String(b === ev.currentTarget))); } })));
     const unitBtn = h("button", { class: "select-btn", type: "button" });
@@ -1899,8 +1907,10 @@
     function drawTop(overview) {
       if (!all) {
         const u = myUnit();
+        const extra = viewGrantsText(state.user.viewUnits);
         fill(topBox, h("div", { class: "scopebar" }, [icon("org"), h("span", {}, [h("strong", { text: "보이는 범위: " }),
-          u ? `${unitLabel(u)}${unitChildren(u).length ? " (아래 팀 포함)" : ""} + 내가 관련된 것` : "내가 만들었거나 참석·담당한 것만 (아직 소속이 없어요)"]),
+          u ? `${unitLabel(u)}${unitChildren(u).length ? " (아래 팀 포함)" : ""}${extra ? ` + 추가로 ${extra}` : ""} + 내가 관련된 것`
+            : extra ? `${extra} + 내가 관련된 것` : "내가 만들었거나 참석·담당한 것만 (아직 소속이 없어요)"]),
           isAdmin() ? h("a", { class: "btn btn--admin btn--sm", href: "#/alldash" }, [icon("lock"), "전체 대시보드"]) : null]));
         return;
       }
@@ -2444,7 +2454,7 @@
         return h("tr", { class: picked.has(u.id) ? "is-picked" : null }, [
           h("td", {}, c),
           h("td", {}, h("span", { class: "person person--stack" }, [avatar(u.id, "sm"), h("span", {}, [h("strong", { text: u.name }), u.me ? h("span", { class: "badge", text: "나" }) : null, u.note ? h("small", { class: "muted person__note", text: u.note }) : null])])),
-          h("td", {}, unitBtn),
+          h("td", {}, [unitBtn, (u.viewUnits || []).length ? h("small", { class: "muted member-extra", title: "관리자가 추가로 지정한 볼 수 있는 조직", text: `+ 추가로 봄: ${viewGrantsText(u.viewUnits)}` }) : null]),
           h("td", { class: "mono", text: u.login }),
           h("td", {}, u.role === "admin" ? adminBadge("관리자") : h("span", { class: "badge", text: "멤버" })),
           h("td", { class: "muted" }, u.pwChanged ? "변경함" : h("span", { class: "warn", text: "임시 비밀번호" })),
@@ -2537,12 +2547,31 @@
     const err = errorLine();
     const name = h("input", { value: u.name, maxlength: "20", autofocus: true });
     let unitId = u.unitId;
+    // 추가로 볼 수 있는 조직 [{ unitId, sub }]
+    let grants = (u.viewUnits || []).filter((g) => unitOf(g.unitId)).map((g) => ({ ...g }));
+    const grantsBox = h("div", { class: "grants" });
+    function drawGrants() {
+      const add = h("button", { class: "link-btn", type: "button", text: "+ 조직 추가" });
+      add.addEventListener("click", () => unitPicker(add, null, (id) => {
+        if (id && !grants.some((g) => g.unitId === id)) { grants.push({ unitId: id, sub: true }); drawGrants(); }
+      }, { noneLabel: null }));
+      fill(grantsBox,
+        grants.length ? h("ul", { class: "grant-list" }, grants.map((g) => h("li", {}, [
+          h("span", { class: "grant-list__name", text: unitLabel(g.unitId) }),
+          unitChildren(g.unitId).length ? h("label", { class: "check small" }, [h("input", { type: "checkbox", checked: g.sub, onchange: (e) => { g.sub = e.target.checked; } }), h("span", { text: "아래 팀 포함" })]) : null,
+          h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": `${unitShort(g.unitId)} 빼기`, html: ICON.close, onclick: () => { grants = grants.filter((x) => x !== g); drawGrants(); } })
+        ]))) : h("p", { class: "muted small", text: "없음 (소속 조직과 그 아래 팀만 봐요)" }),
+        add);
+    }
+    drawGrants();
     const note = h("input", { value: u.note || "", maxlength: "200", placeholder: "예: 예전 직책, 연락 메모" });
     const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "admin", text: "관리자" })]);
     role.value = u.role;
     const submit = h("button", { class: "btn btn--admin", type: "submit", text: "저장" });
     const form = h("form", { class: "stack", novalidate: true }, [
       h("div", { class: "row2" }, [field("이름", name), field("소속", unitButton(unitId, (id) => { unitId = id; }))]),
+      // (field 는 <label> 이라 안에 체크 상자가 여럿이면 엉뚱한 것이 눌려서 div 로)
+      h("div", { class: "field" }, [h("span", { class: "field__label", text: "추가로 볼 수 있는 조직" }), grantsBox, h("span", { class: "field__hint", text: "소속 말고도 이 조직의 회의·할 일·메모를 봐요. '아래 팀 포함'을 끄면 그 조직(부·본부 직속)만 봐요." })]),
       field("메모", note, "관리자만 보는 메모예요. 예전 '직책'은 여기로 옮겨 두었어요."),
       field("권한", role), err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), submit])
@@ -2551,7 +2580,7 @@
       e.preventDefault();
       busy(submit, async () => {
         try {
-          await api(`/admin/users/${u.id}`, { method: "PATCH", body: { name: name.value, unitId, note: note.value, role: role.value } });
+          await api(`/admin/users/${u.id}`, { method: "PATCH", body: { name: name.value, unitId, note: note.value, role: role.value, viewUnits: grants } });
           closeDialog(); toast("저장했어요.");
           await reloadTeam();
           if (isAdmin()) { buildLayout(); render(); } else go("#/today");

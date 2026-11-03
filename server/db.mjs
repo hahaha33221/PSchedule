@@ -59,6 +59,13 @@ export function openDb(file) {
     );
     CREATE INDEX IF NOT EXISTS org_positions_unit ON org_positions (unit_id);
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    -- 추가로 볼 수 있는 조직 (관리자가 멤버마다 지정): 소속 말고도 이 조직의 항목을 봄. sub = 1 이면 그 아래 팀까지
+    CREATE TABLE IF NOT EXISTS user_view_units (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      unit_id INTEGER NOT NULL REFERENCES org_units(id) ON DELETE CASCADE,
+      sub     INTEGER NOT NULL DEFAULT 1,
+      PRIMARY KEY (user_id, unit_id)
+    );
 
     -- 분류: 대분류 › 중분류 › 소분류 (parent_id 로 3단계까지, 관리자가 관리). 회의·할 일·메모에 하나씩
     CREATE TABLE IF NOT EXISTS categories (
