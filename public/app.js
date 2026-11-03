@@ -216,6 +216,8 @@
   const kindDot = (kind) => h("i", { class: `dot c${KIND[kind].color}` });
   // 일정 하나: 우리 일정(회의·일정) 또는 외부 캘린더에서 가져온 일정(ext, 읽기 전용)
   const evColor = (e) => (e.ext ? e.color : KIND[e.kind].color);
+  // 구글 캘린더에서 우리 소속으로 넣은 일정: 'WYD 캘린더 백업' 표시 (원본은 달력·검색에서 숨김)
+  const srcTag = (e, short) => (e.sourceName ? h("span", { class: "src-tag", title: `${e.sourceName} 캘린더 백업 (구글 캘린더에서 가져온 일정)`, text: short ? e.sourceName : `${e.sourceName} 캘린더 백업` }) : null);
   const evDot = (e) => h("i", { class: `dot c${evColor(e)}` });
   const evKey = (e) => (e.ext ? "ext:" : "event:") + e.id;
   const openEv = (e) => openPeek(e.ext ? "ext" : "event", e.id);
@@ -1059,7 +1061,7 @@
     const body = [
       facts,
       e.source ? h("div", { class: "srcbox" + (e.source.status !== "same" ? " is-warn" : "") }, [
-        h("span", {}, [icon("cal"), `구글 캘린더에서 가져옴 (${e.source.calendarName})`]),
+        h("span", {}, [icon("cal"), h("strong", { text: `${e.source.calendarName} 캘린더 백업` }), " · 구글 캘린더에서 가져온 일정이라 원본은 달력에서 숨겨요"]),
         e.source.status === "changed" ? h("span", { class: "srcbox__msg" }, [`원본이 바뀌었어요 (${e.source.changed.join(", ")})`,
           h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "원본대로 맞추기", onclick: (ev) => busy(ev.currentTarget, async () => {
             await act(() => api(`/events/${e.id}/source-sync`, { method: "POST" }), "원본대로 맞췄어요."); refresh();
@@ -1805,7 +1807,7 @@
           style: `top:${top}px;height:${height}px;left:calc(56px + (100% - 60px) * ${it.lane / it.lanes});width:calc((100% - 60px) / ${it.lanes} - 4px)`,
           onclick: () => openEv(e)
         }, [
-          h("div", { class: "tl__evtop" }, [h("strong", { text: e.title }), h("span", { class: "tl__tags" }, tagChips(e.tagIds))]),
+          h("div", { class: "tl__evtop" }, [h("strong", { text: e.title }), h("span", { class: "tl__tags" }, [srcTag(e, true), ...tagChips(e.tagIds)])]),
           h("div", { class: "tl__meta" }, [
             h("span", { text: timeRange(e) }),
             e.location ? h("span", {}, [icon("place"), e.location]) : null,
@@ -1822,7 +1824,7 @@
       }
       const scroller = h("div", { class: "tl-scroll" }, grid);
       fill(timelineBox, head,
-        allDay.length ? h("div", { class: "tl-allday" }, [h("span", { class: "tl-allday__label", text: "종일" }), ...allDay.map((e) => h("button", { class: `chip c${evColor(e)}` + (e.ext ? " is-ext" : ""), type: "button", "data-peek": evKey(e), onclick: () => openEv(e) }, h("span", { text: e.title })))]) : null,
+        allDay.length ? h("div", { class: "tl-allday" }, [h("span", { class: "tl-allday__label", text: "종일" }), ...allDay.map((e) => h("button", { class: `chip c${evColor(e)}` + (e.ext ? " is-ext" : ""), type: "button", "data-peek": evKey(e), onclick: () => openEv(e) }, [srcTag(e, true), h("span", { text: e.title })]))]) : null,
         scroller,
         !events.length ? h("p", { class: "tl-empty muted", text: "일정이 없어요. 시간대를 두 번 눌러 바로 추가할 수 있어요." }) : null);
       grid.addEventListener("dblclick", (ev) => {
@@ -2104,7 +2106,8 @@
         h("span", { class: "sr-main" }, [
           h("span", { class: "sr-title" + (done ? " is-done" : "") }, inTitle ? marked(r.text, r.hl) : [r.title]),
           inTitle ? null : h("span", { class: "sr-snip" }, [`${r.field}: `, ...marked(r.text, r.hl)]),
-          r.type === "memo" && r.meetingTitle ? h("span", { class: "sr-snip" }, `회의: ${r.meetingTitle}`) : r.ext ? h("span", { class: "sr-snip", text: label }) : null
+          r.type === "memo" && r.meetingTitle ? h("span", { class: "sr-snip" }, `회의: ${r.meetingTitle}`) : r.ext ? h("span", { class: "sr-snip", text: label }) : null,
+          srcTag(r)
         ])
       ]));
     }
@@ -2128,7 +2131,7 @@
         const { ev, tk, n } = itemsOn(day);
         const chips = [
           ...ev.map((e) => h("button", { class: `chip c${evColor(e)}` + (e.startDate !== e.endDate ? " chip--span" : "") + (e.ext ? " is-ext" : ""), type: "button", "data-peek": evKey(e), title: `${e.title} · ${whenLabel(e)}${e.ext ? ` · ${e.calendarName}` : ""}`, onclick: (x) => { x.stopPropagation(); openEv(e); } },
-            [h("i", { class: "chip__dot" }), h("span", { text: (e.startTime && e.startDate === day ? e.startTime + " " : "") + e.title })])),
+            [h("i", { class: "chip__dot" }), srcTag(e, true), h("span", { text: (e.startTime && e.startDate === day ? e.startTime + " " : "") + e.title })])),
           ...tk.map((x) => h("button", { class: `chip chip--task c${KIND.task.color}` + (x.status === "done" ? " is-done" : ""), type: "button", "data-peek": `task:${x.id}`, title: `할 일 · ${x.title}`, onclick: (y) => { y.stopPropagation(); openPeek("task", x.id); } },
             [h("i", { class: "chip__box" }), h("span", { text: x.title })]))
         ];
@@ -2214,7 +2217,7 @@
     return h("li", {}, h("button", { class: "mrow", type: "button", "data-peek": evKey(e), onclick: () => openEv(e) }, [
       h("span", { class: "mrow__time" }, [hideDate ? null : h("small", { text: relDay(e.startDate) || shortDate(e.startDate) }), timeRange(e)]),
       evDot(e),
-      h("span", { class: "mrow__title" }, [h("strong", { text: e.title }), e.ext ? h("span", { class: "ext-badge", text: e.calendarName }) : null, catChip(e.categoryId), ...tagChips(e.tagIds).slice(0, 2),
+      h("span", { class: "mrow__title" }, [h("strong", { text: e.title }), e.ext ? h("span", { class: "ext-badge", text: e.calendarName }) : null, srcTag(e), catChip(e.categoryId), ...tagChips(e.tagIds).slice(0, 2),
         e.openTasks ? h("span", { class: "mini-badge" }, [icon("check"), `할 일 ${e.openTasks}`]) : null,
         e.importantMemos ? h("span", { class: "mini-badge mini-badge--star" }, [icon("star"), String(e.importantMemos)]) : null]),
       h("span", { class: "mrow__people" }, [h("span", { class: "avatars" }, (e.attendeeIds.length ? e.attendeeIds : e.createdBy ? [e.createdBy] : []).slice(0, 3).map((id) => avatar(id, "sm"))), e.attendeeIds.length > 3 ? h("small", { text: `+${e.attendeeIds.length - 3}` }) : null, (e.guestNames || []).length ? h("small", { class: "muted", title: e.guestNames.join(", "), text: `외부 ${e.guestNames.length}` }) : null]),

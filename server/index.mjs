@@ -146,7 +146,12 @@ const q = {
   setCalendar: db.prepare("UPDATE calendars SET name = ?, url = ?, color = ?, category_id = ?, unit_id = ? WHERE id = ?"),
   delCalendar: db.prepare("DELETE FROM calendars WHERE id = ?"),
   externalRange: db.prepare(`SELECT x.*, c.name AS calendar_name, c.color, c.category_id, c.unit_id FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id
-    WHERE x.start_date <= ? AND x.end_date >= ? AND ${EXT_VIS("c")} ORDER BY x.start_date, x.start_time IS NOT NULL, x.start_time, x.id LIMIT 3000`),
+    WHERE x.start_date <= ? AND x.end_date >= ? AND ${EXT_VIS("c")}
+      -- 우리 소속으로 넣은 원본은 숨김 (넣은 우리 일정이 보이는 사람에게만): 같은 일정이 두 번 보이지 않게
+      AND NOT EXISTS (SELECT 1 FROM events ie WHERE ie.src_calendar_id = x.calendar_id AND ie.src_uid = x.uid AND ie.src_inst = x.inst AND ${EV_VIS("ie")})
+    ORDER BY x.start_date, x.start_time IS NOT NULL, x.start_time, x.id LIMIT 3000`),
+  // 검색에서 숨길 원본: 보이는 우리 일정으로 이미 넣은 것
+  importedKeys: db.prepare(`SELECT e.src_calendar_id AS cal, e.src_uid AS uid_, e.src_inst AS inst FROM events e WHERE e.src_calendar_id IS NOT NULL AND ${EV_VIS("e")}`),
   external: db.prepare(`SELECT x.*, c.name AS calendar_name, c.color, c.category_id, c.unit_id, c.last_ok_at FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id WHERE x.id = ?`),
 
   // 일정 (기간이 겹치는 것)
@@ -557,6 +562,11 @@ function sourceValues(x) {
   const end = x.end_time === "24:00" ? "23:59" : x.end_time;
   return { title: x.title.slice(0, LIMITS.title), startDate: x.start_date, endDate: x.end_date, startTime: x.start_time || null, endTime: x.start_time ? end || null : null, location: (x.location || "").slice(0, LIMITS.location), calendarName: x.calendar_name };
 }
+// 넣은 일정의 원본 캘린더 이름 (목록에 'WYD 캘린더' 로 표시)
+function sourceName(e) {
+  if (!e.src_calendar_id) return null;
+  try { return JSON.parse(e.src_snapshot || "{}").calendarName || "구글 캘린더"; } catch { return "구글 캘린더"; }
+}
 // 넣은 일정의 원본 상태: 같음 / 바뀜(무엇이) / 원본에서 지워짐
 function sourceInfo(e) {
   if (!e.src_calendar_id) return null;
@@ -650,7 +660,7 @@ function eventsOut(rows, user) {
   return rows.map((e) => ({
     id: e.id, kind: e.kind, title: e.title, startDate: e.start_date, endDate: e.end_date, startTime: e.start_time, endTime: e.end_time,
     location: e.location, categoryId: e.category_id, unitId: e.unit_id, tagIds: tags.get(e.id), attendeeIds: att.get(e.id), guestNames: guests.get(e.id), author: e.author, createdBy: e.created_by,
-    openTasks: e.open_tasks, importantMemos: e.important_memos, comments: e.comments, fromCalendar: !!e.src_calendar_id,
+    openTasks: e.open_tasks, importantMemos: e.important_memos, comments: e.comments, fromCalendar: !!e.src_calendar_id, sourceName: sourceName(e),
     canDelete: user.role === "admin" || e.created_by === user.id
   }));
 }
@@ -729,7 +739,7 @@ function itemUnit(b, user, cur, meetingId) {
 /* ----- 검색 (대시보드): 회의·일정·할 일·메모·가져온 일정의 안쪽 내용까지, 전체 기간 ----- */
 const SEARCH_LIMIT = 300;
 const searchQ = {
-  events: db.prepare("SELECT id, kind, title, start_date, end_date, start_time, end_time, location, description, agenda, category_id, unit_id, created_by FROM events"),
+  events: db.prepare("SELECT id, kind, title, start_date, end_date, start_time, end_time, location, description, agenda, category_id, unit_id, created_by, src_calendar_id, src_snapshot FROM events"),
   attendees: db.prepare("SELECT a.event_id, a.user_id, u.name FROM event_attendees a JOIN users u ON u.id = a.user_id"),
   eventTags: db.prepare("SELECT x.event_id, t.name FROM event_tags x JOIN tags t ON t.id = x.tag_id"),
   links: db.prepare("SELECT event_id, title, url FROM event_links"),
@@ -740,10 +750,10 @@ const searchQ = {
   taskTags: db.prepare("SELECT x.task_id, t.name FROM task_tags x JOIN tags t ON t.id = x.tag_id"),
   memos: db.prepare(`SELECT m.id, m.body, m.memo_date, m.meeting_id, m.important, m.category_id, m.created_by, e.title AS meeting_title
     FROM memos m LEFT JOIN events e ON e.id = m.meeting_id`),
-  external: db.prepare(`SELECT x.id, x.title, x.location, x.description, x.start_date, x.end_date, x.start_time, x.end_time, x.calendar_id, c.name AS calendar_name, c.color, c.category_id
+  external: db.prepare(`SELECT x.id, x.uid, x.inst, x.title, x.location, x.description, x.start_date, x.end_date, x.start_time, x.end_time, x.calendar_id, c.name AS calendar_name, c.color, c.category_id
     FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id`)
 };
-const searchQ_vis = { events: q.visEventIds, tasks: q.visTaskIds, memos: q.visMemoIds, calendars: q.visCalendarIds };
+const searchQ_vis = { events: q.visEventIds, tasks: q.visTaskIds, memos: q.visMemoIds, calendars: q.visCalendarIds, imported: q.importedKeys };
 // 한글은 그대로, 영문은 대소문자 무시, 띄어쓰기 무시
 const squash = (s) => String(s ?? "").normalize("NFC").toLowerCase().replace(/\s+/g, "");
 function searchPattern(q) {
@@ -791,11 +801,12 @@ function runSearch(q, kind, v) {
         ...(comments.get(e.id) || []).map((x) => ["댓글", x]), ...(tags.get(e.id) || []).map((x) => ["태그", x]),
         ["분류", cats.get(e.category_id)], ...(att.get(e.id) || []).map((x) => ["참석자", x.name]), ...(guests.get(e.id) || []).map((x) => ["외부 참석자", x])];
       const h = hit(fields);
-      if (h) out.push({ type: e.kind, id: e.id, title: e.title, date: e.start_date, endDate: e.end_date, time: e.start_time, endTime: e.end_time,
+      if (h) out.push({ type: e.kind, id: e.id, title: e.title, date: e.start_date, endDate: e.end_date, time: e.start_time, endTime: e.end_time, sourceName: sourceName(e),
         categoryId: e.category_id, unitId: e.unit_id, createdBy: e.created_by, attendeeIds: (att.get(e.id) || []).map((x) => x.user_id), ...h });
     }
+    const imported = new Set(searchQ_vis.imported.all(v).map((k) => `${k.cal}|${k.uid_}|${k.inst}`));
     for (const x of searchQ.external.all()) {
-      if (!seeCal.has(x.calendar_id)) continue;
+      if (!seeCal.has(x.calendar_id) || imported.has(`${x.calendar_id}|${x.uid}|${x.inst}`)) continue;
       const h = hit([["제목", x.title], ["장소", x.location], ["설명", x.description]]);
       if (h) out.push({ type: "ext", id: x.id, title: x.title, date: x.start_date, endDate: x.end_date, time: x.start_time, endTime: x.end_time,
         calendarId: x.calendar_id, calendarName: x.calendar_name, color: x.color, categoryId: x.category_id, ext: true, ...h });
@@ -1036,7 +1047,7 @@ async function api(req, res, path) {
   if (path === "/api/events" && method === "GET") {
     const from = param("from"), to = param("to");
     if (!isDate(from) || !isDate(to) || to < from) return send(res, 400, { error: "기간을 확인해 주세요." });
-    return send(res, 200, { events: eventsOut(q.events.all(V, to, from), user), external: q.externalRange.all(extV(V), to, from).map(externalOut) });
+    return send(res, 200, { events: eventsOut(q.events.all(V, to, from), user), external: q.externalRange.all(V, to, from).map(externalOut) });
   }
   if (path === "/api/meetings/choices" && method === "GET") {
     const d = isDate(param("date")) ? param("date") : new Date().toISOString().slice(0, 10);

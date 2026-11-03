@@ -120,6 +120,12 @@ jobs:
           curl -fs -H "Authorization: Bearer $A1" $B/events/$IM | grep -q '"status":"changed"'
           curl -fs -H "Authorization: Bearer $A1" -XPOST $B/events/$IM/source-sync | grep -q '"startTime":"14:00"'
           curl -fs -H "Authorization: Bearer $A2" "$B/events?from=2026-02-01&to=2026-02-28" | grep -q 'WYD 전체 회의'
+          # 넣은 원본은 그 우리 일정이 보이는 사람에게는 숨김 (목록·검색), 우리 일정에는 원본 캘린더 이름
+          EXT() { curl -fs -H "Authorization: Bearer $1" "$B/events?from=2026-02-01&to=2026-02-28" | node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); d.external.length + "/" + d.events.filter(e=>e.sourceName==="WYD").length'; }
+          test "$(EXT "$A1")" = "0/1"
+          test "$(EXT "$A4")" = "1/0"
+          curl -fs -H "Authorization: Bearer $A1" "$B/search?q=WYD" | grep -q '"sourceName":"WYD"'
+          curl -fs -H "Authorization: Bearer $A1" "$B/search?q=WYD" | grep -vq '"type":"ext"'
           curl -fs -H "$H" -XPOST -d '{"userIds":[1],"unitId":3}' $B/admin/users/unit | grep -q '"changed":1'
           curl -fs -H "$H" "$B/units/1?sub=1" | grep -Eq '"memberIds":\[([0-9]+,)*1[],]'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"name":"x","url":"http://127.0.0.1/a.ics"}' $B/admin/calendars)" = 400

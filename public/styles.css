@@ -1120,3 +1120,7 @@ button.mgroup__head:hover { color: var(--ink); }
 .grant-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; width: 100%; }
 .grant-list li { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; background: var(--surface-2); font-size: 13px; }
 .grant-list__name { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 구글 캘린더에서 우리 소속으로 넣은 일정 표시 */
+.src-tag { display: inline-flex; align-items: center; flex: none; height: 16px; padding: 0 5px; border-radius: 4px; background: var(--c3-soft); color: var(--c3); font-size: 10.5px; font-weight: 700; line-height: 1; white-space: nowrap; }
+.mrow__title .src-tag, .sr-main .src-tag { height: 18px; font-size: 11px; }
+.chip .src-tag { margin-right: 3px; }
