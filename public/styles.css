@@ -1111,3 +1111,6 @@ button.mgroup__head:hover { color: var(--ink); }
 .guest-add { display: grid; grid-template-columns: 1fr 1.2fr 1.2fr auto; gap: 6px; }
 .guest-add input { height: 32px; font-size: 13px; padding: 0 8px; min-width: 0; }
 @media (max-width: 640px) { .guest-add { grid-template-columns: 1fr 1fr; } }
+.sr-hidden { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 12px; border-radius: 10px; background: var(--admin-soft); color: var(--admin-text); font-size: 13px; }
+.sr-hidden > span { flex: 1 1 200px; }
+.sr-hidden > .ic { flex: none; }

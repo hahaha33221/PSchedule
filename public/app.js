@@ -2022,6 +2022,8 @@
       const pending = searchData.q !== qv; // 치는 동안에는 이전 결과를 그대로 두고 '찾는 중'만 표시
       const inCat = catFilter(), ours = ourFilter(), inTeam = teamOk();
       const all = searchData.results.filter((r) => inCat(r) && ours(r) && inTeam(r));
+      // 왼쪽 분류·'우리 소속'·팀 거르기로 가려진 결과가 있으면 알려 줌
+      const hidden = searchData.results.length - all.length;
       const count = (k) => (k === "all" ? all.length : all.filter((r) => srGroup(r) === k).length);
       const list = searchKind === "all" ? all : all.filter((r) => srGroup(r) === searchKind);
       const t = today();
@@ -2052,6 +2054,12 @@
           h("span", { text: picked.size ? `가져온 일정 ${picked.size}개 골랐어요` : "넣을 구글 캘린더 일정을 눌러 골라 주세요" }),
           h("button", { class: "btn btn--primary btn--sm", type: "button", disabled: !picked.size, text: "우리 소속으로 넣기", onclick: () => importExternal([...picked.values()]) })
         ]) : null,
+        hidden ? h("div", { class: "sr-hidden" }, [icon("search"), h("span", { text: `거르기 때문에 ${hidden}건이 가려졌어요 (${[state.cat && "분류", state.ourUnit && myUnit() && "우리 소속", pageName === "alldash" && state.allTeam && "팀"].filter(Boolean).join("·") || "거르기"}).` }),
+          h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "거르기 풀고 보기", onclick: () => {
+            state.ourUnit = false; store.set("ps.ours", "0"); state.allTeam = null;
+            if (state.cat) { state.cat = null; store.remove("ps.cat"); drawCatsNav(); }
+            render();
+          } })]) : null,
         searchFiltersOpen ? h("div", { class: "seg seg--sm sr-kinds" }, [["all", "전체"], ["meeting", "회의·일정"], ["task", "할 일"], ["memo", "메모"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String(searchKind === k), onclick: () => { searchKind = k; store.set("ps.searchKind", k); drawBody(); } }, [label, h("span", { class: "count", text: String(count(k)) })]))) : null,
         out.length ? h("div", { class: "card sr-card" }, out) : h("div", { class: "card sr-card" }, h("p", { class: "empty", text: "찾는 내용이 없어요. 다른 낱말로 찾아 보세요." }))
       ]);
@@ -2186,6 +2194,8 @@
 
     page = { name: pageName, reload: load };
     draw();
+    // 다른 화면에 갔다 오거나 분류를 바꿔 화면을 다시 그려도 검색어가 남아 있으면 다시 찾음 ('찾는 중…' 에 멈추지 않게)
+    if (state.search.trim()) quiet(runSearchNow());
     try { await load(); } catch (e) { if (e.status !== 401) bodyBox.replaceChildren(failed(e)); }
   }
 
