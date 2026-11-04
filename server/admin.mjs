@@ -30,7 +30,7 @@ switch (cmd) {
     const rows = db.prepare("SELECT * FROM users ORDER BY role = 'admin' DESC, name").all();
     if (!rows.length) console.log("(없음)");
     for (const u of rows) {
-      console.log([u.login.padEnd(12), ROLE[u.role], u.name.padEnd(8, "　"), ["처음 비밀번호", "직접 변경함", "임시 비밀번호 발급됨"][u.pw_changed] || "?"].join("  "));
+      console.log([u.login.padEnd(12), u.director ? "본부장" : ROLE[u.role], u.name.padEnd(8, "　"), ["처음 비밀번호", "직접 변경함", "임시 비밀번호 발급됨"][u.pw_changed] || "?"].join("  "));
     }
     break;
   }

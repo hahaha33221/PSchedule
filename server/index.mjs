@@ -66,7 +66,7 @@ const q = {
   userByLogin: db.prepare("SELECT * FROM users WHERE login = ?"),
   userById: db.prepare("SELECT * FROM users WHERE id = ?"),
   session: db.prepare(`
-    SELECT u.id, u.login, u.role, u.name, u.unit_id, u.pw_changed, u.pw_hash FROM sessions s
+    SELECT u.id, u.login, u.role, u.director, u.name, u.unit_id, u.pw_changed, u.pw_hash FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ? AND s.expires_at > ?`),
   addSession: db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)"),
@@ -262,7 +262,9 @@ const q = {
   delComments: db.prepare("DELETE FROM comments WHERE target_type = ? AND target_id = ?"),
 
   // 멤버 (관리자)
-  users: db.prepare("SELECT id, login, role, name, unit_id, note, pw_changed, created_at, last_login_at FROM users ORDER BY role = 'admin' DESC, name, id"),
+  setUserDirector: db.prepare("UPDATE users SET director = ? WHERE id = ?"),
+  positionUnitsOf: db.prepare("SELECT DISTINCT unit_id AS id FROM org_positions WHERE user_id = ?"),
+  users: db.prepare("SELECT id, login, role, director, name, unit_id, note, pw_changed, created_at, last_login_at FROM users ORDER BY role = 'admin' DESC, name, id"),
   addUser: db.prepare("INSERT INTO users (login, pw_hash, role, name, unit_id, note) VALUES (?, ?, ?, ?, ?, ?)"),
   setUser: db.prepare("UPDATE users SET name = ?, unit_id = ?, note = ?, role = ? WHERE id = ?"),
   delUser: db.prepare("DELETE FROM users WHERE id = ?"),
@@ -388,7 +390,8 @@ function auth(req) {
 }
 const tokenOf = (req) => String(req.headers.authorization).split(/\s+/)[1];
 
-const publicUser = (u) => ({ id: u.id, login: u.login, role: u.role, name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), mustChangePassword: u.pw_changed !== 1 });
+const roleOut = (u) => (u.director ? "director" : u.role); // 화면·API 에서는 멤버 / 본부장 / 관리자
+const publicUser = (u) => ({ id: u.id, login: u.login, role: roleOut(u), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), mustChangePassword: u.pw_changed !== 1 });
 const teamOut = () => q.team.all().map((u) => ({ id: u.id, name: u.name, unitId: u.unit_id }));
 
 // 입력 정리
@@ -472,8 +475,9 @@ function unitUserIds(scopeIds) {
  * 사람 = 화면의 personKey 와 같음: 연결한 계정 → 동명이인 구분(person) → 이름
  * - teams: 그 사람의 조직도 자리·계정 소속이 속한 '연락처 비공개' 조직 (그 조직 아래 팀도 포함)
  * - hide: teams + 같은 이름의 연결 안 된 자리가 비공개 조직이면 그것도 (계정 연결이 안 돼 있어도 새지 않게)
- * 보이는 규칙: admin 은 전부, 나는 항상. 비공개 조직 사람은 같은 비공개 조직 사람에게만,
- * 그 밖의 사람은 비공개 조직에 속하지 않은 사람에게만. 상위 조직·'추가로 볼 수 있는 조직'은 적용하지 않음 */
+ * 보이는 규칙: admin 은 전부, 나는 항상, 본부장은 맡은 조직과 그 아래 사람 전부 (비공개 조직 포함).
+ * 비공개 조직 사람은 같은 비공개 조직 사람에게만, 그 밖의 사람은 비공개 조직에 속하지 않은 사람에게만.
+ * 본부장 권한이 없는 상위 조직·'추가로 볼 수 있는 조직'은 적용하지 않음 */
 function contactPeople() {
   const units = new Map(q.units.all().map((u) => [u.id, u]));
   const privateOf = (id) => {
@@ -509,17 +513,19 @@ function contactPeople() {
   }
   return people;
 }
-function contactVisible(viewer, me, who) {
+function contactVisible(viewer, me, who, scope) {
   if (viewer.role === "admin" || who.user?.id === viewer.id) return true;
+  if (who.positions.some((p) => scope.has(p.unit_id)) || scope.has(who.user?.unit_id)) return true;
   return who.hide.size ? [...who.hide].some((id) => me.teams.has(id)) : me.teams.size === 0;
 }
 const contactOut = (who) => ({ mobile: who.contact?.mobile || "", office: who.contact?.office || "", email: who.contact?.email || "" });
 function contactsFor(viewer) {
   const people = contactPeople();
   const me = people.get("u" + viewer.id);
+  const scope = directorScope(viewer);
   const rows = [];
   for (const who of people.values()) {
-    if (!contactVisible(viewer, me, who)) continue;
+    if (!contactVisible(viewer, me, who, scope)) continue;
     const mine = who.user?.id === viewer.id;
     const ref = who.user ? "u" + who.user.id : "p" + who.positions[0].id;
     for (const p of who.positions) rows.push({ ref, name: p.name, title: p.title, unitId: p.unit_id, sort: p.sort, mine, ...contactOut(who) });
@@ -812,8 +818,16 @@ function memoInput(b, cur, v) {
 /* ----- 보이는 범위: 요청한 사람 기준 조건 값 ----- */
 // mine: 관리자도 '나의 대시보드'에서는 멤버와 같은 규칙으로
 // 볼 수 있는 조직: 내 소속과 그 아래 + 관리자가 추가로 지정한 조직 (sub 면 그 아래까지, 아니면 그 조직만)
+// 본부장이 맡은 조직과 그 아래: 계정 소속 + 조직도에 연결한 자리
+function directorScope(user) {
+  if (!user.director) return new Set();
+  const roots = q.positionUnitsOf.all(user.id).map((x) => x.id);
+  if (user.unit_id && q.unit.get(user.unit_id)) roots.push(user.unit_id);
+  return new Set(roots.flatMap((id) => unitSubtree(id)));
+}
 function visibleUnits(user) {
   const set = new Set(user.unit_id && q.unit.get(user.unit_id) ? unitSubtree(user.unit_id) : []);
+  for (const id of directorScope(user)) set.add(id);
   for (const g of q.viewUnits.all(user.id)) for (const id of g.sub ? unitSubtree(g.unit_id) : [g.unit_id]) set.add(id);
   return [...set];
 }
@@ -1461,7 +1475,7 @@ async function api(req, res, path) {
     if (path === "/api/admin/users" && method === "GET") {
       return send(res, 200, {
         users: q.users.all().map((u) => ({
-          id: u.id, login: u.login, role: u.role, name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), note: u.note, pwChanged: u.pw_changed === 1,
+          id: u.id, login: u.login, role: roleOut(u), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), note: u.note, pwChanged: u.pw_changed === 1,
           createdAt: u.created_at, lastLoginAt: u.last_login_at, me: u.id === user.id
         }))
       });
@@ -1473,9 +1487,11 @@ async function api(req, res, path) {
       const name = text(b.name, LIMITS.name, "이름", true);
       const unit = unitIdOrNull(b.unitId);
       const role = b.role === "admin" ? "admin" : "member";
+      const director = b.role === "director" ? 1 : 0;
       if (q.userByLogin.get(login)) throw bad("이미 있는 아이디예요.", "login");
       const password = tempPassword();
-      q.addUser.run(login, hashPassword(password), role, name, unit, text(b.note, LIMITS.userNote, "메모"));
+      const added = q.addUser.run(login, hashPassword(password), role, name, unit, text(b.note, LIMITS.userNote, "메모"));
+      if (director) q.setUserDirector.run(1, Number(added.lastInsertRowid));
       console.log(`[admin] ${user.login} → ${login} 계정 발급`);
       return send(res, 201, { login, name, password });
     }
@@ -1715,7 +1731,8 @@ async function api(req, res, path) {
         const name = b.name === undefined ? target.name : text(b.name, LIMITS.name, "이름", true);
         const unit = has(b, "unitId") ? unitIdOrNull(b.unitId) : target.unit_id;
         const note = has(b, "note") ? text(b.note, LIMITS.userNote, "메모") : target.note;
-        const role = b.role === "admin" || b.role === "member" ? b.role : target.role;
+        const role = b.role === "admin" ? "admin" : b.role === "member" || b.role === "director" ? "member" : target.role;
+        const director = b.role === "director" ? 1 : b.role === "admin" || b.role === "member" ? 0 : target.director;
         if (lastAdmin && role !== "admin") throw bad("관리자가 한 명은 있어야 해요.");
         // 추가로 볼 수 있는 조직: [{ unitId, sub }] 로 통째로 바꿈
         let grants = null;
@@ -1725,6 +1742,7 @@ async function api(req, res, path) {
         }
         inTx(() => {
           q.setUser.run(name, unit, note, role, target.id);
+          q.setUserDirector.run(director, target.id);
           if (grants) { q.clearViewUnits.run(target.id); for (const g of grants) q.addViewUnit.run(target.id, g.unit, g.sub); }
         });
         if (grants) console.log(`[admin] ${user.login} → ${target.login} 추가로 볼 조직 ${grants.length}개`);

@@ -2009,7 +2009,8 @@
         const extra = viewGrantsText(state.user.viewUnits);
         fill(topBox, h("div", { class: "scopebar" }, [icon("org"), h("span", {}, [h("strong", { text: "보이는 범위: " }),
           u ? `${unitLabel(u)}${unitChildren(u).length ? " (아래 팀 포함)" : ""}${extra ? ` + 추가로 ${extra}` : ""} + 내가 관련된 것`
-            : extra ? `${extra} + 내가 관련된 것` : "내가 만들었거나 참석·담당한 것만 (아직 소속이 없어요)"]),
+            : extra ? `${extra} + 내가 관련된 것` : "내가 만들었거나 참석·담당한 것만 (아직 소속이 없어요)",
+          state.user.role === "director" ? " · 본부장 권한: 맡은 조직과 그 아래 조직 포함" : null]),
           isAdmin() ? h("a", { class: "btn btn--admin btn--sm", href: "#/alldash" }, [icon("lock"), "전체 대시보드"]) : null]));
         return;
       }
@@ -2561,7 +2562,7 @@
           h("td", {}, h("span", { class: "person person--stack" }, [avatar(u.id, "sm"), h("span", {}, [h("strong", { text: u.name }), u.me ? h("span", { class: "badge", text: "나" }) : null, u.note ? h("small", { class: "muted person__note", text: u.note }) : null])])),
           h("td", {}, [unitBtn, (u.viewUnits || []).length ? h("small", { class: "muted member-extra", title: "관리자가 추가로 지정한 볼 수 있는 조직", text: `+ 추가로 봄: ${viewGrantsText(u.viewUnits)}` }) : null]),
           h("td", { class: "mono", text: u.login }),
-          h("td", {}, u.role === "admin" ? adminBadge("관리자") : h("span", { class: "badge", text: "멤버" })),
+          h("td", {}, u.role === "admin" ? adminBadge("관리자") : h("span", { class: "badge", text: u.role === "director" ? "본부장" : "멤버" })),
           h("td", { class: "muted" }, u.pwChanged ? "변경함" : h("span", { class: "warn", text: "임시 비밀번호" })),
           h("td", { class: "muted", text: u.lastLoginAt ? ago(u.lastLoginAt) : "아직 없음" }),
           h("td", { class: "td-actions" }, [
@@ -2626,12 +2627,12 @@
     const name = h("input", { maxlength: "20", autofocus: true, placeholder: "예: 김지현" });
     let unitId = memberFilter.unit && unitOf(memberFilter.unit) ? memberFilter.unit : null;
     const login = h("input", { maxlength: "20", autocapitalize: "none", spellcheck: "false", placeholder: "예: jihyun" });
-    const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "admin", text: "관리자" })]);
+    const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "director", text: "본부장" }), h("option", { value: "admin", text: "관리자" })]);
     const submit = h("button", { class: "btn btn--admin", type: "submit", text: "발급" });
     const form = h("form", { class: "stack", novalidate: true }, [
       h("div", { class: "row2" }, [field("이름", name), field("소속", unitButton(unitId, (id) => { unitId = id; }), "조직도에서 고르기 (나중에 정해도 돼요)")]),
       field("아이디", login, "영문 소문자·숫자·._- 3~20자"),
-      field("권한", role, "관리자는 조직도·멤버·분류·캘린더·백업 관리와 공지 쓰기를 할 수 있어요"),
+      field("권한", role, "관리자는 조직도·멤버·분류·캘린더·백업 관리와 공지 쓰기를 할 수 있어요. 본부장은 맡은 조직(소속·연결한 조직도 자리)과 그 아래 조직의 회의·할 일·메모·연락처를 봐요. 관리 기능은 없어요"),
       err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), submit])
     ]);
@@ -2670,7 +2671,7 @@
     }
     drawGrants();
     const note = h("input", { value: u.note || "", maxlength: "200", placeholder: "예: 예전 직책, 연락 메모" });
-    const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "admin", text: "관리자" })]);
+    const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "director", text: "본부장" }), h("option", { value: "admin", text: "관리자" })]);
     role.value = u.role;
     const submit = h("button", { class: "btn btn--admin", type: "submit", text: "저장" });
     const form = h("form", { class: "stack", novalidate: true }, [
@@ -2678,7 +2679,7 @@
       // (field 는 <label> 이라 안에 체크 상자가 여럿이면 엉뚱한 것이 눌려서 div 로)
       h("div", { class: "field" }, [h("span", { class: "field__label", text: "추가로 볼 수 있는 조직" }), grantsBox, h("span", { class: "field__hint", text: "소속 말고도 이 조직의 회의·할 일·메모를 봐요. '아래 팀 포함'을 끄면 그 조직(부·본부 직속)만 봐요." })]),
       field("메모", note, "관리자만 보는 메모예요. 예전 '직책'은 여기로 옮겨 두었어요."),
-      field("권한", role), err,
+      field("권한", role, "본부장은 맡은 조직(소속·연결한 조직도 자리)과 그 아래 조직의 회의·할 일·메모·연락처를 봐요. 관리 기능은 없어요"), err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), submit])
     ]);
     form.addEventListener("submit", (e) => {

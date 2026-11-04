@@ -164,6 +164,25 @@ jobs:
           curl -fs -H "$H" -XPATCH -d "$GRANT" $B/admin/users/$UA >/dev/null
           nosee "$A1" 010-0000-0005
           curl -fs -H "$H" -XPATCH -d '{"viewUnits":[]}' $B/admin/users/$UA >/dev/null
+          # 본부장: 맡은 조직과 그 아래는 회의·연락처(비공개 조직 포함)를 보고, 맡지 않은 비공개 조직은 못 봄, 관리 기능·남의 연락처 수정은 안 됨
+          USR() { curl -fs -H "$H" $B/admin/users | node -e 'const d=JSON.parse(require("fs").readFileSync(0));console.log((d.users||d).find(u=>u.login===process.argv[1]).id)' "$1"; }
+          UC=$(USR userc); UN=$(USR usern)
+          FIN=$(curl -fs -H "$H" $B/org | node -e 'const d=JSON.parse(require("fs").readFileSync(0));console.log(d.units.find(u=>u.name==="기부후원팀").parentId)')
+          curl -fs -H "$H" -XPATCH -d '{"role":"director"}' $B/admin/users/$UC >/dev/null
+          curl -fs -H "$(bearer "$A3")" $B/me | grep -q '"role":"director"'
+          see "$A3" 010-0000-0005; see "$A3" 010-0000-0007; see "$A3" 010-0000-0001; nosee "$A3" 010-0000-0006
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A3")" $B/admin/users)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A3")" -XPUT -d '{"mobile":"1"}' $B/contacts/u$UA)" = 403
+          curl -fs -H "$H" -XPATCH -d '{"role":"member"}' $B/admin/users/$UC >/dev/null; nosee "$A3" 010-0000-0005
+          # 소속이 없어도 조직도 자리를 연결하면 그 조직 아래를 봄
+          EV=$(curl -fs -H "$(bearer "$A6")" -XPOST -d '{"title":"후원 회의","startDate":"2026-02-02"}' $B/events | node -pe 'JSON.parse(require("fs").readFileSync(0)).event.id')
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A4")" $B/events/$EV)" = 404
+          J="{\"unitId\":$FIN,\"title\":\"부장\",\"name\":\"usern\",\"userId\":$UN}"; PD=$(curl -fs -H "$H" -XPOST -d "$J" $B/admin/org/positions | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+          curl -fs -H "$H" -XPATCH -d '{"role":"director"}' $B/admin/users/$UN >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A4")" $B/events/$EV)" = 200
+          see "$A4" 010-0000-0006; nosee "$A4" 010-0000-0005
+          curl -fs -H "$H" -XPATCH -d '{"role":"member"}' $B/admin/users/$UN >/dev/null
+          curl -fs -H "$H" -XDELETE $B/admin/org/positions/$PD >/dev/null
           # 남의 것 수정 403, 잘못된 값 400
           UA_REF=u$UA
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A5")" -XPUT -d '{"mobile":"1"}' $B/contacts/$UA_REF)" = 403
