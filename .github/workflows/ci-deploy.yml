@@ -183,6 +183,25 @@ jobs:
           see "$A4" 010-0000-0006; nosee "$A4" 010-0000-0005
           curl -fs -H "$H" -XPATCH -d '{"role":"member"}' $B/admin/users/$UN >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/org/positions/$PD >/dev/null
+          # 외부 연락처·카테고리: 관리자만 입력, 로그인한 사람은 모두 봄, 카테고리를 지워도 연락처는 남음
+          CATS=$(curl -fs -H "$H" -XPOST -d '{"name":"협력 업체"}' $B/admin/contact-categories)
+          CAT=$(echo "$CATS" | node -pe 'JSON.parse(require("fs").readFileSync(0)).categories[0].id')
+          J="{\"name\":\"외부사람\",\"org\":\"가나회사\",\"categoryId\":$CAT,\"mobile\":\"010-0000-0011\"}"
+          curl -fs -H "$H" -XPOST -d "$J" $B/admin/external-contacts >/dev/null
+          see "$A1" 010-0000-0011; see "$A5" 010-0000-0011; see "$A6" 010-0000-0011
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPOST -d "$J" $B/admin/external-contacts)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPUT -d '{"mobile":"1"}' $B/contacts/e1)" = 404
+          curl -fs -H "$H" -XDELETE $B/admin/contact-categories/$CAT | grep -q '"categoryId":null'
+          # 일괄 입력: 동명이인은 구역으로 나누고, 이미 있는 값은 유지, 못 찾으면 안 넣음, 번호는 출력 안 함
+          addpos $FB 김동명 >/dev/null; addpos $LG 김동명 >/dev/null
+          IMP=$'식음료\tFr.김동명\t팀장\t100\t010-0000-0021\n숙박\t김동명\t매니저\t\t010-0000-0022\n\t운영자리\t\t\t010-0000-0023\n\t일반자리\t\t\t010-0000-0024\n\t없는사람\t\t\t010-0000-0025'
+          ADM() { DATA_DIR=/tmp/ps node --disable-warning=ExperimentalWarning server/admin.mjs "$@"; }
+          PRE=$(echo "$IMP" | ADM contacts-import --dry); echo "$PRE" | grep -q '미리보기'; echo "$PRE" | grep -q '없는사람'
+          if echo "$PRE" | grep -q '010-0000'; then echo "번호가 출력돼요"; exit 1; fi
+          if curl -fs -H "$H" $B/contacts | grep -q 010-0000-0021; then echo "미리보기가 저장했어요"; exit 1; fi
+          echo "$IMP" | ADM contacts-import | grep -q '입력 4명'
+          see "$A1" 010-0000-0021; see "$A1" 010-0000-0022; nosee "$A1" 010-0000-0023; see "$A5" 010-0000-0007; nosee "$A5" 010-0000-0023; see "$A1" 010-0000-0024
+          if curl -fs -H "$H" $B/contacts | grep -q 010-0000-0025; then echo "못 찾은 사람이 들어갔어요"; exit 1; fi
           # 남의 것 수정 403, 잘못된 값 400
           UA_REF=u$UA
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A5")" -XPUT -d '{"mobile":"1"}' $B/contacts/$UA_REF)" = 403

@@ -15,7 +15,7 @@ import { createServer } from "node:http";
 import { createReadStream, statSync, watch } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import crypto from "node:crypto";
-import { CONTACTS_PRIVATE_DEFAULT, openDb, ensureAdmin, verifyPassword, hashPassword, tempPassword } from "./db.mjs";
+import { CONTACTS_PRIVATE_DEFAULT, cleanContact, openDb, ensureAdmin, verifyPassword, hashPassword, tempPassword } from "./db.mjs";
 import { createCalendarSync, checkUrl, maskUrl } from "./calendars.mjs";
 import { startAutoBackup, listBackups, backupNow, pruneBackups } from "./backup.mjs";
 
@@ -99,6 +99,17 @@ const q = {
   addContact: db.prepare("INSERT INTO contacts (position_id, user_id, mobile, office, email) VALUES (?, ?, ?, ?, ?)"),
   delContactOfPosition: db.prepare("DELETE FROM contacts WHERE position_id = ?"),
   delContactOfUser: db.prepare("DELETE FROM contacts WHERE user_id = ?"),
+  contactCategories: db.prepare("SELECT id, name FROM contact_categories ORDER BY sort, id"),
+  contactCategory: db.prepare("SELECT * FROM contact_categories WHERE id = ?"),
+  contactCategoryByName: db.prepare("SELECT id FROM contact_categories WHERE name = ?"),
+  addContactCategory: db.prepare("INSERT INTO contact_categories (name, sort) VALUES (?, (SELECT coalesce(max(sort), 0) + 1 FROM contact_categories))"),
+  setContactCategory: db.prepare("UPDATE contact_categories SET name = ? WHERE id = ?"),
+  delContactCategory: db.prepare("DELETE FROM contact_categories WHERE id = ?"),
+  externals: db.prepare("SELECT * FROM external_contacts ORDER BY name, id"),
+  external: db.prepare("SELECT * FROM external_contacts WHERE id = ?"),
+  addExternal: db.prepare("INSERT INTO external_contacts (category_id, name, org, title, mobile, office, email) VALUES (?, ?, ?, ?, ?, ?, ?)"),
+  setExternal: db.prepare("UPDATE external_contacts SET category_id = ?, name = ?, org = ?, title = ?, mobile = ?, office = ?, email = ?, updated_at = datetime('now') WHERE id = ?"),
+  delExternal: db.prepare("DELETE FROM external_contacts WHERE id = ?"),
   unit: db.prepare("SELECT * FROM org_units WHERE id = ?"),
   unitByName: db.prepare("SELECT * FROM org_units WHERE name = ? AND parent_id IS ?"),
   unitSiblings: db.prepare("SELECT * FROM org_units WHERE parent_id IS ? ORDER BY sort, id"),
@@ -533,22 +544,23 @@ function contactsFor(viewer) {
     if (!who.positions.length && (who.user.role !== "admin" || mine || who.contact)) rows.push({ ref, name: who.user.name, title: "", unitId: who.user.unit_id, sort: Infinity, mine, ...contactOut(who) });
   }
   rows.sort((a, b) => a.sort - b.sort);
-  const out = { rows: rows.map(({ sort, ...r }) => r), me: { ref: "u" + viewer.id, ...contactOut(me) } };
+  // 외부 조직 연락처: 로그인한 사람 모두 (관리자가 입력)
+  const external = q.externals.all().map((e) => ({ ref: "e" + e.id, external: true, categoryId: e.category_id, org: e.org, name: e.name, title: e.title, unitId: null, mine: false, mobile: e.mobile, office: e.office, email: e.email }));
+  const out = { rows: [...rows.map(({ sort, ...r }) => r), ...external], categories: q.contactCategories.all(), me: { ref: "u" + viewer.id, ...contactOut(me) } };
   if (viewer.role === "admin") {
     const isPrivate = (id) => { for (let u = q.unit.get(id); u; u = u.parent_id ? q.unit.get(u.parent_id) : null) if (u.contacts_private) return true; return false; };
     out.mixed = [...people.values()].filter((w) => w.teams.size && w.positions.some((p) => !isPrivate(p.unit_id))).map((w) => w.positions[0].name); // 비공개 조직 + 일반 조직 겸직
   }
   return out;
 }
+function externalInput(b) {
+  const category = idOrNull(b.categoryId);
+  if (category && !q.contactCategory.get(category)) throw bad("카테고리를 찾을 수 없어요.");
+  const v = contactInput(b);
+  return [category, text(b.name, 40, "이름", true), text(b.org, 60, "소속"), text(b.title, 40, "직함"), v.mobile, v.office, v.email];
+}
 function contactInput(b) {
-  const phone = (v, label) => {
-    const s = String(v ?? "").trim();
-    if (s.length > 30 || !/^[0-9+()\-.\s,/#~]*(내선\s*[0-9]*)?$/.test(s)) throw bad(`${label} 번호를 확인해 주세요. 숫자와 - 만 써 주세요.`);
-    return s;
-  };
-  const email = String(b.email ?? "").trim();
-  if (email.length > 120 || (email && !/^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/.test(email))) throw bad("이메일 주소를 확인해 주세요.");
-  return { mobile: phone(b.mobile, "휴대전화"), office: phone(b.office, "사무실 전화"), email };
+  try { return cleanContact(b); } catch (e) { throw bad(e.message); }
 }
 // 한 사람의 값을 그 사람의 자리마다 저장 (자리가 없으면 계정에)
 function saveContact(who, v) {
@@ -1643,6 +1655,41 @@ async function api(req, res, path) {
     }
 
     /* 조직도 */
+    /* 연락처 카테고리·외부 연락처 (값은 로그에 남기지 않음) */
+    if (path === "/api/admin/contact-categories" && method === "POST") {
+      const name = text((await readJson(req)).name, 30, "카테고리 이름", true);
+      if (q.contactCategoryByName.get(name)) throw bad("이미 있는 카테고리예요.");
+      q.addContactCategory.run(name);
+      return send(res, 201, contactsFor(user));
+    }
+    const ccm = path.match(/^\/api\/admin\/contact-categories\/(\d+)$/);
+    if (ccm) {
+      const c = q.contactCategory.get(Number(ccm[1]));
+      if (!c) return send(res, 404, { error: "카테고리를 찾을 수 없어요." });
+      if (method === "PATCH") {
+        const name = text((await readJson(req)).name, 30, "카테고리 이름", true);
+        const same = q.contactCategoryByName.get(name);
+        if (same && same.id !== c.id) throw bad("이미 있는 카테고리예요.");
+        q.setContactCategory.run(name, c.id);
+        return send(res, 200, contactsFor(user));
+      }
+      if (method === "DELETE") { q.delContactCategory.run(c.id); return send(res, 200, contactsFor(user)); } // 연락처는 미분류로 남음
+      return send(res, 405, { error: "Method not allowed" });
+    }
+    if (path === "/api/admin/external-contacts" && method === "POST") {
+      q.addExternal.run(...externalInput(await readJson(req)));
+      console.log(`[admin] ${user.login} → 외부 연락처 추가`);
+      return send(res, 201, contactsFor(user));
+    }
+    const exm = path.match(/^\/api\/admin\/external-contacts\/(\d+)$/);
+    if (exm) {
+      const e = q.external.get(Number(exm[1]));
+      if (!e) return send(res, 404, { error: "연락처를 찾을 수 없어요." });
+      if (method === "PATCH") { q.setExternal.run(...externalInput(await readJson(req)), e.id); return send(res, 200, contactsFor(user)); }
+      if (method === "DELETE") { q.delExternal.run(e.id); return send(res, 200, contactsFor(user)); }
+      return send(res, 405, { error: "Method not allowed" });
+    }
+
     if (path === "/api/admin/units" && method === "POST") {
       const b = await readJson(req);
       const lead = idOrNull(b.leadId);

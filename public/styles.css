@@ -1163,8 +1163,6 @@ button.mgroup__head:hover { color: var(--ink); }
 .team-legend__item { display: inline-flex; align-items: center; gap: 3px; color: var(--ink-2); }
 
 /* 연락처 */
-.side__link--sub { padding-left: 28px; font-size: 13.5px; }
-.side__link--sub .ic svg { width: 16px; height: 16px; }
 .contact-me, .contact-admin { margin-bottom: 12px; }
 .contact-me { padding: 14px 16px; }
 .contact-admin p { margin: 2px 6px 4px; color: var(--admin-text); }
@@ -1175,8 +1173,10 @@ button.mgroup__head:hover { color: var(--ink); }
 .contacts tr.is-mine td { background: var(--primary-soft); }
 .contacts__edit { text-align: right; }
 .check-row { display: flex; align-items: center; gap: 7px; }
+.contact-cat { display: flex; gap: 8px; align-items: center; }
+.contact-cat input { flex: 1; min-width: 0; }
+.contact-admin__btns { margin: 4px 6px; justify-content: flex-start; }
 #dialog .contact-form { grid-template-columns: 1fr; }
-@media (min-width: 901px) { .side-mini .side__link--sub { padding-left: 0; } }
 @media (max-width: 900px) {
   .contact-form { grid-template-columns: 1fr; }
   .contacts thead { display: none; }

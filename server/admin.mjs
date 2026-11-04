@@ -11,12 +11,14 @@
  *   node server/admin.mjs view-remove <아이디> "<조직 경로>"
  *   node server/admin.mjs notice-add "<제목>" [pin] < 본문.txt    공지 올리기 (본문은 표준 입력, 작성자는 관리자 계정)
  *   node server/admin.mjs backups                           백업 목록
+ *   node server/admin.mjs contacts-import [--dry] < 명단.tsv  연락처 일괄 입력 (구역 | 이름 | 직함 | 내선 | 휴대폰, 조직도 자리의 이름으로 찾음)
+ *     이미 값이 있으면 그대로 둠. 조직도에서 못 찾으면 넣지 않고 이름만 알려 줌. 번호는 출력하지 않음
  *
  * VPS 에서:  ssh root@srv1809055.hstgr.cloud 'cd /opt/pschedule && docker compose exec -T api node --disable-warning=ExperimentalWarning server/admin.mjs list'
  */
 import { join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
-import { openDb, hashPassword, tempPassword } from "./db.mjs";
+import { openDb, hashPassword, tempPassword, cleanContact } from "./db.mjs";
 import { backupNow, listBackups } from "./backup.mjs";
 
 const DATA_DIR = resolve(process.env.DATA_DIR || "data");
@@ -78,6 +80,55 @@ switch (cmd) {
     const grants = db.prepare("SELECT unit_id, sub FROM user_view_units WHERE user_id = ? ORDER BY rowid").all(u.id);
     if (!grants.length) console.log("추가로 볼 조직: (없음)");
     for (const g of grants) console.log(`추가로 볼 조직: ${label(g.unit_id)} ${g.sub ? "(아래 팀 포함)" : "(그 조직만)"}`);
+    break;
+  }
+
+  case "contacts-import": {
+    const dry = args.includes("--dry");
+    const rows = readFileSync(0, "utf8").split(/\r?\n/).filter((l) => l.trim()).map((l) => { const [hint, name, , office, mobile] = l.split("\t"); return { hint: (hint || "").trim(), name: (name || "").trim(), office: office || "", mobile: mobile || "" }; });
+    const plain = (n) => String(n).normalize("NFC").replace(/^(fr|sr|br)\.\s*/i, "").replace(/\s+/g, "").toLowerCase();
+    const units = new Map(db.prepare("SELECT id, parent_id, name, contacts_private FROM org_units").all().map((u) => [u.id, u]));
+    const chain = (id) => { const out = []; for (let u = units.get(id); u; u = u.parent_id ? units.get(u.parent_id) : null) out.push(u); return out; };
+    const positions = db.prepare("SELECT * FROM org_positions WHERE name != ''").all();
+    const count = new Map();
+    for (const r of rows) count.set(plain(r.name), (count.get(plain(r.name)) || 0) + 1);
+    const result = { done: 0, kept: 0, inPrivate: 0, missing: [], unclear: [], invalid: [], split: [], seats: [] };
+    db.exec("BEGIN");
+    try {
+      for (const r of rows) {
+        let cand = positions.filter((p) => plain(p.name) === plain(r.name));
+        if (!cand.length) { result.missing.push(r.name); continue; }
+        // 명단에 같은 이름이 둘 이상: 구역으로 자리를 골라 다른 사람으로 나눔
+        const namesake = count.get(plain(r.name)) > 1;
+        if (namesake) cand = cand.filter((p) => r.hint && chain(p.unit_id).some((u) => u.name.includes(r.hint)));
+        if (namesake && cand.length !== 1) { result.unclear.push(r.name); continue; }
+        let v;
+        try { v = cleanContact({ office: r.office, mobile: r.mobile }); } catch { result.invalid.push(r.name); continue; }
+        const p = cand[0];
+        if (namesake && !p.user_id && !p.person.includes("#")) {
+          p.person = `${p.name}#${p.id}`;
+          result.split.push(r.name);
+          if (!dry) db.prepare("UPDATE org_positions SET person = ? WHERE id = ?").run(p.person, p.id);
+        }
+        // 같은 사람의 자리 전부 (겸직), 이미 입력한 값은 유지
+        const seats = p.user_id ? positions.filter((x) => x.user_id === p.user_id) : namesake ? [p] : positions.filter((x) => !x.user_id && (x.person || x.name) === (p.person || p.name));
+        if (seats.length > 1) result.seats.push(r.name);
+        const had = seats.map((x) => db.prepare("SELECT * FROM contacts WHERE position_id = ?").get(x.id)).find(Boolean) || (p.user_id && db.prepare("SELECT * FROM contacts WHERE user_id = ?").get(p.user_id)) || {};
+        for (const k of ["mobile", "office"]) if (had[k] && had[k] !== v[k]) result.kept++;
+        const save = { mobile: had.mobile || v.mobile, office: had.office || v.office, email: had.email || "" };
+        if (seats.some((x) => chain(x.unit_id).some((u) => u.contacts_private))) result.inPrivate++;
+        result.done++;
+        if (dry) continue;
+        for (const x of seats) {
+          db.prepare("DELETE FROM contacts WHERE position_id = ?").run(x.id);
+          db.prepare("INSERT INTO contacts (position_id, mobile, office, email) VALUES (?, ?, ?, ?)").run(x.id, save.mobile, save.office, save.email);
+        }
+        if (p.user_id) db.prepare("DELETE FROM contacts WHERE user_id = ?").run(p.user_id);
+      }
+      db.exec(dry ? "ROLLBACK" : "COMMIT");
+    } catch (e) { db.exec("ROLLBACK"); throw e; }
+    console.log(`${dry ? "[미리보기, 저장 안 함] " : ""}명단 ${rows.length}줄 → 입력 ${result.done}명 (비공개 조직 ${result.inPrivate}명), 이미 있는 값이라 유지 ${result.kept}칸`);
+    for (const [label, l] of [["조직도에서 못 찾음 (넣지 않음)", result.missing], ["같은 이름인데 자리를 못 고름 (넣지 않음)", result.unclear], ["번호 형식 오류 (넣지 않음)", result.invalid], ["동명이인으로 나눔", result.split], ["겸직 (자리마다 같은 값)", result.seats]]) if (l.length) console.log(`${label}: ${l.join(", ")}`);
     break;
   }
 

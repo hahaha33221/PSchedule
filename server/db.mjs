@@ -70,6 +70,23 @@ export function openDb(file) {
       email       TEXT NOT NULL DEFAULT '',
       updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    -- 외부 조직 연락처: 관리자가 입력, 카테고리로 묶음
+    CREATE TABLE IF NOT EXISTS contact_categories (
+      id   INTEGER PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      sort INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS external_contacts (
+      id          INTEGER PRIMARY KEY,
+      category_id INTEGER REFERENCES contact_categories(id) ON DELETE SET NULL,
+      name        TEXT NOT NULL,
+      org         TEXT NOT NULL DEFAULT '',
+      title       TEXT NOT NULL DEFAULT '',
+      mobile      TEXT NOT NULL DEFAULT '',
+      office      TEXT NOT NULL DEFAULT '',
+      email       TEXT NOT NULL DEFAULT '',
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     -- 공지를 읽은 사람 (사이드바 '공지' 옆 안 읽은 숫자)
     CREATE TABLE IF NOT EXISTS notice_reads (
@@ -242,6 +259,17 @@ export function openDb(file) {
 
 // 구글 캘린더에서 HTML 그대로 들어온 글 정리 (가져온 일정, 그리고 거기서 넣은 우리 일정 + 비교용 원본 내용)
 export const CONTACTS_PRIVATE_DEFAULT = ["운영총괄팀", "기부후원팀"];
+// 연락처 값 검사 (화면 저장·일괄 입력 공통). 오류 문구에 값을 넣지 않음
+export function cleanContact(b) {
+  const phone = (v, label) => {
+    const s = String(v ?? "").trim();
+    if (s.length > 30 || !/^[0-9+()\-.\s,/#~]*(내선\s*[0-9]*)?$/.test(s)) throw new Error(`${label} 번호를 확인해 주세요. 숫자와 - 만 써 주세요.`);
+    return s;
+  };
+  const email = String(b.email ?? "").trim();
+  if (email.length > 120 || (email && !/^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/.test(email))) throw new Error("이메일 주소를 확인해 주세요.");
+  return { mobile: phone(b.mobile, "휴대전화"), office: phone(b.office, "사무실 전화"), email };
+}
 
 function cleanCalendarHtml(db) {
   const dirty = "(title LIKE '%<%>%' OR description LIKE '%<%>%' OR title LIKE '%&%;%' OR description LIKE '%&%;%')";
