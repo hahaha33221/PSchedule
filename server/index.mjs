@@ -15,7 +15,7 @@ import { createServer } from "node:http";
 import { createReadStream, statSync, watch } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import crypto from "node:crypto";
-import { openDb, ensureAdmin, verifyPassword, hashPassword, tempPassword } from "./db.mjs";
+import { CONTACTS_PRIVATE_DEFAULT, openDb, ensureAdmin, verifyPassword, hashPassword, tempPassword } from "./db.mjs";
 import { createCalendarSync, checkUrl, maskUrl } from "./calendars.mjs";
 import { startAutoBackup, listBackups, backupNow, pruneBackups } from "./backup.mjs";
 
@@ -92,7 +92,13 @@ const q = {
   delTag: db.prepare("DELETE FROM tags WHERE id = ?"),
 
   // 조직도
-  units: db.prepare("SELECT id, parent_id, name, short_name, lead_id FROM org_units ORDER BY sort, id"),
+  units: db.prepare("SELECT id, parent_id, name, short_name, lead_id, contacts_private FROM org_units ORDER BY sort, id"),
+  setUnitContactsPrivate: db.prepare("UPDATE org_units SET contacts_private = ? WHERE id = ?"),
+  contactUsers: db.prepare("SELECT id, name, role, unit_id FROM users ORDER BY id"),
+  contacts: db.prepare("SELECT position_id, user_id, mobile, office, email FROM contacts ORDER BY updated_at DESC, id DESC"),
+  addContact: db.prepare("INSERT INTO contacts (position_id, user_id, mobile, office, email) VALUES (?, ?, ?, ?, ?)"),
+  delContactOfPosition: db.prepare("DELETE FROM contacts WHERE position_id = ?"),
+  delContactOfUser: db.prepare("DELETE FROM contacts WHERE user_id = ?"),
   unit: db.prepare("SELECT * FROM org_units WHERE id = ?"),
   unitByName: db.prepare("SELECT * FROM org_units WHERE name = ? AND parent_id IS ?"),
   unitSiblings: db.prepare("SELECT * FROM org_units WHERE parent_id IS ? ORDER BY sort, id"),
@@ -412,7 +418,7 @@ function inTx(fn) {
 }
 
 /* ----- 조직도 ----- */
-const unitsOut = () => q.units.all().map((u) => ({ id: u.id, parentId: u.parent_id, name: u.name, short: u.short_name, leadId: u.lead_id }));
+const unitsOut = () => q.units.all().map((u) => ({ id: u.id, parentId: u.parent_id, name: u.name, short: u.short_name, leadId: u.lead_id, contactsPrivate: !!u.contacts_private }));
 function unitDepth(id) { // 맨 위가 1
   let n = 0;
   for (let u = q.unit.get(id); u; u = u.parent_id ? q.unit.get(u.parent_id) : null) n++;
@@ -438,7 +444,9 @@ function addUnit(parentId, raw, short = "", leadId = null) {
   if (parentId && unitDepth(parentId) >= UNIT_DEPTH) throw bad(`조직은 ${UNIT_DEPTH}단계까지 만들 수 있어요.`);
   const same = q.unitByName.get(name, parentId);
   if (same) return { id: same.id, created: false };
-  return { id: Number(q.addUnit.run(parentId, name, text(short, LIMITS.unitShort, "약칭"), leadId, parentId).lastInsertRowid), created: true };
+  const id = Number(q.addUnit.run(parentId, name, text(short, LIMITS.unitShort, "약칭"), leadId, parentId).lastInsertRowid);
+  if (CONTACTS_PRIVATE_DEFAULT.includes(name)) q.setUnitContactsPrivate.run(1, id);
+  return { id, created: true };
 }
 // 조직을 parentId 아래 index 번째로 옮기기 (끌어서 놓기)
 function placeUnit(u, parentId, index) {
@@ -458,6 +466,91 @@ function unitUserIds(scopeIds) {
   const set = new Set(q.usersInUnits.all(scope).map((x) => x.id));
   for (const x of q.linkedInUnits.all(scope)) set.add(x.id);
   return [...set];
+}
+
+/* ----- 연락처 (개인정보): 서버에서 보이는 사람만 응답에 넣음. 값은 로그에 남기지 않음 -----
+ * 사람 = 화면의 personKey 와 같음: 연결한 계정 → 동명이인 구분(person) → 이름
+ * - teams: 그 사람의 조직도 자리·계정 소속이 속한 '연락처 비공개' 조직 (그 조직 아래 팀도 포함)
+ * - hide: teams + 같은 이름의 연결 안 된 자리가 비공개 조직이면 그것도 (계정 연결이 안 돼 있어도 새지 않게)
+ * 보이는 규칙: admin 은 전부, 나는 항상. 비공개 조직 사람은 같은 비공개 조직 사람에게만,
+ * 그 밖의 사람은 비공개 조직에 속하지 않은 사람에게만. 상위 조직·'추가로 볼 수 있는 조직'은 적용하지 않음 */
+function contactPeople() {
+  const units = new Map(q.units.all().map((u) => [u.id, u]));
+  const privateOf = (id) => {
+    const out = [];
+    for (let u = units.get(id); u; u = u.parent_id ? units.get(u.parent_id) : null) if (u.contacts_private) out.push(u.id);
+    return out;
+  };
+  const people = new Map();
+  const person = (key) => {
+    if (!people.has(key)) people.set(key, { key, positions: [], user: null, teams: new Set(), hide: new Set(), contact: null });
+    return people.get(key);
+  };
+  const byName = new Map(); // 이름(동명이인 구분 포함) → 그 이름 자리들의 비공개 조직
+  for (const p of q.positions.all()) {
+    if (!p.name) continue;
+    const who = person(p.user_id ? "u" + p.user_id : "n" + (p.person || p.name));
+    who.positions.push(p);
+    const name = p.person || p.name;
+    if (!byName.has(name)) byName.set(name, new Set());
+    for (const id of privateOf(p.unit_id)) { who.teams.add(id); byName.get(name).add(id); }
+  }
+  for (const u of q.contactUsers.all()) {
+    const who = person("u" + u.id);
+    who.user = u;
+    for (const id of privateOf(u.unit_id)) who.teams.add(id);
+  }
+  const atPosition = new Map(), atUser = new Map();
+  for (const c of q.contacts.all()) { if (c.position_id) atPosition.set(c.position_id, c); else atUser.set(c.user_id, c); }
+  for (const who of people.values()) {
+    who.hide = new Set(who.teams);
+    for (const name of [...who.positions.map((p) => p.person || p.name), who.user && cleanName(who.user.name)]) for (const id of byName.get(name) || []) who.hide.add(id);
+    who.contact = who.positions.map((p) => atPosition.get(p.id)).find(Boolean) || (who.user && atUser.get(who.user.id)) || null;
+  }
+  return people;
+}
+function contactVisible(viewer, me, who) {
+  if (viewer.role === "admin" || who.user?.id === viewer.id) return true;
+  return who.hide.size ? [...who.hide].some((id) => me.teams.has(id)) : me.teams.size === 0;
+}
+const contactOut = (who) => ({ mobile: who.contact?.mobile || "", office: who.contact?.office || "", email: who.contact?.email || "" });
+function contactsFor(viewer) {
+  const people = contactPeople();
+  const me = people.get("u" + viewer.id);
+  const rows = [];
+  for (const who of people.values()) {
+    if (!contactVisible(viewer, me, who)) continue;
+    const mine = who.user?.id === viewer.id;
+    const ref = who.user ? "u" + who.user.id : "p" + who.positions[0].id;
+    for (const p of who.positions) rows.push({ ref, name: p.name, title: p.title, unitId: p.unit_id, sort: p.sort, mine, ...contactOut(who) });
+    // 자리가 없는 계정: 소속으로 한 줄 (관리자 계정은 입력했거나 나일 때만)
+    if (!who.positions.length && (who.user.role !== "admin" || mine || who.contact)) rows.push({ ref, name: who.user.name, title: "", unitId: who.user.unit_id, sort: Infinity, mine, ...contactOut(who) });
+  }
+  rows.sort((a, b) => a.sort - b.sort);
+  const out = { rows: rows.map(({ sort, ...r }) => r), me: { ref: "u" + viewer.id, ...contactOut(me) } };
+  if (viewer.role === "admin") {
+    const isPrivate = (id) => { for (let u = q.unit.get(id); u; u = u.parent_id ? q.unit.get(u.parent_id) : null) if (u.contacts_private) return true; return false; };
+    out.mixed = [...people.values()].filter((w) => w.teams.size && w.positions.some((p) => !isPrivate(p.unit_id))).map((w) => w.positions[0].name); // 비공개 조직 + 일반 조직 겸직
+  }
+  return out;
+}
+function contactInput(b) {
+  const phone = (v, label) => {
+    const s = String(v ?? "").trim();
+    if (s.length > 30 || !/^[0-9+()\-.\s,/#~]*(내선\s*[0-9]*)?$/.test(s)) throw bad(`${label} 번호를 확인해 주세요. 숫자와 - 만 써 주세요.`);
+    return s;
+  };
+  const email = String(b.email ?? "").trim();
+  if (email.length > 120 || (email && !/^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']+$/.test(email))) throw bad("이메일 주소를 확인해 주세요.");
+  return { mobile: phone(b.mobile, "휴대전화"), office: phone(b.office, "사무실 전화"), email };
+}
+// 한 사람의 값을 그 사람의 자리마다 저장 (자리가 없으면 계정에)
+function saveContact(who, v) {
+  for (const p of who.positions) q.delContactOfPosition.run(p.id);
+  if (who.user) q.delContactOfUser.run(who.user.id);
+  if (!v.mobile && !v.office && !v.email) return;
+  if (who.positions.length) for (const p of who.positions) q.addContact.run(p.id, null, v.mobile, v.office, v.email);
+  else q.addContact.run(null, who.user.id, v.mobile, v.office, v.email);
 }
 
 /* ----- 조직도 자리 (엑셀 표: 본부 | 부서('부' 또는 '부 / 팀') | 직함 | 이름 | 비고) ----- */
@@ -951,6 +1044,23 @@ async function api(req, res, path) {
 
   /* ----- 조직도 보기 (모두) ----- */
   if (path === "/api/org" && method === "GET") return send(res, 200, orgOut());
+
+  if (path === "/api/contacts" && method === "GET") return send(res, 200, contactsFor(user));
+  const contactm = path.match(/^\/api\/contacts\/([pu])(\d+)$/);
+  if (contactm && method === "PUT") {
+    // 나 또는 관리자만 고침 (다른 사람은 보이더라도 403)
+    const id = Number(contactm[2]);
+    const pos = contactm[1] === "p" ? q.position.get(id) : null;
+    const key = contactm[1] === "u" ? "u" + id : pos ? (pos.user_id ? "u" + pos.user_id : "n" + (pos.person || pos.name)) : null;
+    const who = key && contactPeople().get(key);
+    const allowed = user.role === "admin" || who?.user?.id === user.id || (contactm[1] === "u" && id === user.id);
+    if (!allowed) return send(res, 403, { error: "내 연락처만 고칠 수 있어요." });
+    if (!who) return send(res, 404, { error: "그 사람을 찾을 수 없어요." });
+    const v = contactInput(await readJson(req));
+    inTx(() => saveContact(who, v));
+    if (user.role === "admin" && who.user?.id !== user.id) console.log(`[admin] ${user.login} → 연락처 수정 (${key[0] === "u" ? key : "자리 #" + id})`);
+    return send(res, 200, contactsFor(user));
+  }
   // 사람 한 명: 앞으로 참석하는 회의 · 맡은 남은 할 일 (조직도에서 이름을 누르면)
   const pm = path.match(/^\/api\/people\/(\d+)$/);
   if (pm && method === "GET") {
@@ -1465,6 +1575,8 @@ async function api(req, res, path) {
           const v = positionInput(b, p);
           q.setPosition.run(...v, p.id);
           if (v[3] && v[3] !== p.user_id) q.setUserUnitIfEmpty.run(v[0], v[3]); // 처음 연결하면 대표 소속으로
+          // 자리의 사람이 바뀌면 그 자리의 연락처는 지움 (다른 사람 번호가 남지 않게)
+          if (v[2] !== p.name || (p.user_id && v[3] !== p.user_id) || b.person === "other") q.delContactOfPosition.run(p.id);
           // 같은 이름 자리: 'same' 같은 사람(겸직), 'other' 다른 사람(동명이인), '' 다시 안 정함
           if (has(b, "person")) q.setPositionPerson.run(b.person === "same" ? v[2] : b.person === "other" ? `${v[2]}#${p.id}` : "", p.id);
           else if (v[2] !== p.name && p.person) q.setPositionPerson.run("", p.id); // 이름이 바뀌면 구분 다시
@@ -1494,7 +1606,7 @@ async function api(req, res, path) {
         for (const r of rows) {
           const unit = resolveUnit(r.hq, r.dept, r.team);
           const p = match.get(r.i);
-          if (p) { q.setPosition.run(unit, r.title, r.name, p.user_id, r.note || p.note, p.id); order.push(p.id); }
+          if (p) { if (r.name !== p.name) q.delContactOfPosition.run(p.id); q.setPosition.run(unit, r.title, r.name, p.user_id, r.note || p.note, p.id); order.push(p.id); }
           else order.push(Number(q.addPosition.run(unit, r.title, r.name, null, r.note, 0).lastInsertRowid));
         }
         let removed = 0;
@@ -1565,11 +1677,14 @@ async function api(req, res, path) {
           const lead = has(b, "leadId") ? idOrNull(b.leadId) : u.lead_id;
           if (lead && !q.userExists.get(lead)) throw bad("책임자를 찾을 수 없어요.");
           q.setUnit.run(name, has(b, "short") ? text(b.short, LIMITS.unitShort, "약칭") : u.short_name, lead, u.id);
+          if (has(b, "contactsPrivate")) q.setUnitContactsPrivate.run(b.contactsPrivate ? 1 : 0, u.id);
           if (has(b, "parentId") || has(b, "index")) placeUnit(u, parent, b.index);
         });
         return send(res, 200, { units: unitsOut() });
       }
       if (!unm[2] && method === "DELETE") {
+        // 지우면 사람들이 상위 조직으로 옮겨져 연락처가 공개되므로 막음
+        if (u.contacts_private) throw bad("연락처 비공개 조직은 지울 수 없어요. 조직 편집에서 비공개를 먼저 꺼 주세요.");
         inTx(() => {
           q.liftUnitChildren.run(u.parent_id, u.id);
           q.liftUnitUsers.run(u.parent_id, u.id);

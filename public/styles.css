@@ -1161,3 +1161,31 @@ button.mgroup__head:hover { color: var(--ink); }
 }
 .team-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 10px 0; font-size: 12px; }
 .team-legend__item { display: inline-flex; align-items: center; gap: 3px; color: var(--ink-2); }
+
+/* 연락처 */
+.side__link--sub { padding-left: 28px; font-size: 13.5px; }
+.side__link--sub .ic svg { width: 16px; height: 16px; }
+.contact-me, .contact-admin { margin-bottom: 12px; }
+.contact-me { padding: 14px 16px; }
+.contact-admin p { margin: 2px 6px 4px; color: var(--admin-text); }
+.contact-form { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 10px; align-items: end; }
+.contact-form .form-error { grid-column: 1 / -1; }
+.contacts a { color: var(--primary); text-decoration: none; }
+.contacts a:hover { text-decoration: underline; }
+.contacts tr.is-mine td { background: var(--primary-soft); }
+.contacts__edit { text-align: right; }
+.check-row { display: flex; align-items: center; gap: 7px; }
+#dialog .contact-form { grid-template-columns: 1fr; }
+@media (min-width: 901px) { .side-mini .side__link--sub { padding-left: 0; } }
+@media (max-width: 900px) {
+  .contact-form { grid-template-columns: 1fr; }
+  .contacts thead { display: none; }
+  .contacts, .contacts tbody, .contacts tr, .contacts td { display: block; width: 100%; }
+  .contacts tr { padding: 10px 14px; border-bottom: 1px solid var(--line-2); }
+  .contacts tr:last-child { border-bottom: 0; }
+  .contacts td { padding: 2px 0; border: 0; white-space: normal; overflow-wrap: anywhere; }
+  .contacts td[data-label]::before { content: attr(data-label); display: inline-block; width: 84px; color: var(--muted); font-size: 12.5px; }
+  .contacts tr.is-mine { background: var(--primary-soft); }
+  .contacts tr.is-mine td { background: none; }
+  .contacts__edit { text-align: left; padding-top: 6px !important; }
+}

@@ -59,6 +59,17 @@ export function openDb(file) {
       sort    INTEGER NOT NULL DEFAULT 0 -- 표의 순번
     );
     CREATE INDEX IF NOT EXISTS org_positions_unit ON org_positions (unit_id);
+    -- 연락처 (개인정보): 다른 표와 분리해 /api/contacts 만 읽음. 조직도 자리 또는 (자리가 없는) 계정에 붙음
+    -- 겸직이면 그 사람의 자리마다 같은 값을 둠 → 자리가 지워지면 함께 지워짐
+    CREATE TABLE IF NOT EXISTS contacts (
+      id          INTEGER PRIMARY KEY,
+      position_id INTEGER UNIQUE REFERENCES org_positions(id) ON DELETE CASCADE,
+      user_id     INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+      mobile      TEXT NOT NULL DEFAULT '',
+      office      TEXT NOT NULL DEFAULT '',
+      email       TEXT NOT NULL DEFAULT '',
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     -- 공지를 읽은 사람 (사이드바 '공지' 옆 안 읽은 숫자)
     CREATE TABLE IF NOT EXISTS notice_reads (
@@ -230,6 +241,8 @@ export function openDb(file) {
 }
 
 // 구글 캘린더에서 HTML 그대로 들어온 글 정리 (가져온 일정, 그리고 거기서 넣은 우리 일정 + 비교용 원본 내용)
+export const CONTACTS_PRIVATE_DEFAULT = ["운영총괄팀", "기부후원팀"];
+
 function cleanCalendarHtml(db) {
   const dirty = "(title LIKE '%<%>%' OR description LIKE '%<%>%' OR title LIKE '%&%;%' OR description LIKE '%&%;%')";
   const fix = (v) => (typeof v === "string" ? htmlToText(v) : v);
@@ -272,6 +285,11 @@ function addUnitColumns(db) {
   db.exec("CREATE INDEX IF NOT EXISTS events_src ON events (src_calendar_id, src_uid, src_inst)");
   // 같은 이름 자리 구분: '' 아직 안 정함(같은 사람으로 셈), 이름과 같으면 같은 사람(겸직) 확인, '이름#자리id' 면 다른 사람(동명이인)
   if (!has("org_positions", "person")) db.exec("ALTER TABLE org_positions ADD COLUMN person TEXT NOT NULL DEFAULT ''");
+  // 연락처 비공개 조직: 처음 한 번 두 팀을 켜 둠, 이후는 관리자가 조직 편집에서 켜고 끔
+  if (!has("org_units", "contacts_private")) {
+    db.exec("ALTER TABLE org_units ADD COLUMN contacts_private INTEGER NOT NULL DEFAULT 0");
+    db.exec(`UPDATE org_units SET contacts_private = 1 WHERE name IN (${CONTACTS_PRIVATE_DEFAULT.map((n) => `'${n}'`).join(", ")})`);
+  }
 }
 
 // 분류가 생기기 전에 만든 DB 에 category_id 열 붙이기

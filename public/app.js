@@ -166,6 +166,7 @@
     right: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>',
     plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
     close: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
+    phone: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h3l1.5 4.5L8.5 10a12 12 0 0 0 5.5 5.5l1.5-2L20 15v3a2 2 0 0 1-2 2A14 14 0 0 1 4 6a2 2 0 0 1 2-2z"/></svg>',
     menu: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>',
     home: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-6.5 8 6.5V20H4z"/><path d="M10 20v-5h4v5"/></svg>',
     grid: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>',
@@ -777,10 +778,11 @@
       { id: "meetings", label: "회의", icon: "people" },
       { id: "memos", label: "메모", icon: "note" },
       { id: "orgchart", label: "조직도", icon: "org" },
+      { id: "contacts", label: "연락처", icon: "phone", sub: true },
       { id: "notices", label: "공지", icon: "bell", badge: state.unreadNotices } // 맨 아래, 안 읽은 공지 수
     ];
     layout.nav.replaceChildren(...items.map((it) => h("a", {
-      class: "side__link" + (it.id === active ? " is-active" : ""), href: "#/" + it.id, "aria-current": it.id === active ? "page" : null,
+      class: "side__link" + (it.sub ? " side__link--sub" : "") + (it.id === active ? " is-active" : ""), href: "#/" + it.id, "aria-current": it.id === active ? "page" : null,
       title: it.badge ? `${it.label} · 새 글 ${it.badge}개` : it.label, onclick: () => toggleNav(false)
     }, [icon(it.icon), h("span", { class: "side__text", text: it.label }), it.badge ? h("span", { class: "nav-badge", "aria-label": `안 읽은 공지 ${it.badge}개`, text: it.badge > 99 ? "99+" : String(it.badge) }) : null])));
     navActive = active;
@@ -2813,6 +2815,85 @@
     draw();
   }
 
+  /* ----- 연락처: 볼 수 있는 사람만 서버가 보내 줌. 값은 화면 안에만 (state·검색·내보내기에 넣지 않음) ----- */
+  const contactsFilter = { q: "", unit: "" };
+  const telHref = (v) => "tel:" + v.replace(/내선.*/, "").replace(/[^0-9+]/g, "");
+  function contactForm(v, onSave, saveClass) {
+    const input = (key, label, type, placeholder) => { const el = h("input", { type, value: v[key] || "", placeholder, autocomplete: "off", maxlength: key === "email" ? "120" : "30" }); return { key, el, wrap: field(label, el) }; };
+    const inputs = [input("mobile", "휴대전화", "tel", "010-0000-0000"), input("office", "사무실 전화", "tel", "02-000-0000"), input("email", "이메일", "email", "name@example.com")];
+    const err = errorLine();
+    const ok = h("button", { class: `btn ${saveClass}`, type: "submit", text: "저장" });
+    const form = h("form", { class: "contact-form", novalidate: true }, [...inputs.map((x) => x.wrap), h("div", { class: "contact-form__end" }, ok), err]);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      showError(err, "");
+      busy(ok, async () => {
+        try { await onSave(Object.fromEntries(inputs.map((x) => [x.key, x.el.value]))); }
+        catch (ex) { showError(err, ex.message); }
+      });
+    });
+    return form;
+  }
+  async function pageContacts() {
+    document.title = `연락처 · ${TITLE}`;
+    drawMini(null);
+    setMain("contacts", loading());
+    let data;
+    try { data = await api("/contacts"); } catch (e) { if (e.status !== 401) setMain("contacts", failed(e)); return; }
+    const mineBox = h("div"), adminBox = h("div"), listBox = h("div");
+    const count = h("span", { class: "muted small" });
+    const put = (ref, body) => api(`/contacts/${ref}`, { method: "PUT", body });
+    const saved = (r) => { data = r; toast("연락처를 저장했어요."); drawAll(); };
+    const unitSel = h("select", { "aria-label": "소속으로 거르기", onchange: (e) => { contactsFilter.unit = e.target.value; drawList(); } });
+    const search = h("label", { class: "search" }, [icon("search"), h("input", { type: "search", value: contactsFilter.q, placeholder: "이름·소속 찾기", "aria-label": "이름·소속 찾기", oninput: (e) => { contactsFilter.q = e.target.value; drawList(); } })]);
+    const editRow = (r) => openDialog(`${r.name} 연락처`, contactForm(r, async (v) => { const x = await put(r.ref, v); closeDialog(); saved(x); }, "btn--admin"), { admin: true });
+    const valueCell = (label, v, href) => h("td", { "data-label": label }, v ? h("a", { href, text: v }) : h("span", { class: "muted", text: "-" }));
+    function drawList() {
+      const words = contactsFilter.q.replace(/\s+/g, "").toLowerCase();
+      const scope = contactsFilter.unit && unitOf(Number(contactsFilter.unit)) ? unitSubtree(Number(contactsFilter.unit)) : null;
+      const rows = data.rows.filter((r) => (!scope || scope.has(r.unitId)) && (!words || (r.name + unitLabel(r.unitId) + r.title).replace(/\s+/g, "").toLowerCase().includes(words)));
+      count.textContent = `${rows.length}줄`;
+      fill(listBox, rows.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table contacts" }, [
+        h("thead", {}, h("tr", {}, [...["이름", "직함", "소속", "휴대전화", "사무실 전화", "이메일"].map((t) => h("th", { text: t })), isAdmin() ? h("th", { "aria-label": "고치기" }) : null])),
+        h("tbody", {}, rows.map((r) => h("tr", { class: r.mine ? "is-mine" : null }, [
+          h("td", { class: "contacts__name" }, h("strong", { text: r.name })),
+          h("td", { "data-label": "직함", text: r.title || "-" }),
+          h("td", { "data-label": "소속", text: r.unitId && unitOf(r.unitId) ? unitPath(r.unitId).slice(-2).map((u) => u.short || u.name).join(" › ") : "-", title: r.unitId ? unitLabel(r.unitId) : null }),
+          valueCell("휴대전화", r.mobile, telHref(r.mobile)),
+          valueCell("사무실 전화", r.office, telHref(r.office)),
+          valueCell("이메일", r.email, "mailto:" + encodeURIComponent(r.email).replace(/%40/g, "@")),
+          isAdmin() ? h("td", { class: "contacts__edit" }, h("button", { class: "btn btn--admin btn--sm", type: "button", "aria-label": `${r.name} 연락처 고치기`, text: "고치기", onclick: () => editRow(r) })) : null
+        ])))
+      ])) : h("div", { class: "card empty", text: data.rows.length ? "찾는 사람이 없어요." : "볼 수 있는 연락처가 없어요." }));
+    }
+    function drawAll() {
+      fill(mineBox, h("section", { class: "card contact-me" }, [
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "내 연락처" }), h("span", { class: "muted small", text: "직접 입력하고 고칠 수 있어요" })]),
+        contactForm(data.me, async (v) => saved(await put(data.me.ref, v)), "btn--dark")
+      ]));
+      const closed = state.units.filter((u) => u.contactsPrivate);
+      if (isAdmin()) fill(adminBox, h("div", { class: "side__admin contact-admin" }, [
+        h("div", { class: "side__adminhead" }, [icon("lock"), "관리자 전용"]),
+        h("p", { class: "small", text: `연락처 비공개 조직: ${closed.map((u) => u.name).join(", ") || "없음"} (조직도 편집에서 조직을 눌러 켜고 꺼요). 관리자는 모든 연락처를 보고, 계정이 없는 사람도 '고치기'로 입력할 수 있어요.` }),
+        data.mixed && data.mixed.length ? h("p", { class: "small", text: `비공개 조직과 일반 조직을 겸직하는 사람: ${[...new Set(data.mixed)].join(", ")} → 비공개 규칙이 적용돼요.` }) : null
+      ]));
+      const present = new Set(data.rows.map((r) => r.unitId));
+      const options = unitRows(null).filter(({ u }) => [...unitSubtree(u.id)].some((id) => present.has(id)));
+      unitSel.replaceChildren(h("option", { value: "", text: "소속 전체" }), ...options.map(({ u, depth }) => h("option", { value: String(u.id), text: "\u00a0\u00a0".repeat(depth) + u.name })));
+      unitSel.value = contactsFilter.unit;
+      if (unitSel.value !== contactsFilter.unit) { contactsFilter.unit = ""; unitSel.value = ""; }
+      drawList();
+    }
+    setMain("contacts", [
+      h("div", { class: "page-head page-head--wrap" }, [h("h1", { text: "연락처" }), count]),
+      mineBox, adminBox,
+      h("div", { class: "filters" }, [search, unitSel]),
+      listBox
+    ]);
+    drawAll();
+    page = { name: "contacts", reload: async () => { data = await api("/contacts"); drawAll(); } };
+  }
+
   /* ----- 조직도 자리 패널: 겸직 자리, 계정이 연결돼 있으면 그 사람의 회의·할 일 ----- */
   async function posPeek(id) {
     if (!state.positions.some((p) => p.id === id)) await loadOrg();
@@ -3072,9 +3153,11 @@
     function unitPop(anchor, u) {
       const name = h("input", { value: u.name, maxlength: "30", "aria-label": "조직 이름" });
       const short = h("input", { value: u.short || "", maxlength: "12", placeholder: "약칭 (예: 식음료)", "aria-label": "약칭" });
+      const hidden = h("input", { type: "checkbox", checked: !!u.contactsPrivate });
       const err = errorLine();
       const ok = h("button", { class: "btn btn--admin btn--sm", type: "submit", text: "저장" });
-      const form = h("form", { class: "pop__form" }, [h("strong", { class: "small", text: unitLabel(u.id) }), name, short, err,
+      const form = h("form", { class: "pop__form" }, [h("strong", { class: "small", text: unitLabel(u.id) }), name, short,
+        h("label", { class: "check-row small", title: "이 조직(과 아래 팀) 사람의 연락처는 같은 조직 사람과 관리자만 봐요. 이 조직 사람은 이 조직 연락처만 봐요." }, [hidden, h("span", { text: "연락처 비공개" })]), err,
         h("div", { class: "actions" }, [
           unitDepthOf(u.id) < 5 ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "+ 아래 조직", onclick: () => addUnitPop(anchor, u) }) : null,
           h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
@@ -3086,7 +3169,7 @@
       form.addEventListener("submit", (e) => {
         e.preventDefault();
         busy(ok, async () => {
-          try { const r = await api(`/admin/units/${u.id}`, { method: "PATCH", body: { name: name.value, short: short.value } }); closePop(); setOrg(r); drawTree(); drawTable(); }
+          try { const r = await api(`/admin/units/${u.id}`, { method: "PATCH", body: { name: name.value, short: short.value, contactsPrivate: hidden.checked } }); closePop(); setOrg(r); drawTree(); drawTable(); }
           catch (ex) { showError(err, ex.message); }
         });
       });
@@ -3377,6 +3460,7 @@
     if (name === "members") return pageMembers();
     if (name === "org") return pageOrg();
     if (name === "orgchart") return pageOrgChart();
+    if (name === "contacts") return pageContacts();
     if (name === "backup") return pageBackup();
     if (name === "unit") return pageUnit(id ? Number(id) : null);
     return go("#/today");
