@@ -2887,27 +2887,63 @@
       openDialog("연락처 카테고리", box, { admin: true });
     }
     const editRow = (r) => (r.external ? externalDialog(r) : openDialog(`${r.name} 연락처`, contactForm(r, async (v) => { const x = await put(r.ref, v); closeDialog(); saved(x); }, "btn--admin"), { admin: true }));
-    const placeOf = (r) => (r.external ? [catName(r.categoryId), r.org].filter(Boolean).join(" · ") : r.unitId && unitOf(r.unitId) ? unitPath(r.unitId).slice(-2).map((u) => u.short || u.name).join(" › ") : "-");
     const valueCell = (label, v, href) => h("td", { "data-label": label }, v ? h("a", { href, text: v }) : h("span", { class: "muted", text: "-" }));
-    function drawList() {
+    const blankCell = () => h("td", { class: "contacts__blank" });
+    const contactRow = (r) => (r.vacant ? h("tr", { class: "is-vacant" }, [
+      h("td", { class: "contacts__name muted", text: "공석" }),
+      h("td", { "data-label": "직함", class: "muted", text: r.title || "-" }),
+      blankCell(), blankCell(), blankCell(), isAdmin() ? blankCell() : null
+    ]) : h("tr", { class: r.mine ? "is-mine" : null }, [
+      h("td", { class: "contacts__name" }, h("strong", { text: r.name })),
+      h("td", { "data-label": "직함", text: [r.org, r.title].filter(Boolean).join(" · ") || "-" }),
+      valueCell("휴대전화", r.mobile, telHref(r.mobile)),
+      valueCell("사무실 전화", r.office, telHref(r.office)),
+      valueCell("이메일", r.email, "mailto:" + encodeURIComponent(r.email).replace(/%40/g, "@")),
+      isAdmin() ? h("td", { class: "contacts__edit" }, h("button", { class: "btn btn--admin btn--sm", type: "button", "aria-label": `${r.name} 연락처 고치기`, text: "고치기", onclick: () => editRow(r) })) : null
+    ]));
+    const groupRow = (g) => {
+      const people = g.rows.filter((r) => !r.vacant).length, open = g.rows.length - people;
+      return h("tr", { class: "contacts__group" }, h("th", { colspan: isAdmin() ? "6" : "5", scope: "colgroup", style: `padding-left:${14 + (g.depth || 0) * 18}px` }, [
+        h("span", { text: g.label }),
+        h("span", { class: "muted small contacts__count", text: g.rows.length ? `${people}명${open ? ` · 공석 ${open}` : ""}` : "자리 없음" })
+      ]));
+    };
+    // 조직도 순서로 모든 소속·자리를 묶어서 (찾을 때는 맞는 줄이 있는 소속만), 그 아래에 외부 카테고리
+    function contactGroups() {
       const words = contactsFilter.q.replace(/\s+/g, "").toLowerCase();
-      const scope = contactsFilter.unit && unitOf(Number(contactsFilter.unit)) ? unitSubtree(Number(contactsFilter.unit)) : null;
       const cat = contactsFilter.cat;
-      unitSel.hidden = !(cat === "" || cat === "org");
-      const inCat = (r) => (cat === "" ? true : cat === "org" ? !r.external : cat === "none" ? r.external && !r.categoryId : r.external && r.categoryId === Number(cat));
-      const rows = data.rows.filter((r) => inCat(r) && (!scope || unitSel.hidden || scope.has(r.unitId)) && (!words || (r.name + (r.external ? catName(r.categoryId) + r.org : unitLabel(r.unitId)) + r.title).replace(/\s+/g, "").toLowerCase().includes(words)));
-      count.textContent = `${rows.length}줄`;
-      fill(listBox, rows.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table contacts" }, [
-        h("thead", {}, h("tr", {}, [...["이름", "직함", "소속", "휴대전화", "사무실 전화", "이메일"].map((t) => h("th", { text: t })), isAdmin() ? h("th", { "aria-label": "고치기" }) : null])),
-        h("tbody", {}, rows.map((r) => h("tr", { class: r.mine ? "is-mine" : null }, [
-          h("td", { class: "contacts__name" }, h("strong", { text: r.name })),
-          h("td", { "data-label": "직함", text: r.title || "-" }),
-          h("td", { "data-label": "소속", text: placeOf(r), title: r.unitId ? unitLabel(r.unitId) : null }),
-          valueCell("휴대전화", r.mobile, telHref(r.mobile)),
-          valueCell("사무실 전화", r.office, telHref(r.office)),
-          valueCell("이메일", r.email, "mailto:" + encodeURIComponent(r.email).replace(/%40/g, "@")),
-          isAdmin() ? h("td", { class: "contacts__edit" }, h("button", { class: "btn btn--admin btn--sm", type: "button", "aria-label": `${r.name} 연락처 고치기`, text: "고치기", onclick: () => editRow(r) })) : null
-        ])))
+      const showOrg = cat === "" || cat === "org";
+      unitSel.hidden = !showOrg;
+      const scope = contactsFilter.unit && unitOf(Number(contactsFilter.unit)) ? unitSubtree(Number(contactsFilter.unit)) : null;
+      const hit = (r) => !words || ((r.vacant ? "공석" : r.name) + (r.external ? catName(r.categoryId) + r.org : unitLabel(r.unitId)) + r.title).replace(/\s+/g, "").toLowerCase().includes(words);
+      const inside = data.rows.filter((r) => !r.external && hit(r));
+      const groups = [];
+      if (showOrg) {
+        for (const { u, depth } of unitRows(null)) {
+          if (scope && !scope.has(u.id)) continue;
+          const rows = inside.filter((r) => r.unitId === u.id);
+          if (rows.length || !words) groups.push({ label: words ? unitLabel(u.id) : u.name, depth: words ? 0 : depth, rows });
+        }
+        const loose = inside.filter((r) => !r.unitId || !unitOf(r.unitId));
+        if (loose.length && !scope) groups.push({ label: "소속 없음", rows: loose });
+      }
+      const outside = data.rows.filter((r) => r.external && hit(r));
+      for (const c of [...data.categories, { id: null, name: "미분류" }]) {
+        const key = c.id === null ? "none" : String(c.id);
+        if ((cat !== "" && cat !== key) || (showOrg && scope)) continue; // 소속으로 거르면 그 소속만
+        const rows = outside.filter((r) => (r.categoryId || null) === c.id);
+        if (rows.length) groups.push({ label: `외부 · ${c.name}`, rows });
+      }
+      return groups;
+    }
+    function drawList() {
+      const groups = contactGroups();
+      const rows = groups.flatMap((g) => g.rows);
+      const open = rows.filter((r) => r.vacant).length;
+      count.textContent = `${rows.length - open}명${open ? ` · 공석 ${open}` : ""}`;
+      fill(listBox, groups.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table contacts" }, [
+        h("thead", {}, h("tr", {}, [...["이름", "직함", "휴대전화", "사무실 전화", "이메일"].map((t) => h("th", { text: t })), isAdmin() ? h("th", { "aria-label": "고치기" }) : null])),
+        h("tbody", {}, groups.flatMap((g) => [groupRow(g), ...g.rows.map(contactRow)]))
       ])) : h("div", { class: "card empty", text: data.rows.length ? "찾는 사람이 없어요." : "볼 수 있는 연락처가 없어요." }));
     }
     function drawAll() {
@@ -2915,11 +2951,9 @@
         h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "내 연락처" }), h("span", { class: "muted small", text: "직접 입력하고 고칠 수 있어요" })]),
         contactForm(data.me, async (v) => saved(await put(data.me.ref, v)), "btn--dark")
       ]));
-      const closed = state.units.filter((u) => u.contactsPrivate);
       if (isAdmin()) fill(adminBox, h("div", { class: "side__admin contact-admin" }, [
         h("div", { class: "side__adminhead" }, [icon("lock"), "관리자 전용"]),
-        h("p", { class: "small", text: `연락처 비공개 조직: ${closed.map((u) => u.name).join(", ") || "없음"} (조직도 편집에서 조직을 눌러 켜고 꺼요). 관리자는 모든 연락처를 보고, 계정이 없는 사람도 '고치기'로 입력할 수 있어요.` }),
-        data.mixed && data.mixed.length ? h("p", { class: "small", text: `비공개 조직과 일반 조직을 겸직하는 사람: ${[...new Set(data.mixed)].join(", ")} → 비공개 규칙이 적용돼요.` }) : null,
+        h("p", { class: "small", text: "계정이 없는 사람도 '고치기'로 입력할 수 있어요. 빠진 사람은 조직도 편집에서 자리를 추가하면 여기에 나와요." }),
         h("div", { class: "actions contact-admin__btns" }, [
           h("button", { class: "btn btn--admin btn--sm", type: "button", text: "+ 외부 연락처", onclick: () => externalDialog(null) }),
           h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "카테고리 관리", onclick: categoryDialog })
@@ -2929,9 +2963,7 @@
       catSel.replaceChildren(h("option", { value: "", text: "카테고리 전체" }), h("option", { value: "org", text: "조직도 (내부)" }), ...data.categories.map((c) => h("option", { value: String(c.id), text: c.name })), hasNone ? h("option", { value: "none", text: "미분류" }) : "");
       catSel.value = contactsFilter.cat;
       if (catSel.value !== contactsFilter.cat) { contactsFilter.cat = ""; catSel.value = ""; }
-      const present = new Set(data.rows.map((r) => r.unitId));
-      const options = unitRows(null).filter(({ u }) => [...unitSubtree(u.id)].some((id) => present.has(id)));
-      unitSel.replaceChildren(h("option", { value: "", text: "소속 전체" }), ...options.map(({ u, depth }) => h("option", { value: String(u.id), text: "\u00a0\u00a0".repeat(depth) + u.name })));
+      unitSel.replaceChildren(h("option", { value: "", text: "소속 전체" }), ...unitRows(null).map(({ u, depth }) => h("option", { value: String(u.id), text: "\u00a0\u00a0".repeat(depth) + u.name })));
       unitSel.value = contactsFilter.unit;
       if (unitSel.value !== contactsFilter.unit) { contactsFilter.unit = ""; unitSel.value = ""; }
       drawList();
@@ -3205,11 +3237,10 @@
     function unitPop(anchor, u) {
       const name = h("input", { value: u.name, maxlength: "30", "aria-label": "조직 이름" });
       const short = h("input", { value: u.short || "", maxlength: "12", placeholder: "약칭 (예: 식음료)", "aria-label": "약칭" });
-      const hidden = h("input", { type: "checkbox", checked: !!u.contactsPrivate });
       const err = errorLine();
       const ok = h("button", { class: "btn btn--admin btn--sm", type: "submit", text: "저장" });
       const form = h("form", { class: "pop__form" }, [h("strong", { class: "small", text: unitLabel(u.id) }), name, short,
-        h("label", { class: "check-row small", title: "이 조직(과 아래 팀) 사람의 연락처는 같은 조직 사람과 관리자만 봐요. 이 조직 사람은 이 조직 연락처만 봐요." }, [hidden, h("span", { text: "연락처 비공개" })]), err,
+        err,
         h("div", { class: "actions" }, [
           unitDepthOf(u.id) < 5 ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "+ 아래 조직", onclick: () => addUnitPop(anchor, u) }) : null,
           h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
@@ -3221,7 +3252,7 @@
       form.addEventListener("submit", (e) => {
         e.preventDefault();
         busy(ok, async () => {
-          try { const r = await api(`/admin/units/${u.id}`, { method: "PATCH", body: { name: name.value, short: short.value, contactsPrivate: hidden.checked } }); closePop(); setOrg(r); drawTree(); drawTable(); }
+          try { const r = await api(`/admin/units/${u.id}`, { method: "PATCH", body: { name: name.value, short: short.value } }); closePop(); setOrg(r); drawTree(); drawTable(); }
           catch (ex) { showError(err, ex.message); }
         });
       });

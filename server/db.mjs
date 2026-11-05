@@ -258,7 +258,6 @@ export function openDb(file) {
 }
 
 // 구글 캘린더에서 HTML 그대로 들어온 글 정리 (가져온 일정, 그리고 거기서 넣은 우리 일정 + 비교용 원본 내용)
-export const CONTACTS_PRIVATE_DEFAULT = ["운영총괄팀", "기부후원팀"];
 // 연락처 값 검사 (화면 저장·일괄 입력 공통). 오류 문구에 값을 넣지 않음
 export function cleanContact(b) {
   const phone = (v, label) => {
@@ -315,11 +314,7 @@ function addUnitColumns(db) {
   db.exec("CREATE INDEX IF NOT EXISTS events_src ON events (src_calendar_id, src_uid, src_inst)");
   // 같은 이름 자리 구분: '' 아직 안 정함(같은 사람으로 셈), 이름과 같으면 같은 사람(겸직) 확인, '이름#자리id' 면 다른 사람(동명이인)
   if (!has("org_positions", "person")) db.exec("ALTER TABLE org_positions ADD COLUMN person TEXT NOT NULL DEFAULT ''");
-  // 연락처 비공개 조직: 처음 한 번 두 팀을 켜 둠, 이후는 관리자가 조직 편집에서 켜고 끔
-  if (!has("org_units", "contacts_private")) {
-    db.exec("ALTER TABLE org_units ADD COLUMN contacts_private INTEGER NOT NULL DEFAULT 0");
-    db.exec(`UPDATE org_units SET contacts_private = 1 WHERE name IN (${CONTACTS_PRIVATE_DEFAULT.map((n) => `'${n}'`).join(", ")})`);
-  }
+  // org_units.contacts_private: 예전 연락처 비공개 설정. 해제 후 쓰지 않음 (이미 있는 DB 에 값만 남아 있음)
 }
 
 // 분류가 생기기 전에 만든 DB 에 category_id 열 붙이기

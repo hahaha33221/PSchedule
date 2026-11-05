@@ -87,12 +87,12 @@ switch (cmd) {
     const dry = args.includes("--dry");
     const rows = readFileSync(0, "utf8").split(/\r?\n/).filter((l) => l.trim()).map((l) => { const [hint, name, , office, mobile] = l.split("\t"); return { hint: (hint || "").trim(), name: (name || "").trim(), office: office || "", mobile: mobile || "" }; });
     const plain = (n) => String(n).normalize("NFC").replace(/^(fr|sr|br)\.\s*/i, "").replace(/\s+/g, "").toLowerCase();
-    const units = new Map(db.prepare("SELECT id, parent_id, name, contacts_private FROM org_units").all().map((u) => [u.id, u]));
+    const units = new Map(db.prepare("SELECT id, parent_id, name FROM org_units").all().map((u) => [u.id, u]));
     const chain = (id) => { const out = []; for (let u = units.get(id); u; u = u.parent_id ? units.get(u.parent_id) : null) out.push(u); return out; };
     const positions = db.prepare("SELECT * FROM org_positions WHERE name != ''").all();
     const count = new Map();
     for (const r of rows) count.set(plain(r.name), (count.get(plain(r.name)) || 0) + 1);
-    const result = { done: 0, kept: 0, inPrivate: 0, missing: [], unclear: [], invalid: [], split: [], seats: [] };
+    const result = { done: 0, kept: 0, missing: [], unclear: [], invalid: [], split: [], seats: [] };
     db.exec("BEGIN");
     try {
       for (const r of rows) {
@@ -116,7 +116,6 @@ switch (cmd) {
         const had = seats.map((x) => db.prepare("SELECT * FROM contacts WHERE position_id = ?").get(x.id)).find(Boolean) || (p.user_id && db.prepare("SELECT * FROM contacts WHERE user_id = ?").get(p.user_id)) || {};
         for (const k of ["mobile", "office"]) if (had[k] && had[k] !== v[k]) result.kept++;
         const save = { mobile: had.mobile || v.mobile, office: had.office || v.office, email: had.email || "" };
-        if (seats.some((x) => chain(x.unit_id).some((u) => u.contacts_private))) result.inPrivate++;
         result.done++;
         if (dry) continue;
         for (const x of seats) {
@@ -127,7 +126,7 @@ switch (cmd) {
       }
       db.exec(dry ? "ROLLBACK" : "COMMIT");
     } catch (e) { db.exec("ROLLBACK"); throw e; }
-    console.log(`${dry ? "[미리보기, 저장 안 함] " : ""}명단 ${rows.length}줄 → 입력 ${result.done}명 (비공개 조직 ${result.inPrivate}명), 이미 있는 값이라 유지 ${result.kept}칸`);
+    console.log(`${dry ? "[미리보기, 저장 안 함] " : ""}명단 ${rows.length}줄 → 입력 ${result.done}명, 이미 있는 값이라 유지 ${result.kept}칸`);
     for (const [label, l] of [["조직도에서 못 찾음 (넣지 않음)", result.missing], ["같은 이름인데 자리를 못 고름 (넣지 않음)", result.unclear], ["번호 형식 오류 (넣지 않음)", result.invalid], ["동명이인으로 나눔", result.split], ["겸직 (자리마다 같은 값)", result.seats]]) if (l.length) console.log(`${label}: ${l.join(", ")}`);
     break;
   }

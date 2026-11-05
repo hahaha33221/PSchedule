@@ -1172,6 +1172,8 @@ button.mgroup__head:hover { color: var(--ink); }
 .contacts a:hover { text-decoration: underline; }
 .contacts tr.is-mine td { background: var(--primary-soft); }
 .contacts__edit { text-align: right; }
+.contacts__group th { background: var(--surface-2); font-weight: 700; text-align: left; }
+.contacts__count { margin-left: 8px; font-weight: 400; }
 .check-row { display: flex; align-items: center; gap: 7px; }
 .contact-cat { display: flex; gap: 8px; align-items: center; }
 .contact-cat input { flex: 1; min-width: 0; }
@@ -1183,6 +1185,9 @@ button.mgroup__head:hover { color: var(--ink); }
   .contacts, .contacts tbody, .contacts tr, .contacts td { display: block; width: 100%; }
   .contacts tr { padding: 10px 14px; border-bottom: 1px solid var(--line-2); }
   .contacts tr:last-child { border-bottom: 0; }
+  .contacts tr.contacts__group { padding: 0; }
+  .contacts__group th { display: block; width: 100%; padding-top: 8px; padding-bottom: 8px; }
+  .contacts__blank { display: none !important; }
   .contacts td { padding: 2px 0; border: 0; white-space: normal; overflow-wrap: anywhere; }
   .contacts td[data-label]::before { content: attr(data-label); display: inline-block; width: 84px; color: var(--muted); font-size: 12.5px; }
   .contacts tr.is-mine { background: var(--primary-soft); }

@@ -135,16 +135,16 @@ jobs:
           curl -fs -H "$H" $B/events/$IM | grep -q '"sameSource":\[{'
           test "$(curl -fs -H "$H" "$B/events?from=2026-02-01&to=2026-02-28" | node -pe 'const d=JSON.parse(require("fs").readFileSync(0)); new Set(d.events.filter(e=>e.sourceKey).map(e=>e.sourceKey)).size + "/" + d.events.filter(e=>e.sourceKey).length')" = "1/2"
           curl -fs -H "Authorization: Bearer $A1" "$B/search?q=WYD" | grep -vq '"type":"ext"'
-          # 연락처: 비공개 조직(운영총괄팀·기부후원팀)은 같은 조직만, 그 밖의 사람은 비공개 조직을 못 봄, admin 은 전부, 남의 것 수정 403 (번호는 가짜)
+          # 연락처: 로그인한 사람 모두 조직도 전체(공석 포함)를 봄, 남의 것 수정 403 (번호는 가짜)
           curl -fs -H "$H" -XPOST -d '{"text":"조직위원회 > 운영총괄부 > 운영총괄팀\n조직위원회 > 재무부 > 기부후원팀"}' $B/admin/units/bulk >/dev/null
-          curl -fs -H "$H" $B/org | grep -q '"name":"기부후원팀"[^}]*"contactsPrivate":true'
+          if curl -fs -H "$H" $B/org | grep -q 'contactsPrivate'; then echo "비공개 설정이 남아 있어요"; exit 1; fi
           OPS=$(uid 운영총괄팀); GIV=$(uid 기부후원팀)
           A5=$(tok opsa "$(mk opsa $OPS)"); A6=$(tok giva "$(mk giva $GIV)")
           bearer() { echo "Authorization: Bearer $1"; }
           myref() { curl -fs -H "$(bearer "$1")" $B/contacts | node -pe 'JSON.parse(require("fs").readFileSync(0)).me.ref'; }
           setc() { J="{\"mobile\":\"$3\"}"; curl -fs -H "$(bearer "$1")" -XPUT -d "$J" $B/contacts/$2 >/dev/null; }
           setc "$A5" "$(myref "$A5")" 010-0000-0005; setc "$A6" "$(myref "$A6")" 010-0000-0006; setc "$A1" "$(myref "$A1")" 010-0000-0001
-          # 계정 없는 자리는 관리자가 입력 (비공개 조직 자리, 일반 조직 자리), 겸직은 자리마다 같은 값
+          # 계정 없는 자리는 관리자가 입력, 겸직은 자리마다 같은 값
           addpos() { J="{\"unitId\":$1,\"title\":\"직원\",\"name\":\"$2\"}"; curl -fs -H "$H" -XPOST -d "$J" $B/admin/org/positions | node -pe 'JSON.parse(require("fs").readFileSync(0)).id'; }
           PO=$(addpos $OPS 운영자리); PG=$(addpos $FB 일반자리); addpos $LG 일반자리 >/dev/null
           curl -fs -H "$H" -XPUT -d '{"mobile":"010-0000-0007"}' $B/contacts/p$PO >/dev/null
@@ -152,35 +152,28 @@ jobs:
           test "$(curl -fs -H "$H" $B/contacts | grep -o '02-000-0008' | wc -l | tr -d ' ')" = 2
           see() { curl -fs -H "$(bearer "$1")" $B/contacts | grep -q "$2"; }
           nosee() { if curl -fs -H "$(bearer "$1")" $B/contacts | grep -q "$2"; then echo "연락처가 새요: $2"; exit 1; fi; }
-          see "$A5" 010-0000-0005; see "$A5" 010-0000-0007; nosee "$A5" 010-0000-0006; nosee "$A5" 010-0000-0001; nosee "$A5" 02-000-0008
-          see "$A6" 010-0000-0006; nosee "$A6" 010-0000-0005; nosee "$A6" 010-0000-0007; nosee "$A6" 010-0000-0001
-          see "$A1" 010-0000-0001; see "$A1" 02-000-0008; nosee "$A1" 010-0000-0005; nosee "$A1" 010-0000-0006; nosee "$A1" 010-0000-0007
-          see "$A3" 010-0000-0001; nosee "$A3" 010-0000-0005; nosee "$A3" 010-0000-0007   # 상위 조직(운영총괄부)도 못 봄
-          see "$A4" 010-0000-0001; nosee "$A4" 010-0000-0005; nosee "$A4" 010-0000-0006   # 소속 없음은 일반 규칙
+          for who in "$A1" "$A3" "$A4" "$A5" "$A6"; do for n in 010-0000-0001 010-0000-0005 010-0000-0006 010-0000-0007 02-000-0008; do see "$who" "$n"; done; done
+          # 공석 자리는 번호 없이 줄만 나오고, 고칠 수 없음
+          J="{\"unitId\":$GIV,\"title\":\"빈자리\"}"; PV=$(curl -fs -H "$H" -XPOST -d "$J" $B/admin/org/positions | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+          curl -fs -H "$(bearer "$A1")" $B/contacts | node -e 'const r=JSON.parse(require("fs").readFileSync(0)).rows.find(x=>x.vacant&&x.title==="빈자리");if(!r||r.mobile||r.office||r.email||r.ref)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"mobile":"1"}' $B/contacts/p$PV)" = 404
           for n in 0005 0006 0007 0001; do curl -fs -H "$H" $B/contacts | grep -q "010-0000-$n"; done
-          # '추가로 볼 수 있는 조직' 은 연락처에 적용 안 됨
           UA=$(curl -fs -H "$H" $B/admin/users | node -e 'const d=JSON.parse(require("fs").readFileSync(0));console.log((d.users||d).find(u=>u.login==="usera").id)')
-          GRANT="{\"viewUnits\":[{\"unitId\":$OPS,\"sub\":true}]}"
-          curl -fs -H "$H" -XPATCH -d "$GRANT" $B/admin/users/$UA >/dev/null
-          nosee "$A1" 010-0000-0005
-          curl -fs -H "$H" -XPATCH -d '{"viewUnits":[]}' $B/admin/users/$UA >/dev/null
-          # 본부장: 맡은 조직과 그 아래는 회의·연락처(비공개 조직 포함)를 보고, 맡지 않은 비공개 조직은 못 봄, 관리 기능·남의 연락처 수정은 안 됨
+          # 본부장: 맡은 조직과 그 아래의 회의를 봄, 관리 기능·남의 연락처 수정은 안 됨
           USR() { curl -fs -H "$H" $B/admin/users | node -e 'const d=JSON.parse(require("fs").readFileSync(0));console.log((d.users||d).find(u=>u.login===process.argv[1]).id)' "$1"; }
           UC=$(USR userc); UN=$(USR usern)
           FIN=$(curl -fs -H "$H" $B/org | node -e 'const d=JSON.parse(require("fs").readFileSync(0));console.log(d.units.find(u=>u.name==="기부후원팀").parentId)')
           curl -fs -H "$H" -XPATCH -d '{"role":"director"}' $B/admin/users/$UC >/dev/null
           curl -fs -H "$(bearer "$A3")" $B/me | grep -q '"role":"director"'
-          see "$A3" 010-0000-0005; see "$A3" 010-0000-0007; see "$A3" 010-0000-0001; nosee "$A3" 010-0000-0006
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A3")" $B/admin/users)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A3")" -XPUT -d '{"mobile":"1"}' $B/contacts/u$UA)" = 403
-          curl -fs -H "$H" -XPATCH -d '{"role":"member"}' $B/admin/users/$UC >/dev/null; nosee "$A3" 010-0000-0005
+          curl -fs -H "$H" -XPATCH -d '{"role":"member"}' $B/admin/users/$UC >/dev/null
           # 소속이 없어도 조직도 자리를 연결하면 그 조직 아래를 봄
           EV=$(curl -fs -H "$(bearer "$A6")" -XPOST -d '{"title":"후원 회의","startDate":"2026-02-02"}' $B/events | node -pe 'JSON.parse(require("fs").readFileSync(0)).event.id')
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A4")" $B/events/$EV)" = 404
           J="{\"unitId\":$FIN,\"title\":\"부장\",\"name\":\"usern\",\"userId\":$UN}"; PD=$(curl -fs -H "$H" -XPOST -d "$J" $B/admin/org/positions | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
           curl -fs -H "$H" -XPATCH -d '{"role":"director"}' $B/admin/users/$UN >/dev/null
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A4")" $B/events/$EV)" = 200
-          see "$A4" 010-0000-0006; nosee "$A4" 010-0000-0005
           curl -fs -H "$H" -XPATCH -d '{"role":"member"}' $B/admin/users/$UN >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/org/positions/$PD >/dev/null
           # 외부 연락처·카테고리: 관리자만 입력, 로그인한 사람은 모두 봄, 카테고리를 지워도 연락처는 남음
@@ -210,16 +203,9 @@ jobs:
           # 다른 응답에는 연락처가 안 나감
           for u in org me team people/$UA; do if curl -s -H "$H" "$B/$u" | grep -q '010-0000'; then echo "연락처가 새요: $u"; exit 1; fi; done
           curl -fs -H "$H" "$B/search?q=010-0000-0001" | grep -q '"results":\[\]'
-          # 설정으로 동작: 끄면 일반 규칙, 켜진 조직은 못 지움, 자리의 사람이 바뀌면 연락처 지움
-          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XDELETE $B/admin/units/$OPS)" = 400
-          curl -fs -H "$H" -XPATCH -d '{"contactsPrivate":false}' $B/admin/units/$OPS >/dev/null; see "$A1" 010-0000-0007
-          curl -fs -H "$H" -XPATCH -d '{"contactsPrivate":true}' $B/admin/units/$OPS >/dev/null; nosee "$A1" 010-0000-0007
+          # 자리의 사람이 바뀌면 연락처 지움
           curl -fs -H "$H" -XPATCH -d '{"name":"새사람"}' $B/admin/org/positions/$PO >/dev/null
           if curl -fs -H "$H" $B/contacts | grep -q 010-0000-0007; then echo "바뀐 자리에 연락처가 남아요"; exit 1; fi
-          # 계정이 연결 안 돼도 같은 이름의 비공개 자리가 있으면 새지 않음
-          addpos $GIV 같은이름 >/dev/null; A7=$(tok samename "$(mk samename null)")
-          curl -fs -H "$H" -XPATCH -d '{"name":"같은이름"}' $B/admin/users/$(curl -fs -H "$H" $B/admin/users | node -e 'const d=JSON.parse(require("fs").readFileSync(0));console.log((d.users||d).find(u=>u.login==="samename").id)') >/dev/null
-          setc "$A7" "$(myref "$A7")" 010-0000-0009; see "$A7" 010-0000-0009; nosee "$A1" 010-0000-0009
           curl -fs -H "$H" -XPOST -d '{"userIds":[1],"unitId":3}' $B/admin/users/unit | grep -q '"changed":1'
           curl -fs -H "$H" "$B/units/1?sub=1" | grep -Eq '"memberIds":\[([0-9]+,)*1[],]'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"name":"x","url":"http://127.0.0.1/a.ics"}' $B/admin/calendars)" = 400
