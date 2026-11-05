@@ -249,6 +249,28 @@ const q = {
   addProjectItem: db.prepare("INSERT INTO project_items (project_id, parent_id, kind, name, status, assignee_id, due_date, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
   setProjectItem: db.prepare("UPDATE project_items SET name = ?, status = ?, assignee_id = ?, due_date = ?, note = ?, updated_at = datetime('now') WHERE id = ?"),
   delProjectItem: db.prepare("DELETE FROM project_items WHERE id = ?"),
+  // 입출고 현황
+  ledger: db.prepare("SELECT * FROM stock_ledgers WHERE id = ?"),
+  ledgersOfProject: db.prepare(`SELECT l.*, i.project_id,
+      (SELECT coalesce(sum(q.qty), 0) FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE m.ledger_id = l.id AND m.type = 'in') AS in_total,
+      (SELECT coalesce(sum(q.qty), 0) FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE m.ledger_id = l.id AND m.type = 'out') AS out_total
+    FROM stock_ledgers l JOIN project_items i ON i.id = l.item_id WHERE i.project_id = ? ORDER BY l.id`),
+  addLedger: db.prepare("INSERT INTO stock_ledgers (item_id, name, unit, in_label, out_label, contract, after) VALUES (?, ?, ?, ?, ?, ?, ?)"),
+  setLedger: db.prepare("UPDATE stock_ledgers SET name = ?, unit = ?, in_label = ?, out_label = ?, contract = ?, after = ? WHERE id = ?"),
+  delLedger: db.prepare("DELETE FROM stock_ledgers WHERE id = ?"),
+  stockOptions: db.prepare("SELECT id, name FROM stock_options WHERE ledger_id = ? ORDER BY id"),
+  addStockOption: db.prepare("INSERT INTO stock_options (ledger_id, name) VALUES (?, ?)"),
+  setStockOption: db.prepare("UPDATE stock_options SET name = ? WHERE id = ? AND ledger_id = ?"),
+  delStockOption: db.prepare("DELETE FROM stock_options WHERE id = ?"),
+  stockOptionUsed: db.prepare("SELECT 1 FROM stock_qty WHERE option_id = ? LIMIT 1"),
+  stockMoves: db.prepare("SELECT * FROM stock_moves WHERE ledger_id = ? ORDER BY id"),
+  stockMove: db.prepare("SELECT * FROM stock_moves WHERE id = ?"),
+  addStockMove: db.prepare("INSERT INTO stock_moves (ledger_id, type, date, handler, note, created_by) VALUES (?, ?, ?, ?, ?, ?)"),
+  setStockMove: db.prepare("UPDATE stock_moves SET date = ?, handler = ?, note = ? WHERE id = ?"),
+  delStockMove: db.prepare("DELETE FROM stock_moves WHERE id = ?"),
+  stockQtyOfLedger: db.prepare("SELECT q.move_id, q.option_id, q.qty FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE m.ledger_id = ?"),
+  clearStockQty: db.prepare("DELETE FROM stock_qty WHERE move_id = ?"),
+  addStockQty: db.prepare("INSERT INTO stock_qty (move_id, option_id, qty) VALUES (?, ?, ?)"),
   taskTags: db.prepare("SELECT task_id AS id, tag_id FROM task_tags WHERE task_id IN (SELECT value FROM json_each(?))"),
   clearTaskTags: db.prepare("DELETE FROM task_tags WHERE task_id = ?"),
   addTaskTag: db.prepare("INSERT OR IGNORE INTO task_tags (task_id, tag_id) SELECT ?, id FROM tags WHERE id = ?"),
@@ -981,8 +1003,57 @@ const projectOut = (p, items, user) => {
 const projectItemOut = (i) => ({ id: i.id, parentId: i.parent_id, kind: i.kind, name: i.name, status: i.status, assigneeId: i.assignee_id, dueDate: i.due_date, note: i.note });
 const projectDetail = (p, user) => {
   const items = q.projectItems.all(p.id);
-  return { project: projectOut(p, items, user), items: items.map(projectItemOut) };
+  return {
+    project: projectOut(p, items, user), items: items.map(projectItemOut),
+    ledgers: q.ledgersOfProject.all(p.id).map((l) => ({ id: l.id, itemId: l.item_id, name: l.name, unit: l.unit, contract: l.contract, inTotal: l.in_total, outTotal: l.out_total }))
+  };
 };
+// 입출고 현황
+function ledgerFields(b, cur) {
+  const get = (k, curVal) => (has(b, k) ? b[k] : curVal);
+  const contract = get("contract", cur?.contract);
+  const contractN = contract === null || contract === undefined || contract === "" ? null : Number(contract);
+  if (contractN !== null && (!Number.isInteger(contractN) || contractN < 0)) throw bad("계약 수량은 0 이상의 숫자로 적어 주세요.");
+  const a = get("after", cur ? JSON.parse(cur.after) : {}) || {};
+  const lengths = (Array.isArray(a.lengths) ? a.lengths : []).map(Number).filter((n) => n > 0).slice(0, 8);
+  const after = { label: text(a.label, 40, "전달 이름"), unit: text(a.unit, 20, "전달 단위"), qty: Math.max(0, Math.floor(Number(a.qty) || 0)), perLength: Math.max(0, Number(a.perLength) || 0), lengths };
+  return [text(get("name", cur?.name), 60, "대장 이름", true), text(get("unit", cur?.unit ?? "개"), 10, "단위") || "개", text(get("inLabel", cur?.in_label), 80, "입고 경로"), text(get("outLabel", cur?.out_label), 80, "출고 경로"), contractN, JSON.stringify(after)];
+}
+function saveStockOptions(ledgerId, list) {
+  if (!Array.isArray(list) || list.length > 40) throw bad("품목은 40개까지 정할 수 있어요.");
+  const now = q.stockOptions.all(ledgerId);
+  const keep = new Set(list.map((o) => idOrNull(o?.id)).filter(Boolean));
+  for (const o of now) if (!keep.has(o.id)) {
+    if (q.stockOptionUsed.get(o.id)) throw bad(`'${o.name}' 은(는) 기록이 있어서 뺄 수 없어요.`);
+    q.delStockOption.run(o.id);
+  }
+  for (const o of list) {
+    const name = text(o?.name, 30, "품목 이름", true), id = idOrNull(o?.id);
+    if (id) q.setStockOption.run(name, id, ledgerId); else q.addStockOption.run(ledgerId, name);
+  }
+}
+function ledgerOut(l, p, user) {
+  const qty = new Map();
+  for (const r of q.stockQtyOfLedger.all(l.id)) { if (!qty.has(r.move_id)) qty.set(r.move_id, {}); qty.get(r.move_id)[r.option_id] = r.qty; }
+  const item = q.projectItem.get(l.item_id);
+  return {
+    ledger: { id: l.id, name: l.name, unit: l.unit, inLabel: l.in_label, outLabel: l.out_label, contract: l.contract, after: JSON.parse(l.after), canDelete: user.role === "admin" || p.created_by === user.id },
+    project: { id: p.id, name: p.name, unitId: p.unit_id }, itemName: item.name,
+    options: q.stockOptions.all(l.id),
+    moves: q.stockMoves.all(l.id).map((m) => ({ id: m.id, type: m.type, date: m.date, handler: m.handler, note: m.note, qty: qty.get(m.id) || {} }))
+  };
+}
+function stockQtyInput(ledgerId, raw) {
+  const allowed = new Set(q.stockOptions.all(ledgerId).map((o) => o.id));
+  const out = [];
+  for (const [k, v] of Object.entries(raw && typeof raw === "object" ? raw : {})) {
+    const n = v === "" || v === null ? 0 : Number(v);
+    if (!allowed.has(Number(k))) throw bad("품목을 찾을 수 없어요.");
+    if (!Number.isInteger(n) || n < 0 || n > 100000000) throw bad("수량은 0 이상의 숫자로 적어 주세요.");
+    if (n) out.push([Number(k), n]);
+  }
+  return out;
+}
 function projectUnit(v, user) {
   const unit = unitIdOrNull(v);
   if (!unit) throw bad("팀을 골라 주세요.");
@@ -1559,11 +1630,22 @@ async function api(req, res, path) {
     }
     return send(res, 405, { error: "Method not allowed" });
   }
-  const pim = path.match(/^\/api\/project-items\/(\d+)$/);
+  const pim = path.match(/^\/api\/project-items\/(\d+)(\/ledgers)?$/);
   if (pim) {
     const i = q.projectItem.get(Number(pim[1]));
     const p = i && q.project.get(i.project_id);
     if (!p || !projectAllowed(user, p)) throw notFound("항목");
+    if (pim[2]) {
+      if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
+      const b = await readJson(req);
+      const fields = ledgerFields(b, null);
+      const id = inTx(() => {
+        const id = Number(q.addLedger.run(i.id, ...fields).lastInsertRowid);
+        saveStockOptions(id, (Array.isArray(b.options) ? b.options : []).map((name) => ({ name })));
+        return id;
+      });
+      return send(res, 201, ledgerOut(q.ledger.get(id), p, user));
+    }
     if (method === "PATCH") {
       q.setProjectItem.run(...projectItemFields(await readJson(req), i), i.id);
       return send(res, 200, projectDetail(p, user));
@@ -1571,6 +1653,61 @@ async function api(req, res, path) {
     if (method === "DELETE") {
       q.delProjectItem.run(i.id); // 묶음이면 안의 것도 함께
       return send(res, 200, projectDetail(p, user));
+    }
+    return send(res, 405, { error: "Method not allowed" });
+  }
+
+  /* 입출고 현황: 볼 수 있는 프로젝트의 것 */
+  const stm = path.match(/^\/api\/stock\/(\d+)(\/moves)?$/);
+  if (stm) {
+    const l = q.ledger.get(Number(stm[1]));
+    const p = l && q.project.get(q.projectItem.get(l.item_id).project_id);
+    if (!p || !projectAllowed(user, p)) throw notFound("입출고 현황");
+    if (stm[2]) {
+      if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
+      const b = await readJson(req);
+      if (b.type !== "in" && b.type !== "out") throw bad("입고·출고를 골라 주세요.");
+      const date = text(b.date, 20, "날짜", true), handler = text(b.handler, 40, "전달자"), note = text(b.note, 500, "비고");
+      const rows = stockQtyInput(l.id, b.qty);
+      inTx(() => {
+        const id = Number(q.addStockMove.run(l.id, b.type, date, handler, note, user.id).lastInsertRowid);
+        for (const [o, n] of rows) q.addStockQty.run(id, o, n);
+      });
+      return send(res, 201, ledgerOut(l, p, user));
+    }
+    if (method === "GET") return send(res, 200, ledgerOut(l, p, user));
+    if (method === "PATCH") {
+      const b = await readJson(req);
+      const fields = ledgerFields(b, l);
+      inTx(() => { q.setLedger.run(...fields, l.id); if (has(b, "options")) saveStockOptions(l.id, b.options); });
+      return send(res, 200, ledgerOut(q.ledger.get(l.id), p, user));
+    }
+    if (method === "DELETE") {
+      if (!isAdmin && p.created_by !== user.id) return send(res, 403, { error: "프로젝트를 만든 사람과 관리자만 지울 수 있어요." });
+      q.delLedger.run(l.id);
+      return send(res, 200, { projectId: p.id });
+    }
+    return send(res, 405, { error: "Method not allowed" });
+  }
+  const smm = path.match(/^\/api\/stock-moves\/(\d+)$/);
+  if (smm) {
+    const m = q.stockMove.get(Number(smm[1]));
+    const l = m && q.ledger.get(m.ledger_id);
+    const p = l && q.project.get(q.projectItem.get(l.item_id).project_id);
+    if (!p || !projectAllowed(user, p)) throw notFound("기록");
+    if (method === "PATCH") {
+      const b = await readJson(req);
+      const date = text(has(b, "date") ? b.date : m.date, 20, "날짜", true), handler = text(has(b, "handler") ? b.handler : m.handler, 40, "전달자"), note = text(has(b, "note") ? b.note : m.note, 500, "비고");
+      const rows = has(b, "qty") ? stockQtyInput(l.id, b.qty) : null;
+      inTx(() => {
+        q.setStockMove.run(date, handler, note, m.id);
+        if (rows) { q.clearStockQty.run(m.id); for (const [o, n] of rows) q.addStockQty.run(m.id, o, n); }
+      });
+      return send(res, 200, ledgerOut(l, p, user));
+    }
+    if (method === "DELETE") {
+      q.delStockMove.run(m.id);
+      return send(res, 200, ledgerOut(l, p, user));
     }
     return send(res, 405, { error: "Method not allowed" });
   }

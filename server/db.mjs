@@ -293,6 +293,23 @@ export function importOutline(db, projectId, rows) {
   return counts;
 }
 
+// 입출고 대장 하나를 기록째 넣음 (일괄 입력용, 품목 이름으로 수량 연결)
+export function importLedger(db, itemId, l) {
+  const id = Number(db.prepare("INSERT INTO stock_ledgers (item_id, name, unit, in_label, out_label, contract, after) VALUES (?, ?, ?, ?, ?, ?, ?)")
+    .run(itemId, l.name, l.unit || "개", l.inLabel || "", l.outLabel || "", l.contract ?? null, JSON.stringify(l.after || {})).lastInsertRowid);
+  const options = new Map(l.options.map((n) => [n, Number(db.prepare("INSERT INTO stock_options (ledger_id, name) VALUES (?, ?)").run(id, n).lastInsertRowid)]));
+  const totals = { in: 0, out: 0, moves: 0 };
+  for (const m of l.moves || []) {
+    const mid = Number(db.prepare("INSERT INTO stock_moves (ledger_id, type, date, handler, note) VALUES (?, ?, ?, ?, ?)").run(id, m.type, m.date, m.handler || "", m.note || "").lastInsertRowid);
+    for (const [name, qty] of Object.entries(m.qty)) {
+      if (!options.has(name)) throw new Error(`없는 품목: ${name}`);
+      if (qty > 0) { db.prepare("INSERT INTO stock_qty (move_id, option_id, qty) VALUES (?, ?, ?)").run(mid, options.get(name), qty); totals[m.type] += qty; }
+    }
+    totals.moves++;
+  }
+  return totals;
+}
+
 // 연락처 값 검사 (화면 저장·일괄 입력 공통). 오류 문구에 값을 넣지 않음
 export function cleanContact(b) {
   const phone = (v, label) => {
@@ -355,6 +372,39 @@ function addUnitColumns(db) {
       updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS project_items_project ON project_items (project_id);
+    -- 입출고 현황: 프로젝트의 묶음·항목 아래에 대장, 품목(색상 등) 열, 입고·출고 기록
+    CREATE TABLE IF NOT EXISTS stock_ledgers (
+      id         INTEGER PRIMARY KEY,
+      item_id    INTEGER NOT NULL REFERENCES project_items(id) ON DELETE CASCADE,
+      name       TEXT NOT NULL,
+      unit       TEXT NOT NULL DEFAULT '개',
+      in_label   TEXT NOT NULL DEFAULT '',
+      out_label  TEXT NOT NULL DEFAULT '',
+      contract   INTEGER,
+      after      TEXT NOT NULL DEFAULT '{}',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS stock_options (
+      id        INTEGER PRIMARY KEY,
+      ledger_id INTEGER NOT NULL REFERENCES stock_ledgers(id) ON DELETE CASCADE,
+      name      TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS stock_moves (
+      id         INTEGER PRIMARY KEY,
+      ledger_id  INTEGER NOT NULL REFERENCES stock_ledgers(id) ON DELETE CASCADE,
+      type       TEXT NOT NULL CHECK (type IN ('in', 'out')),
+      date       TEXT NOT NULL,
+      handler    TEXT NOT NULL DEFAULT '',
+      note       TEXT NOT NULL DEFAULT '',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS stock_qty (
+      move_id   INTEGER NOT NULL REFERENCES stock_moves(id) ON DELETE CASCADE,
+      option_id INTEGER NOT NULL REFERENCES stock_options(id) ON DELETE CASCADE,
+      qty       INTEGER NOT NULL,
+      PRIMARY KEY (move_id, option_id)
+    );
   `);
   // 봉사자 계정: 직원 화면·API 를 쓰지 않음 (role 은 member, 서버 입구에서 막음)
   if (!has("users", "volunteer")) db.exec("ALTER TABLE users ADD COLUMN volunteer INTEGER NOT NULL DEFAULT 0");

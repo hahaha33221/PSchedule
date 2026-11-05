@@ -12,6 +12,7 @@
  *   node server/admin.mjs notice-add "<제목>" [pin] < 본문.txt    공지 올리기 (본문은 표준 입력, 작성자는 관리자 계정)
  *   node server/admin.mjs backups                           백업 목록
  *   node server/admin.mjs contacts-import [--dry] < 명단.tsv  연락처 일괄 입력 (구역 | 이름 | 직함 | 내선 | 휴대폰, 조직도 자리의 이름으로 찾음)
+ *   node server/admin.mjs stock-import [--dry] < 대장.json  입출고 대장 넣기 (README '프로젝트' 참고)
  *   node server/admin.mjs project-import <조직> <프로젝트> [--dry] < 목록.txt  프로젝트 목록 넣기 (1. 묶음, 4-1. 아래 묶음, * 항목, ※ 메모)
  *     이미 값이 있으면 그대로 둠. 조직도에서 못 찾으면 넣지 않고 이름만 알려 줌. 번호는 출력하지 않음
  *
@@ -19,7 +20,7 @@
  */
 import { join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
-import { openDb, hashPassword, tempPassword, cleanContact, parseOutline, importOutline } from "./db.mjs";
+import { openDb, hashPassword, tempPassword, cleanContact, parseOutline, importOutline, importLedger } from "./db.mjs";
 import { backupNow, listBackups } from "./backup.mjs";
 
 const DATA_DIR = resolve(process.env.DATA_DIR || "data");
@@ -148,6 +149,26 @@ switch (cmd) {
       db.exec(dry ? "ROLLBACK" : "COMMIT");
       console.log(`${dry ? "[미리보기, 저장 안 함] " : ""}프로젝트 '${name}': 묶음 ${c.group}개, 항목 ${c.item}개`);
     } catch (e) { db.exec("ROLLBACK"); throw e; }
+    break;
+  }
+
+  // 입출고 대장 넣기: admin.mjs stock-import [--dry] < 대장.json  ({ project, group, ledgers: [...] })
+  case "stock-import": {
+    const dry = args.includes("--dry");
+    const data = JSON.parse(readFileSync(0, "utf8"));
+    const projects = db.prepare("SELECT id FROM projects WHERE name = ?").all(data.project);
+    if (projects.length !== 1) { console.error("프로젝트가 하나로 찾아지지 않아요."); process.exit(1); }
+    const groups = db.prepare("SELECT id FROM project_items WHERE project_id = ? AND kind = 'group' AND name = ?").all(projects[0].id, data.group);
+    if (groups.length !== 1) { console.error("묶음이 하나로 찾아지지 않아요."); process.exit(1); }
+    db.exec("BEGIN");
+    try {
+      for (const l of data.ledgers) {
+        if (db.prepare("SELECT 1 FROM stock_ledgers WHERE item_id = ? AND name = ?").get(groups[0].id, l.name)) throw new Error(`이미 있는 대장: ${l.name}`);
+        const t = importLedger(db, groups[0].id, l);
+        console.log(`${dry ? "[미리보기, 저장 안 함] " : ""}${l.name}: 기록 ${t.moves}건, 입고 ${t.in}, 출고 ${t.out}, 재고 ${t.in - t.out}`);
+      }
+      db.exec(dry ? "ROLLBACK" : "COMMIT");
+    } catch (e) { db.exec("ROLLBACK"); console.error(e.message); process.exit(1); }
     break;
   }
 

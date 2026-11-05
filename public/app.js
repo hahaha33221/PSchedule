@@ -3464,6 +3464,7 @@
     document.title = `${u.name} · ${TITLE}`;
     let sub = store.get("ps.unitSub", "0") === "1";
     let taskView = store.get("ps.unitTaskView", "who");
+    let meetView = store.get("ps.unitMeetView", "today");
     const head = h("div", { class: "unit-head" });
     const statsBox = h("div", { class: "unit-stats" });
     const meetBox = h("section", { class: "card unit-card" }, loading());
@@ -3497,12 +3498,17 @@
 
     function drawBody() {
       const s = data.stats;
-      statsBox.replaceChildren(...[[s.weekMeetings, "이번 주 회의"], [s.openTasks, "남은 할 일"], [s.lateTasks, "마감 지난 할 일", s.lateTasks > 0], [s.importantMemos, "중요 메모"]].map(([n, label, warn]) =>
+      const td = today();
+      const todayMeetings = data.meetings.filter((e) => e.startDate <= td && e.endDate >= td);
+      statsBox.replaceChildren(...[[todayMeetings.length, "오늘 회의"], [s.weekMeetings, "이번 주 회의"], [s.openTasks, "남은 할 일"], [s.lateTasks, "마감 지난 할 일", s.lateTasks > 0], [s.importantMemos, "중요 메모"]].map(([n, label, warn]) =>
         h("div", { class: "card unit-stat" + (warn ? " is-warn" : "") }, [h("strong", { text: String(n) }), h("span", { text: label })])));
       const week = `${shortDate(data.week.from)} ~ ${shortDate(data.week.to)}`;
+      const isToday = meetView === "today";
+      const meetList = isToday ? todayMeetings : data.meetings;
       fill(meetBox,
-        h("div", { class: "card__head" }, [h("h2", { class: "card__title" }, ["이번 주 회의 ", h("span", { class: "muted small", text: week })]), h("a", { class: "btn btn--ghost btn--sm", href: "#/dashboard" }, ["대시보드", icon("arrow")])]),
-        data.meetings.length ? h("ul", { class: "mrows" }, data.meetings.map((e) => meetingRow(e))) : h("p", { class: "muted small", text: data.memberIds.length ? "이번 주에 팀원이 참석하는 회의가 없어요." : "아직 이 소속에 멤버가 없어요." })
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title" }, [isToday ? "오늘 회의 " : "이번 주 회의 ", h("span", { class: "muted small", text: isToday ? shortDate(td) : week })]), h("a", { class: "btn btn--ghost btn--sm", href: "#/dashboard" }, ["대시보드", icon("arrow")])]),
+        h("div", { class: "seg seg--sm" }, [["today", `오늘 ${todayMeetings.length}`], ["week", `이번 주 ${data.meetings.length}`]].map(([k, label]) => h("button", { type: "button", "aria-selected": String(meetView === k), text: label, onclick: () => { meetView = k; store.set("ps.unitMeetView", k); drawBody(); } }))),
+        meetList.length ? h("ul", { class: "mrows" }, meetList.map((e) => meetingRow(e, isToday))) : h("p", { class: "muted small", text: !data.memberIds.length ? "아직 이 소속에 멤버가 없어요." : isToday ? "오늘 팀원이 참석하는 회의가 없어요." : "이번 주에 팀원이 참석하는 회의가 없어요." })
       );
       const tasks = data.tasks;
       const viewSeg = h("div", { class: "seg seg--sm" }, [["who", "담당자별"], ["due", "마감일순"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String(taskView === k), text: label, onclick: () => { taskView = k; store.set("ps.unitTaskView", k); drawBody(); } })));
@@ -3568,6 +3574,7 @@
       h("span", { class: "muted small", text: `완료 ${p.done}/${p.total}` })
     ]);
   };
+  const fmtN = (n) => Number(n || 0).toLocaleString("ko-KR");
   const projectFilter = { unit: null };
   // 프로젝트 만들기·고치기
   function projectDialog(p, onSaved) {
@@ -3653,7 +3660,7 @@
         field("메모", note), err,
         h("div", { class: "actions" }, [
           item ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
-            if (!confirm(isGroup ? `'${item.name}' 묶음과 그 안의 항목을 모두 지울까요?` : `'${item.name}' 항목을 지울까요?`)) return;
+            if (!confirm(isGroup ? `'${item.name}' 묶음과 그 안의 항목·입출고 현황을 모두 지울까요?` : `'${item.name}' 항목을 지울까요?`)) return;
             const r = await act(() => api(`/project-items/${item.id}`, { method: "DELETE" }));
             closeDialog(); apply(r);
           } }) : null,
@@ -3711,9 +3718,21 @@
                 h("span", { class: "muted small", text: `${under.filter((x) => x.status === "done").length}/${under.length}` }),
                 i.note ? h("span", { class: "muted small pj-note", text: i.note }) : null
               ])),
-              h("td", { class: "pj-actions" }, h("button", { class: "link-btn", type: "button", text: "+ 항목", onclick: () => itemDialog(null, { kind: "item", parentId: i.id }) }))
+              h("td", { class: "pj-actions" }, [
+                h("button", { class: "link-btn", type: "button", text: "+ 항목", onclick: () => itemDialog(null, { kind: "item", parentId: i.id }) }),
+                h("button", { class: "link-btn", type: "button", text: "+ 현황", title: "입출고 현황 만들기", onclick: () => ledgerDialog(null, async (body) => { const r = await api(`/project-items/${i.id}/ledgers`, { method: "POST", body }); closeDialog(); go(`#/stock/${r.ledger.id}`); }) })
+              ])
             ]));
-            if (open) walk(i.id, depth + 1);
+            if (open) {
+              walk(i.id, depth + 1);
+              // 묶음 맨 아래에 입출고 현황
+              for (const l of (data.ledgers || []).filter((x) => x.itemId === i.id)) rows.push(h("tr", { class: "pj-ledger" }, [
+                h("td", { colspan: "5", style: `padding-left:${14 + (depth + 1) * 20}px` }, h("a", { class: "pj-ledger__link", href: `#/stock/${l.id}` }, [
+                  icon("db"), h("strong", { text: l.name }),
+                  h("span", { class: "muted small", text: `입고 ${fmtN(l.inTotal)} · 출고 ${fmtN(l.outTotal)} · 재고 ${fmtN(l.inTotal - l.outTotal)} ${l.unit}` }), icon("arrow")
+                ]))
+              ]));
+            }
           } else if (shows(i)) {
             const st = h("select", { class: `pj-select pj-st--${i.status}`, "aria-label": `${i.name} 상태`, onchange: (e) => patchItem(i, { status: e.target.value }) }, PROJECT_STATUS.map(([k, label]) => h("option", { value: k, text: label })));
             st.value = i.status;
@@ -3766,6 +3785,191 @@
     try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("projects", failed(e)); }
   }
 
+  /* ---------- 입출고 현황: 입고·출고 표, 품목별 재고, 전달 후 현황 ---------- */
+  // 대장 만들기·고치기 (save 는 본문을 받아 저장)
+  function ledgerDialog(v, save) {
+    const err = errorLine();
+    const a = v?.ledger.after || {};
+    const name = h("input", { value: v?.ledger.name || "", maxlength: "60", autofocus: true, placeholder: "예: 실타래 입출고" });
+    const unit = h("input", { value: v?.ledger.unit || "개", maxlength: "10" });
+    const inLabel = h("input", { value: v?.ledger.inLabel || "", maxlength: "80", placeholder: "예: 공급처 → 기념품팀" });
+    const outLabel = h("input", { value: v?.ledger.outLabel || "", maxlength: "80", placeholder: "예: 기념품팀 → 봉사자" });
+    const contract = h("input", { type: "number", min: "0", value: v?.ledger.contract ?? "" });
+    let options = (v?.options || []).map((o) => ({ ...o }));
+    const optBox = h("div", { class: "stack stock-opts" });
+    const drawOpts = () => {
+      const add = h("input", { maxlength: "30", placeholder: "품목 이름 (색상·종류) 후 Enter", "aria-label": "품목 추가" });
+      const push = () => { if (add.value.trim()) { options.push({ name: add.value.trim() }); drawOpts(); optBox.querySelector("input:last-of-type")?.focus(); } };
+      add.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); push(); } });
+      add.addEventListener("blur", push);
+      optBox.replaceChildren(...options.map((o) => {
+        const input = h("input", { value: o.name, maxlength: "30", "aria-label": "품목 이름", oninput: (e) => { o.name = e.target.value; } });
+        return h("div", { class: "contact-cat" }, [input, h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": `${o.name} 빼기`, html: ICON.close, onclick: () => { options = options.filter((x) => x !== o); drawOpts(); } })]);
+      }), add);
+    };
+    drawOpts();
+    const afterLabel = h("input", { value: a.label || "", maxlength: "40", placeholder: "예: 수녀원 전달" });
+    const afterUnit = h("input", { value: a.unit || "", maxlength: "20", placeholder: "예: 자른실" });
+    const afterQty = h("input", { type: "number", min: "0", value: a.qty || "" });
+    const perLength = h("input", { type: "number", min: "0", value: a.perLength || "" });
+    const lengths = h("input", { value: (a.lengths || []).join(", "), placeholder: "예: 9144, 9000, 8800" });
+    const ok = h("button", { class: "btn btn--primary", type: "submit", text: v ? "저장" : "만들기" });
+    const form = h("form", { class: "stack", novalidate: true }, [
+      h("div", { class: "row2" }, [field("이름", name), field("단위", unit)]),
+      h("div", { class: "row2" }, [field("입고 경로", inLabel), field("출고 경로", outLabel)]),
+      field("계약 수량", contract, "적으면 미입고 수량을 함께 보여 줘요"),
+      h("div", { class: "field" }, [h("span", { class: "field__label", text: "품목 열" }), optBox]),
+      h("details", { class: "stock-after", open: !!a.label }, [
+        h("summary", { text: "전달 후 현황 (선택)" }),
+        h("div", { class: "stack" }, [
+          h("div", { class: "row2" }, [field("전달 이름", afterLabel), field("전달 단위", afterUnit)]),
+          field("전달 수량", afterQty),
+          h("div", { class: "row2" }, [field("1개당 필요한 길이", perLength, "단위와 길이가 같은 값으로"), field("1단위 길이 후보", lengths, "쉼표로 나눠 적으면 후보별로 계산해요")])
+        ])
+      ]),
+      err,
+      h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])
+    ]);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      busy(ok, async () => {
+        try {
+          const body = {
+            name: name.value, unit: unit.value, inLabel: inLabel.value, outLabel: outLabel.value, contract: contract.value,
+            after: { label: afterLabel.value, unit: afterUnit.value, qty: Number(afterQty.value) || 0, perLength: Number(perLength.value) || 0, lengths: lengths.value.split(",").map((x) => Number(x.trim())).filter((x) => x > 0) },
+            options: v ? options.filter((o) => o.name.trim()) : options.map((o) => o.name).filter((x) => x.trim())
+          };
+          await save(body);
+        } catch (ex) { showError(err, ex.message); }
+      });
+    });
+    openDialog(v ? "입출고 현황 고치기" : "입출고 현황 만들기", form);
+  }
+  async function pageStock(id) {
+    drawMini(null);
+    setMain("projects", loading());
+    let data;
+    const apply = (r) => { data = r; draw(); };
+    function moveDialog(type, m) {
+      const err = errorLine();
+      const date = h("input", { value: m?.date || today(), maxlength: "20", autofocus: true, placeholder: "2026-11-06" });
+      const handler = h("input", { value: m?.handler || "", maxlength: "40" });
+      const note = h("textarea", { rows: "2", maxlength: "500" }, m?.note || "");
+      const sum = h("strong");
+      const inputs = data.options.map((o) => ({ o, el: h("input", { type: "number", min: "0", inputmode: "numeric", value: m?.qty[o.id] || "", "aria-label": o.name, oninput: () => drawSum() }) }));
+      const drawSum = () => { sum.textContent = `합계 ${fmtN(inputs.reduce((n, x) => n + (Number(x.el.value) || 0), 0))} ${data.ledger.unit}`; };
+      drawSum();
+      const ok = h("button", { class: "btn btn--primary", type: "submit", text: m ? "저장" : "추가" });
+      const form = h("form", { class: "stack", novalidate: true }, [
+        h("div", { class: "row2" }, [field(type === "in" ? "입고일" : "출고일", date), type === "out" ? field("전달자", handler) : null]),
+        inputs.length ? h("div", { class: "stock-grid" }, inputs.map((x) => h("label", { class: "stock-grid__cell" }, [h("span", { class: "small", text: x.o.name }), x.el]))) : h("p", { class: "muted small", text: "먼저 '고치기'에서 품목 열을 추가해 주세요." }),
+        sum, field("비고", note), err,
+        h("div", { class: "actions" }, [
+          m ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
+            if (!confirm(`${m.date} 기록을 지울까요?`)) return;
+            const r = await act(() => api(`/stock-moves/${m.id}`, { method: "DELETE" }));
+            closeDialog(); apply(r);
+          } }) : null,
+          h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok
+        ])
+      ]);
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        busy(ok, async () => {
+          try {
+            const qty = Object.fromEntries(inputs.map((x) => [x.o.id, x.el.value]));
+            const body = { date: date.value, handler: handler.value, note: note.value, qty };
+            const r = await api(m ? `/stock-moves/${m.id}` : `/stock/${id}/moves`, { method: m ? "PATCH" : "POST", body: m ? body : { ...body, type } });
+            closeDialog(); apply(r);
+          } catch (ex) { showError(err, ex.message); }
+        });
+      });
+      openDialog(`${type === "in" ? "입고" : "출고"} ${m ? "고치기" : "추가"}`, form);
+    }
+    function draw() {
+      const { ledger: l, options, moves } = data;
+      document.title = `${l.name} · ${TITLE}`;
+      const sumOf = (type, oid) => moves.filter((m) => m.type === type).reduce((n, m) => n + (oid ? m.qty[oid] || 0 : Object.values(m.qty).reduce((a, b) => a + b, 0)), 0);
+      const inAll = sumOf("in"), outAll = sumOf("out"), stock = inAll - outAll;
+      const stat = (label, n, warn) => h("div", { class: "card unit-stat" + (warn ? " is-warn" : "") }, [h("strong", { text: fmtN(n) }), h("span", { text: `${label} (${l.unit})` })]);
+      const pct = (n) => (inAll ? `${((n / inAll) * 100).toFixed(1)}%` : "-");
+      const num = (n, cls) => h("td", { class: "num" + (cls ? ` ${cls}` : ""), text: n ? fmtN(n) : "-" });
+      const table = (type) => {
+        const list = moves.filter((m) => m.type === type);
+        const isOut = type === "out";
+        let running = 0;
+        const body = list.map((m, i) => {
+          const day = Object.values(m.qty).reduce((a, b) => a + b, 0);
+          running += day;
+          return h("tr", { class: "stock-row", tabindex: "0", title: "눌러서 고치기", onclick: () => moveDialog(type, m), onkeydown: (e) => { if (e.key === "Enter") moveDialog(type, m); } }, [
+            h("td", { class: "num muted", text: String(i + 1) }), h("td", { class: "nowrap", text: m.date }),
+            ...options.map((o) => num(m.qty[o.id])), num(day, "stock-strong"), num(running),
+            isOut ? h("td", { text: m.handler || "-" }) : null, h("td", { class: "stock-note", text: m.note })
+          ]);
+        });
+        const colsAfter = isOut ? 2 : 1;
+        return h("section", { class: "stock-sec" }, [
+          h("div", { class: "card__head" }, [
+            h("h2", { class: "card__title" }, [isOut ? "출고 현황 " : "입고 현황 ", h("span", { class: "muted small", text: isOut ? l.outLabel : l.inLabel })]),
+            h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => moveDialog(type) }, [icon("plus"), isOut ? "출고 추가" : "입고 추가"])
+          ]),
+          h("div", { class: "card table-wrap" }, h("table", { class: "table stock-table" }, [
+            h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "순번" }), h("th", { text: isOut ? "출고일" : "입고일" }), ...options.map((o) => h("th", { class: "num", text: o.name })), h("th", { class: "num", text: "일계" }), h("th", { class: "num", text: "누계" }), isOut ? h("th", { text: "전달자" }) : null, h("th", { text: "비고" })])),
+            h("tbody", {}, body.length ? body : h("tr", {}, h("td", { colspan: String(options.length + 4 + colsAfter), class: "muted empty", text: "아직 기록이 없어요." }))),
+            h("tfoot", {}, [
+              h("tr", {}, [h("th", { colspan: "2", text: "합계" }), ...options.map((o) => num(sumOf(type, o.id))), num(sumOf(type)), h("td", { colspan: String(1 + colsAfter) })]),
+              h("tr", { class: "muted" }, [h("th", { colspan: "2", text: "입고 합계 대비" }), ...options.map((o) => h("td", { class: "num", text: pct(sumOf(type, o.id)) })), h("td", { class: "num", text: pct(sumOf(type)) }), h("td", { colspan: String(1 + colsAfter) })]),
+              isOut ? h("tr", { class: "stock-left" }, [h("th", { colspan: "2", text: "창고 재고" }), ...options.map((o) => { const n = sumOf("in", o.id) - sumOf("out", o.id); return num(n, n < 0 ? "stock-minus" : ""); }), num(stock, stock < 0 ? "stock-minus" : ""), h("td", { colspan: String(1 + colsAfter) })]) : null
+            ])
+          ]))
+        ]);
+      };
+      // 전달 후 현황: 길이 후보가 있으면 후보별 계산, 없으면 출고와 전달 수량 비교
+      const a = l.after || {};
+      let after = null;
+      if (a.label) {
+        const unitName = a.unit || l.unit;
+        const lens = a.perLength > 0 ? a.lengths || [] : [];
+        const line = (label, cells, cls) => h("tr", { class: cls || null }, [h("th", { text: label }), ...cells.map((c) => h("td", { class: "num", text: fmtN(c) }))]);
+        const each = lens.map((x) => Math.floor(x / a.perLength));
+        after = h("section", { class: "stock-sec" }, [
+          h("div", { class: "card__head" }, h("h2", { class: "card__title" }, ["전달 후 현황 ", h("span", { class: "muted small", text: a.label })])),
+          h("div", { class: "card table-wrap" }, h("table", { class: "table stock-table stock-after-table" }, lens.length ? [
+            h("thead", {}, h("tr", {}, [h("th", { text: `1${l.unit} 길이` }), ...lens.map((x) => h("th", { class: "num", text: fmtN(x) }))])),
+            h("tbody", {}, [
+              line(`1${l.unit}당 ${unitName} 수 (1개 ${fmtN(a.perLength)})`, each),
+              l.contract ? line(`계약 ${fmtN(l.contract)}${l.unit} 기준 예상 ${unitName}`, each.map((k) => k * l.contract)) : null,
+              line(`출고 ${fmtN(outAll)}${l.unit} 기준 예상 ${unitName}`, each.map((k) => k * outAll)),
+              line(`${a.label} ${unitName}`, each.map(() => a.qty)),
+              line("차이", each.map((k) => k * outAll - a.qty), "stock-left"),
+              line(`차이의 ${l.unit} 환산`, each.map((k) => (k ? (k * outAll - a.qty) / k : 0)))
+            ])
+          ] : h("tbody", {}, [line(`출고 합계 (${l.unit})`, [outAll]), line(`${a.label} ${unitName}`, [a.qty]), line("차이", [outAll - a.qty], "stock-left")])))
+        ]);
+      }
+      setMain("projects", [
+        h("nav", { class: "muted small" }, [h("a", { href: "#/projects", text: "프로젝트" }), " › ", h("a", { href: `#/projects/${data.project.id}`, text: data.project.name }), ` › ${data.itemName}`]),
+        h("div", { class: "page-head page-head--wrap" }, [
+          h("h1", { text: l.name }),
+          h("span", { class: "page-head__end actions" }, [
+            h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => ledgerDialog(data, async (body) => { const r = await api(`/stock/${id}`, { method: "PATCH", body }); closeDialog(); apply(r); }) }),
+            l.canDelete ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
+              if (!confirm(`'${l.name}' 입출고 현황과 모든 기록을 지울까요?`)) return;
+              const r = await act(() => api(`/stock/${id}`, { method: "DELETE" }));
+              go(`#/projects/${r.projectId}`);
+            } }) : null
+          ])
+        ]),
+        h("div", { class: "unit-stats" }, [
+          l.contract ? stat("계약", l.contract) : null, stat("입고", inAll), l.contract ? stat("미입고", l.contract - inAll) : null, stat("출고", outAll), stat("창고 재고", stock, stock < 0)
+        ]),
+        table("in"), table("out"), after
+      ]);
+    }
+    page = { name: "projects", reload: async () => apply(await api(`/stock/${id}`)) };
+    try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("projects", failed(e)); }
+  }
+
   /* ---------- 봉사자 화면: 직원 화면과 따로 (메뉴는 나중에 이 머리줄 아래로) ---------- */
   function renderVolunteer() {
     layout.main = null;
@@ -3811,6 +4015,7 @@
     if (name === "notices") return pageNotices();
     if (name === "members") return pageMembers();
     if (name === "org") return pageOrg();
+    if (name === "stock" && id) return pageStock(Number(id));
     if (name === "projects" && id) return pageProject(Number(id));
     if (name === "projects") return pageProjects();
     if (name === "orgchart") return pageOrgChart();
