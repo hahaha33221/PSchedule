@@ -1207,6 +1207,41 @@ button.mgroup__head:hover { color: var(--ink); }
   .contacts__edit { text-align: left; padding-top: 6px !important; }
 }
 
+/* 프로젝트 */
+.pj-team__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.pj-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.pj-card { display: flex; flex-direction: column; gap: 8px; padding: 14px 16px; text-decoration: none; color: inherit; }
+.pj-card:hover { border-color: var(--primary); }
+.pj-card__note { margin: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-line; }
+.pj-progress { display: flex; align-items: center; gap: 10px; margin: 2px 0 10px; }
+.pj-card .pj-progress { margin: 0; }
+.pj-bar { flex: 1; height: 7px; max-width: 420px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.pj-bar i { display: block; height: 100%; background: var(--primary); }
+.pj-counts { display: flex; flex-wrap: wrap; gap: 4px; }
+.pj-st { padding: 1px 7px; border-radius: 6px; font-size: 11.5px; font-weight: 600; background: var(--surface-2); color: var(--ink-2); }
+.pj-st--idea { color: var(--c4); } .pj-st--review { color: var(--c3); } .pj-st--doing, .pj-st--fixed { color: var(--primary); } .pj-st--hold { color: var(--muted); } .pj-st--done { color: var(--c1); }
+.pj-select { padding: 3px 6px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); font-size: 13px; font-weight: 600; }
+.pj-desc { margin: 0 0 8px; white-space: pre-line; }
+.pj-table td { vertical-align: middle; }
+.pj-group td { background: var(--surface-2); }
+.pj-group__row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.pj-name { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.pj-name:hover { color: var(--primary); }
+.pj-note { display: block; white-space: pre-line; }
+.pj-group__row .pj-note { flex-basis: 100%; }
+.pj-actions { width: 70px; text-align: right; white-space: nowrap; }
+.pj-table tr.is-done .pj-name { color: var(--muted); text-decoration: line-through; }
+@media (max-width: 720px) {
+  .pj-table thead { display: none; }
+  .pj-table, .pj-table tbody, .pj-table tr, .pj-table td { display: block; width: 100%; }
+  .pj-table tr { padding: 8px 12px; border-bottom: 1px solid var(--line-2); }
+  .pj-table tr.pj-group { background: var(--surface-2); }
+  .pj-table td { padding: 2px 0 !important; border: 0; }
+  .pj-table td[data-label]::before { content: attr(data-label); display: inline-block; width: 52px; color: var(--muted); font-size: 12.5px; }
+  .pj-actions { width: auto; text-align: left; }
+  .pj-actions:empty { display: none; }
+}
+
 /* 봉사자 화면 */
 .vol { min-height: 100dvh; background: var(--bg, var(--surface-2)); }
 .vol__bar { display: flex; align-items: center; gap: 10px; padding: 12px 20px; background: var(--surface); border-bottom: 1px solid var(--line); }

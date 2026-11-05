@@ -206,11 +206,46 @@ jobs:
           # 자리의 사람이 바뀌면 연락처 지움
           curl -fs -H "$H" -XPATCH -d '{"name":"새사람"}' $B/admin/org/positions/$PO >/dev/null
           if curl -fs -H "$H" $B/contacts | grep -q 010-0000-0007; then echo "바뀐 자리에 연락처가 남아요"; exit 1; fi
+          # 할 일 기간: 시작일 기본값은 오늘, 기간 안의 날에 보임, 시작일이 마감보다 늦으면 400, 마감을 당기면 시작일도 맞춤
+          TKJ=$(curl -fs -H "$H" -XPOST -d '{"title":"기간 할 일","startDate":"2030-03-04","dueDate":"2030-03-13"}' $B/tasks)
+          TK2=$(echo "$TKJ" | node -pe 'JSON.parse(require("fs").readFileSync(0)).task.id')
+          echo "$TKJ" | grep -q '"startDate":"2030-03-04"'
+          curl -fs -H "$H" "$B/tasks?date=2030-03-08" | grep -q '기간 할 일'
+          if curl -fs -H "$H" "$B/tasks?date=2030-03-03" | grep -q '기간 할 일'; then echo "시작 전에 보여요"; exit 1; fi
+          if curl -fs -H "$H" "$B/tasks?date=2030-03-14" | grep -q '기간 할 일'; then echo "마감 뒤에 보여요"; exit 1; fi
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPATCH -d '{"startDate":"2030-04-01"}' $B/tasks/$TK2)" = 400
+          curl -fs -H "$H" -XPATCH -d '{"dueDate":"2030-03-02"}' $B/tasks/$TK2 | grep -q '"startDate":"2030-03-02"'
+          curl -fs -H "$H" -XPOST -d '{"title":"시작 기본값","dueDate":"2099-01-01"}' $B/tasks | grep -q "\"startDate\":\"$(TZ=Asia/Seoul date +%F)\""
+          curl -fs -H "$H" -XDELETE $B/tasks/$TK2 >/dev/null
+          # 메모 → 회의 할 일: 준비/후속 고르기
+          MEV=$(curl -fs -H "$H" -XPOST -d '{"kind":"meeting","title":"구분 회의","startDate":"2030-05-01"}' $B/events | node -pe 'JSON.parse(require("fs").readFileSync(0)).event.id')
+          J="{\"body\":\"준비 메모\",\"date\":\"2030-05-01\",\"meetingId\":$MEV}"; MM=$(curl -fs -H "$H" -XPOST -d "$J" $B/memos | node -pe 'JSON.parse(require("fs").readFileSync(0)).memo.id')
+          curl -fs -H "$H" -XPOST -d '{"phase":"before"}' $B/memos/$MM/task | grep -q '"phase":"before"'
+          # 프로젝트: 팀별로 만들고, 볼 수 있는 팀만 보임, 목록 붙여넣기는 묶음·항목 트리로
+          J="{\"unitId\":$LG,\"name\":\"숙박 품목\"}"; PJ=$(curl -fs -H "$H" -XPOST -d "$J" $B/projects | node -pe 'JSON.parse(require("fs").readFileSync(0)).project.id')
+          OUT=$'설명 줄\n1. 키트\n* 티셔츠\n* 가방\n※ 메모 줄\n2. 성물\n2-1. 묵주\n* 매듭 묵주'
+          node -e 'process.stdout.write(JSON.stringify({text:process.argv[1]}))' "$OUT" > /tmp/ps/outline.json
+          curl -fs -H "$H" -XPOST -d @/tmp/ps/outline.json $B/projects/$PJ/import | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const g=d.items.filter(i=>i.kind==="group"),t=d.items.filter(i=>i.kind==="item");const k=g.find(x=>x.name==="키트"),m=g.find(x=>x.name==="묵주"),s=g.find(x=>x.name==="성물");if(g.length!==3||t.length!==3||d.project.total!==3||k.note!=="메모 줄"||m.parentId!==s.id||t.find(x=>x.name==="매듭 묵주").parentId!==m.id||d.items.some(i=>i.name==="설명 줄"))process.exit(1)'
+          PI=$(curl -fs -H "$H" $B/projects/$PJ | node -pe 'JSON.parse(require("fs").readFileSync(0)).items.find(i=>i.name==="가방").id')
+          curl -fs -H "$H" -XPATCH -d '{"status":"done"}' $B/project-items/$PI | grep -q '"done":1'
+          curl -fs -H "$H" $B/projects | grep -q '숙박 품목'
+          curl -fs -H "$(bearer "$A2")" $B/projects | grep -q '숙박 품목'
+          if curl -fs -H "$(bearer "$A1")" $B/projects | grep -q '숙박 품목'; then echo "다른 팀 프로젝트가 보여요"; exit 1; fi
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/projects/$PJ)" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPATCH -d '{"status":"none"}' $B/project-items/$PI)" = 404
+          J="{\"unitId\":$LG,\"name\":\"남의 팀\"}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPOST -d "$J" $B/projects)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A2")" -XDELETE $B/projects/$PJ)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"text":"   "}' $B/projects/$PJ/import)" = 400
+          printf '머리말\n1. 묶음\n* 항목가\n* 항목나\n' | ADM project-import 숙박팀 '일괄 프로젝트' --dry | grep -q '미리보기.*항목 2개'
+          if curl -fs -H "$H" $B/projects | grep -q '일괄 프로젝트'; then echo "미리보기가 저장했어요"; exit 1; fi
+          printf '머리말\n1. 묶음\n* 항목가\n* 항목나\n' | ADM project-import 숙박팀 '일괄 프로젝트' | grep -q '묶음 1개, 항목 2개'
+          curl -fs -H "$H" $B/projects | grep -q '일괄 프로젝트'
+          curl -fs -H "$H" -XDELETE $B/projects/$PJ >/dev/null
           # 봉사자: 관리자가 발급, 직원 데이터는 서버에서 전부 막고 직원 명단에도 안 나옴
           VP=$(curl -fs -H "$H" -XPOST -d '{"login":"vola","name":"봉사자일","role":"volunteer","unitId":'$OPS'}' $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).password')
           A8=$(tok vola "$VP"); VU=$(USR vola)
           curl -fs -H "$(bearer "$A8")" $B/me | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.user.role!=="volunteer"||d.user.unitId!==null||d.units.length||d.team.length||d.categories.length)process.exit(1)'
-          for u in tasks "events?from=2026-02-01&to=2026-02-28" contacts org team memos notices notices/unread "search?q=WYD" admin/users people/1 meetings/choices; do test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" "$B/$u")" = 403; done
+          for u in projects tasks "events?from=2026-02-01&to=2026-02-28" contacts org team memos notices notices/unread "search?q=WYD" admin/users people/1 meetings/choices; do test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" "$B/$u")" = 403; done
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" -XPOST -d '{"title":"x"}' $B/tasks)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" -XPUT -d '{"mobile":"1"}' $B/contacts/u$VU)" = 403
           if curl -fs -H "$(bearer "$A1")" $B/me | grep -q '봉사자일'; then echo "직원 명단에 봉사자가 나와요"; exit 1; fi

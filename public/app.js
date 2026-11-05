@@ -574,8 +574,9 @@
     if (!t.dueDate) return null;
     const td = today();
     const late = t.status !== "done" && t.dueDate < td;
-    const rel = relDay(t.dueDate);
-    return h("span", { class: "due" + (late ? " due--late" : t.dueDate === td ? " due--today" : ""), text: late ? `${shortDate(t.dueDate)} 지남` : rel || shortDate(t.dueDate) });
+    // 시작일과 마감일이 같으면 한 날짜, 다르면 기간 (11/4~11/13)
+    const when = t.startDate && t.startDate !== t.dueDate ? `${shortDate(t.startDate)}~${shortDate(t.dueDate)}` : shortDate(t.dueDate);
+    return h("span", { class: "due" + (late ? " due--late" : t.dueDate === td ? " due--today" : ""), title: relDay(t.dueDate) || null, text: late ? `${when} 지남` : when });
   }
 
   async function patchTask(t, body) {
@@ -779,6 +780,7 @@
         { id: "meetings", label: "회의", icon: "people" },
         { id: "memos", label: "메모", icon: "note" }
       ] },
+      { id: "projects", label: "프로젝트", icon: "folder" },
       { id: "orgchart", label: "조직도", icon: "org" },
       { id: "contacts", label: "연락처", icon: "phone" },
       { id: "notices", label: "공지", icon: "bell", badge: state.unreadNotices } // 맨 아래, 안 읽은 공지 수
@@ -1189,9 +1191,9 @@
       section("doc", isMeeting ? "회의 개요" : "설명", null, inlineText(e.description, { multiline: true, rows: 2, placeholder: isMeeting ? "어떤 회의인지 적어 주세요" : "설명 추가", label: "개요", max: 3000, onSave: (v) => patch({ description: v }) })),
       isMeeting ? section("list", "회의 안건", null, h("div", {}, [agendaList, adder("안건 추가 후 Enter", async (v) => { agenda.push(v); drawAgenda(); await patch({ agenda }); })])) : null,
       section("todo", ["준비사항 ", h("span", { class: "muted", text: `${before.filter((t) => t.status === "done").length}/${before.length}` })], null,
-        h("div", {}, [taskRows(before, { compact: true }), adder("준비할 일 추가 후 Enter", (v) => act(() => api("/tasks", { method: "POST", body: { title: v, meetingId: e.id, phase: "before", dueDate: e.startDate } })).then(() => refresh()))])),
+        h("div", {}, [taskRows(before, { compact: true }), adder("준비할 일 추가 후 Enter", (v) => act(() => api("/tasks", { method: "POST", body: { title: v, meetingId: e.id, phase: "before", dueDate: e.startDate, assigneeId: state.user.id } })).then(() => refresh()))])),
       section("check", ["회의 후 할 일 ", h("span", { class: "muted", text: String(after.length) })], null,
-        h("div", {}, [taskRows(after, { compact: true, assignee: true }), adder("후속 할 일 추가 후 Enter", (v) => act(() => api("/tasks", { method: "POST", body: { title: v, meetingId: e.id, phase: "after" } })).then(() => refresh()))])),
+        h("div", {}, [taskRows(after, { compact: true, assignee: true }), adder("후속 할 일 추가 후 Enter", (v) => act(() => api("/tasks", { method: "POST", body: { title: v, meetingId: e.id, phase: "after", dueDate: e.endDate > today() ? e.endDate : today(), assigneeId: state.user.id } })).then(() => refresh()))])),
       section("note", ["메모 / 참고 사항 ", h("span", { class: "muted", text: String(r.memos.length) })], null,
         h("div", {}, [memoRows(r.memos, { inMeeting: true }), memoAdder({ meetingId: e.id, date: today() })])),
       section("link", "관련 문서", h("button", { class: "link-btn", type: "button", text: "추가", onclick: (ev) => addLink(ev.currentTarget, e.id) }),
@@ -1364,7 +1366,9 @@
   function memoToTask(m) {
     const err = errorLine();
     const title = h("input", { value: m.body.split("\n")[0].slice(0, 80), maxlength: "80", autofocus: true });
-    const due = h("input", { type: "date" });
+    const due = h("input", { type: "date", value: today() });
+    const phase = h("select", {}, [h("option", { value: "before", text: "회의 준비사항" }), h("option", { value: "after", text: "회의 후 할 일" })]);
+    phase.value = "after";
     let assignee = state.user.id;
     const who = h("button", { class: "select-btn", type: "button" });
     const drawWho = () => who.replaceChildren(assignee ? personLine(assignee) : h("span", { class: "muted", text: "담당자 없음" }));
@@ -1372,15 +1376,16 @@
     who.addEventListener("click", () => personPicker(who, assignee ? [assignee] : [], false, (uid) => { assignee = uid; drawWho(); }));
     const ok = h("button", { class: "btn btn--primary", type: "submit", text: "할 일 만들기" });
     const form = h("form", { class: "stack", novalidate: true }, [
-      m.meetingId ? h("p", { class: "notice-box" }, ["'", h("strong", { text: m.meetingTitle }), "' 회의의 후속 할 일로 연결돼요."]) : null,
-      field("할 일", title), h("div", { class: "row2" }, [field("담당자", who), field("마감일", due)]), err,
+      m.meetingId ? h("p", { class: "notice-box" }, ["'", h("strong", { text: m.meetingTitle }), "' 회의에 연결돼요."]) : null,
+      field("할 일", title), h("div", { class: "row2" }, [field("담당자", who), field("마감일", due)]),
+      m.meetingId ? field("구분", phase) : null, err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])
     ]);
     form.addEventListener("submit", (e) => {
       e.preventDefault();
       busy(ok, async () => {
         try {
-          await api(`/memos/${m.id}/task`, { method: "POST", body: { title: title.value, dueDate: due.value || null, assigneeId: assignee } });
+          await api(`/memos/${m.id}/task`, { method: "POST", body: { title: title.value, dueDate: due.value || null, assigneeId: assignee, phase: phase.value } });
           closeDialog(); toast("할 일을 만들었어요."); refresh();
         } catch (ex) { showError(err, ex.message); }
       });
@@ -1396,6 +1401,8 @@
     const title = inlineText(t.title, { cls: "inline--title", label: "할 일", max: 80, required: true, onSave: (v) => patchTask(t, { title: v }) });
     const due = h("input", { type: "date", value: t.dueDate || "", class: "inline inline--box", "aria-label": "마감일" });
     due.addEventListener("change", () => patch({ dueDate: due.value || null }));
+    const startEl = h("input", { type: "date", value: t.startDate || "", class: "inline inline--box", "aria-label": "시작일" });
+    startEl.addEventListener("change", () => patch({ startDate: startEl.value || null }));
     const meetings = mc.meetings.slice();
     if (t.meetingId && !meetings.some((m) => m.id === t.meetingId)) meetings.unshift({ id: t.meetingId, title: t.meetingTitle, startDate: t.meetingDate, startTime: t.meetingTime });
     const meeting = h("select", { class: "inline inline--box", "aria-label": "관련 회의" }, [
@@ -1411,6 +1418,7 @@
     const props = h("dl", { class: "props" }, [
       h("dt", {}, "상태"), h("dd", {}, statusButton(t, (s) => patch({ status: s }))),
       h("dt", {}, "담당자"), h("dd", {}, h("button", { class: "select-btn", type: "button", onclick: (ev) => personPicker(ev.currentTarget, t.assigneeId ? [t.assigneeId] : [], false, (uid) => patch({ assigneeId: uid })) }, personLine(t.assigneeId))),
+      h("dt", {}, "시작일"), h("dd", {}, startEl),
       h("dt", {}, "마감일"), h("dd", {}, due),
       h("dt", {}, "분류"), h("dd", {}, categoryButton(t.categoryId, (id) => patch({ categoryId: id }))),
       state.units.length ? h("dt", {}, "팀") : null, state.units.length ? h("dd", {}, canEditTeam(t) ? teamButton(t.unitId, (id) => patch({ unitId: id })) : teamInfo(t.unitId)) : null,
@@ -1453,7 +1461,7 @@
       section("people", ["일정 ", h("span", { class: "muted", text: String(dayEvents.length) })], h("button", { class: "link-btn", type: "button", text: "추가", onclick: () => editEvent(null, { date: day }) }),
         dayEvents.length ? h("ul", { class: "daycards" }, cards) : h("p", { class: "muted small", text: "일정이 없어요." })),
       section("check", ["할 일 ", h("span", { class: "muted", text: String(tk.tasks.length) })], null,
-        h("div", {}, [taskRows(tk.tasks, { compact: true }), adder("할 일 추가 후 Enter", (v) => act(() => api("/tasks", { method: "POST", body: { title: v, dueDate: day, assigneeId: state.user.id, categoryId: state.cat } })).then(() => refresh()))])),
+        h("div", {}, [taskRows(tk.tasks, { compact: true }), adder("할 일 추가 후 Enter", (v) => act(() => api("/tasks", { method: "POST", body: { title: v, startDate: day, dueDate: day, assigneeId: state.user.id, categoryId: state.cat } })).then(() => refresh()))])),
       section("note", ["메모 ", h("span", { class: "muted", text: String(mm.memos.length) })], null, h("div", {}, [memoRows(mm.memos), memoAdder({ date: day })])),
       h("a", { class: "btn btn--ghost btn--block", href: `#/today/${day}` }, ["이 날 타임라인 보기", icon("arrow")])
     ]);
@@ -1550,7 +1558,11 @@
   function taskForm(v) {
     const err = errorLine();
     const title = h("input", { maxlength: "80", autofocus: true, placeholder: "예: 회의 자료 최종 점검" });
-    const due = h("input", { type: "date", value: v.dueDate || "" });
+    // 일정 만들 때처럼 시작일·마감일을 그 날짜로 채움
+    const due = h("input", { type: "date", value: v.dueDate || today() });
+    const start = h("input", { type: "date", value: v.startDate || v.dueDate || today() });
+    start.addEventListener("change", () => { if (start.value && due.value && due.value < start.value) due.value = start.value; });
+    due.addEventListener("change", () => { if (start.value && due.value && due.value < start.value) start.value = due.value; });
     let assignee = state.user.id, tagIds = [], categoryId = state.cat, catTouched = false;
     const who = h("button", { class: "select-btn", type: "button" });
     const drawWho = () => who.replaceChildren(assignee ? personLine(assignee) : h("span", { class: "muted", text: "담당자 없음" }));
@@ -1571,7 +1583,8 @@
     const submit = h("button", { class: "btn btn--primary", type: "submit", text: "추가" });
     const form = h("form", { class: "stack", novalidate: true }, [
       field("할 일", title),
-      h("div", { class: "row2" }, [field("담당자", who), field("마감일", due)]),
+      field("담당자", who),
+      h("div", { class: "row2" }, [field("시작일", start), field("마감일", due)]),
       h("div", { class: "row2" }, [field("분류", catBtn, "관련 회의를 고르면 회의 분류를 따라가요"), field("태그", tagsBtn)]),
       teamBtn ? field("팀", teamBtn, "관련 회의를 고르면 회의의 팀을 따라가요") : null,
       h("div", { class: "row2" }, [field("관련 회의", meeting), phaseField]),
@@ -1582,7 +1595,7 @@
       ev.preventDefault();
       busy(submit, async () => {
         try {
-          const body = { title: title.value, dueDate: due.value || null, assigneeId: assignee, tagIds, meetingId: meeting.value ? Number(meeting.value) : null, phase: phase.value };
+          const body = { title: title.value, startDate: start.value || null, dueDate: due.value || null, assigneeId: assignee, tagIds, meetingId: meeting.value ? Number(meeting.value) : null, phase: phase.value };
           // 회의를 골랐고 분류를 직접 안 바꿨으면 회의 분류를 따름 (서버에서)
           if (!body.meetingId || catTouched) body.categoryId = categoryId;
           if (teamBtn && (!body.meetingId || teamTouched)) body.unitId = teamId; // 회의를 고르면 회의 팀을 따름
@@ -1980,7 +1993,7 @@
         h("div", { class: "card__head" }, [h("h2", { class: "card__title" }, [relDay(day) === "오늘" ? "오늘의 할 일 " : "할 일 ", h("span", { class: "count count--lg", text: String(shown.filter((t) => t.status !== "done").length) })]),
           h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => quickAdd("task") }, [icon("plus"), "추가"])]),
         tabs,
-        adder("할 일 추가 후 Enter", (v) => act(() => api("/tasks", { method: "POST", body: { title: v, dueDate: day, assigneeId: state.user.id, categoryId: state.cat } })).then(() => load())),
+        adder("할 일 추가 후 Enter", (v) => act(() => api("/tasks", { method: "POST", body: { title: v, startDate: day, dueDate: day, assigneeId: state.user.id, categoryId: state.cat } })).then(() => load())),
         list.length ? h("ul", { class: "ttasks" }, list) : h("p", { class: "muted small task-empty", text: state.show.task ? "할 일이 없어요." : "왼쪽 '내 캘린더'에서 할 일이 꺼져 있어요." })
       );
     }
@@ -2346,7 +2359,7 @@
   }
 
   /* ---------- 할 일 목록 ---------- */
-  const taskFilter = { status: store.get("ps.taskStatus", "open"), who: store.get("ps.taskWho", "all"), tag: null, q: "" };
+  const taskFilter = { status: store.get("ps.taskStatus", "open"), who: store.get("ps.taskWho", "all"), day: "all", tag: null, q: "" };
   async function pageTasks() {
     document.title = `할 일 · ${TITLE}`;
     drawMini(null);
@@ -2360,14 +2373,17 @@
       tagSel.value = taskFilter.tag ? String(taskFilter.tag) : "";
       tagSel.addEventListener("change", () => { taskFilter.tag = tagSel.value ? Number(tagSel.value) : null; drawList(); });
       const search = h("label", { class: "search" }, [icon("search"), h("input", { type: "search", value: taskFilter.q, placeholder: "할 일 검색", "aria-label": "검색", oninput: (e) => { taskFilter.q = e.target.value; drawList(); } })]);
-      fill(filters, seg("status", [["open", "미완료"], ["done", "완료"], ["all", "전체"]], "ps.taskStatus"), ourToggle(() => { drawFilters(); quiet(load()); }), seg("who", [["all", "모두"], ["me", "내 담당"]], "ps.taskWho"), tagSel, search);
+      fill(filters, seg("status", [["open", "미완료"], ["done", "완료"], ["all", "전체"]], "ps.taskStatus"), ourToggle(() => { drawFilters(); quiet(load()); }), seg("who", [["all", "모두"], ["me", "내 담당"]], "ps.taskWho"), seg("day", [["all", "모든 날짜"], ["-1", "어제"], ["0", "오늘"], ["1", "내일"]]), tagSel, search);
     }
     function drawList() {
       const f = taskFilter;
       const list = all.filter((t) => (f.status === "all" || (f.status === "done" ? t.status === "done" : t.status !== "done"))
         && (f.who === "all" || t.assigneeId === state.user.id) && (!f.tag || t.tagIds.includes(f.tag)) && (!f.q || t.title.includes(f.q)));
       const t = today(), tm = shiftYmd(t, 1), week = shiftYmd(t, 7);
-      const groups = f.status === "done" ? [["완료", list]] : [
+      // 날짜로 보기: 시작일~마감일 기간에 그 날이 들어가는 할 일
+      const dayKey = f.day === "all" ? null : shiftYmd(t, Number(f.day));
+      const onDay = (x) => x.dueDate && (x.startDate || x.dueDate) <= dayKey && x.dueDate >= dayKey;
+      const groups = dayKey ? [[{ "-1": "어제", 0: "오늘", 1: "내일" }[f.day], list.filter(onDay)]] : f.status === "done" ? [["완료", list]] : [
         ["마감 지남", list.filter((x) => x.dueDate && x.dueDate < t && x.status !== "done")],
         ["오늘", list.filter((x) => x.dueDate === t)],
         ["내일", list.filter((x) => x.dueDate === tm)],
@@ -3542,6 +3558,214 @@
     try { await page.reload(); } catch (e) { if (e.status !== 401) box.replaceChildren(failed(e)); }
   }
 
+  /* ---------- 프로젝트: 팀별 목록 + 묶음·항목 트리 ---------- */
+  const PROJECT_STATUS = [["none", "미정"], ["idea", "아이디어"], ["review", "검토"], ["doing", "진행"], ["fixed", "확정"], ["hold", "보류"], ["done", "완료"]];
+  const projectStatusLabel = (k) => PROJECT_STATUS.find(([x]) => x === k)?.[1] || k;
+  const projectBar = (p) => {
+    const pct = p.total ? Math.round((p.done / p.total) * 100) : 0;
+    return h("div", { class: "pj-progress" }, [
+      h("div", { class: "pj-bar", role: "img", "aria-label": `완료 ${p.done}개, 전체 ${p.total}개` }, h("i", { style: `width:${pct}%` })),
+      h("span", { class: "muted small", text: `완료 ${p.done}/${p.total}` })
+    ]);
+  };
+  const projectFilter = { unit: null };
+  // 프로젝트 만들기·고치기
+  function projectDialog(p, onSaved) {
+    const err = errorLine();
+    const name = h("input", { value: p?.name || "", maxlength: "80", autofocus: true, placeholder: "예: 기념품 품목 관리" });
+    const note = h("textarea", { rows: "3", maxlength: "1000", placeholder: "무엇을 관리하는 프로젝트인지" }, p?.note || "");
+    let unitId = p ? p.unitId : projectFilter.unit || myUnit();
+    const ok = h("button", { class: "btn btn--primary", type: "submit", text: p ? "저장" : "만들기" });
+    const form = h("form", { class: "stack", novalidate: true }, [
+      field("이름", name), field("팀", unitButton(unitId, (id) => { unitId = id; }, "팀 고르기")), field("설명", note), err,
+      h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])
+    ]);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      busy(ok, async () => {
+        try {
+          const r = await api(p ? `/projects/${p.id}` : "/projects", { method: p ? "PATCH" : "POST", body: { name: name.value, note: note.value, unitId } });
+          closeDialog(); onSaved(r);
+        } catch (ex) { showError(err, ex.message); }
+      });
+    });
+    openDialog(p ? "프로젝트 고치기" : "새 프로젝트", form);
+  }
+  async function pageProjects() {
+    document.title = `프로젝트 · ${TITLE}`;
+    drawMini(null);
+    setMain("projects", loading());
+    let list;
+    const draw = () => {
+      const scope = projectFilter.unit && unitOf(projectFilter.unit) ? unitSubtree(projectFilter.unit) : null;
+      const shown = list.filter((p) => !scope || scope.has(p.unitId));
+      const card = (p) => h("a", { class: "card pj-card", href: `#/projects/${p.id}` }, [
+        h("strong", { class: "pj-card__name", text: p.name }),
+        p.note ? h("p", { class: "muted small pj-card__note", text: p.note }) : null,
+        projectBar(p),
+        h("div", { class: "pj-counts" }, PROJECT_STATUS.filter(([k]) => p.counts[k]).map(([k, label]) => h("span", { class: `pj-st pj-st--${k}`, text: `${label} ${p.counts[k]}` }))),
+        p.nextDue ? h("span", { class: "muted small", text: `가장 가까운 마감 ${shortDate(p.nextDue)}` }) : null
+      ]);
+      const team = (label, title, rows) => h("section", { class: "pj-team" }, [
+        h("div", { class: "pj-team__head" }, [h("h2", { class: "card__title", title, text: label }), h("span", { class: "muted small", text: `프로젝트 ${rows.length}개 · 항목 ${rows.reduce((n, p) => n + p.total, 0)}개 · 완료 ${rows.reduce((n, p) => n + p.done, 0)}개` })]),
+        h("div", { class: "pj-cards" }, rows.map(card))
+      ]);
+      const sections = unitRows(null).filter(({ u }) => shown.some((p) => p.unitId === u.id)).map(({ u }) => team(unitPath(u.id).map((x) => x.short || x.name).slice(-2).join(" › "), unitLabel(u.id), shown.filter((p) => p.unitId === u.id)));
+      const loose = shown.filter((p) => !p.unitId || !unitOf(p.unitId));
+      if (loose.length) sections.push(team("팀 없음", null, loose));
+      const unitSel = h("button", { class: "select-btn select-btn--sm", type: "button" }, projectFilter.unit && unitOf(projectFilter.unit) ? unitLabel(projectFilter.unit) : h("span", { class: "muted", text: "모든 팀" }));
+      unitSel.addEventListener("click", () => unitPicker(unitSel, projectFilter.unit, (id) => { projectFilter.unit = id; draw(); }, { noneLabel: "모든 팀" }));
+      setMain("projects", [
+        h("div", { class: "page-head" }, [h("h1", { text: "프로젝트" }), h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => projectDialog(null, (r) => go(`#/projects/${r.project.id}`)) }, [icon("plus"), "새 프로젝트"])]),
+        h("div", { class: "filters" }, [unitSel]),
+        sections.length ? h("div", { class: "stack" }, sections) : h("div", { class: "card empty", text: list.length ? "이 팀에는 아직 프로젝트가 없어요." : "아직 볼 수 있는 프로젝트가 없어요." })
+      ]);
+    };
+    page = { name: "projects", reload: async () => { list = (await api("/projects")).projects; draw(); } };
+    try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("projects", failed(e)); }
+  }
+  async function pageProject(id) {
+    drawMini(null);
+    setMain("projects", loading());
+    let data;
+    const closed = new Set();
+    let statusFilter = "";
+    const apply = (r) => { data = r; draw(); };
+    function itemDialog(item, defaults) {
+      const v = item || defaults;
+      const isGroup = v.kind === "group";
+      const err = errorLine();
+      const name = h("input", { value: item?.name || "", maxlength: "80", autofocus: true });
+      const note = h("textarea", { rows: "3", maxlength: "1000" }, item?.note || "");
+      const status = h("select", {}, PROJECT_STATUS.map(([k, label]) => h("option", { value: k, text: label })));
+      status.value = item?.status || "none";
+      const due = h("input", { type: "date", value: item?.dueDate || "" });
+      let assignee = item?.assigneeId || null;
+      const who = h("button", { class: "select-btn", type: "button" });
+      const drawWho = () => who.replaceChildren(assignee ? personLine(assignee) : h("span", { class: "muted", text: "담당자 없음" }));
+      drawWho();
+      who.addEventListener("click", () => personPicker(who, assignee ? [assignee] : [], false, (uid) => { assignee = uid; drawWho(); }));
+      const ok = h("button", { class: "btn btn--primary", type: "submit", text: item ? "저장" : "추가" });
+      const form = h("form", { class: "stack", novalidate: true }, [
+        field(isGroup ? "묶음 이름" : "항목 이름", name),
+        isGroup ? null : h("div", { class: "row2" }, [field("상태", status), field("담당자", who)]),
+        isGroup ? null : field("마감일", due),
+        field("메모", note), err,
+        h("div", { class: "actions" }, [
+          item ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
+            if (!confirm(isGroup ? `'${item.name}' 묶음과 그 안의 항목을 모두 지울까요?` : `'${item.name}' 항목을 지울까요?`)) return;
+            const r = await act(() => api(`/project-items/${item.id}`, { method: "DELETE" }));
+            closeDialog(); apply(r);
+          } }) : null,
+          h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok
+        ])
+      ]);
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        busy(ok, async () => {
+          try {
+            const body = { name: name.value, note: note.value, ...(isGroup ? {} : { status: status.value, assigneeId: assignee, dueDate: due.value || null }) };
+            const r = await api(item ? `/project-items/${item.id}` : `/projects/${id}/items`, { method: item ? "PATCH" : "POST", body: item ? body : { ...body, kind: v.kind, parentId: v.parentId || null } });
+            closeDialog(); apply(r);
+          } catch (ex) { showError(err, ex.message); }
+        });
+      });
+      openDialog(item ? `${isGroup ? "묶음" : "항목"} 고치기` : isGroup ? "묶음 추가" : "항목 추가", form);
+    }
+    function importDialog() {
+      const err = errorLine();
+      const area = h("textarea", { rows: "12", autofocus: true, placeholder: "1. 순례자 키트\n* 티셔츠\n* 가방\n4-1. 묵주\n* 매듭 묵주\n※ 묶음에 붙일 메모" });
+      const ok = h("button", { class: "btn btn--primary", type: "submit", text: "넣기" });
+      const form = h("form", { class: "stack", novalidate: true }, [
+        field("목록", area, "'1.' 은 묶음, '4-1.' 은 그 아래 묶음, '*' 는 항목, '※' 는 묶음 메모가 돼요. 이미 있는 항목은 그대로 두고 뒤에 더해요."), err,
+        h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])
+      ]);
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        busy(ok, async () => {
+          try { const r = await api(`/projects/${id}/import`, { method: "POST", body: { text: area.value } }); closeDialog(); apply(r); }
+          catch (ex) { showError(err, ex.message); }
+        });
+      });
+      openDialog("목록 붙여넣기", form);
+    }
+    const patchItem = async (i, body) => apply(await act(() => api(`/project-items/${i.id}`, { method: "PATCH", body })));
+    function draw() {
+      const p = data.project;
+      document.title = `${p.name} · ${TITLE}`;
+      const kids = (pid) => data.items.filter((i) => (i.parentId || null) === pid);
+      const inside = (g) => kids(g.id).flatMap((k) => (k.kind === "group" ? inside(k) : [k]));
+      const shows = (i) => !statusFilter || i.status === statusFilter;
+      const rows = [];
+      const walk = (pid, depth) => {
+        for (const i of kids(pid)) {
+          const pad = `padding-left:${14 + depth * 20}px`;
+          if (i.kind === "group") {
+            const under = inside(i);
+            if (statusFilter && !under.some(shows)) continue;
+            const open = !closed.has(i.id);
+            rows.push(h("tr", { class: "pj-group" }, [
+              h("td", { colspan: "4", style: pad }, h("div", { class: "pj-group__row" }, [
+                h("button", { class: "org-row__chev" + (open ? " is-open" : ""), type: "button", "aria-label": `${i.name} ${open ? "접기" : "펼치기"}`, html: ICON.right, onclick: () => { open ? closed.add(i.id) : closed.delete(i.id); draw(); } }),
+                h("button", { class: "pj-name", type: "button", onclick: () => itemDialog(i) }, [h("strong", { text: i.name })]),
+                h("span", { class: "muted small", text: `${under.filter((x) => x.status === "done").length}/${under.length}` }),
+                i.note ? h("span", { class: "muted small pj-note", text: i.note }) : null
+              ])),
+              h("td", { class: "pj-actions" }, h("button", { class: "link-btn", type: "button", text: "+ 항목", onclick: () => itemDialog(null, { kind: "item", parentId: i.id }) }))
+            ]));
+            if (open) walk(i.id, depth + 1);
+          } else if (shows(i)) {
+            const st = h("select", { class: `pj-select pj-st--${i.status}`, "aria-label": `${i.name} 상태`, onchange: (e) => patchItem(i, { status: e.target.value }) }, PROJECT_STATUS.map(([k, label]) => h("option", { value: k, text: label })));
+            st.value = i.status;
+            const who = h("button", { class: "assignee-btn", type: "button", title: member(i.assigneeId)?.name || "담당자 정하기", onclick: (ev) => personPicker(ev.currentTarget, i.assigneeId ? [i.assigneeId] : [], false, (uid) => patchItem(i, { assigneeId: uid })) }, i.assigneeId ? personLine(i.assigneeId) : h("span", { class: "muted small", text: "담당자" }));
+            const due = h("input", { type: "date", class: "inline inline--box", value: i.dueDate || "", "aria-label": `${i.name} 마감일`, onchange: (e) => patchItem(i, { dueDate: e.target.value || null }) });
+            rows.push(h("tr", { class: i.status === "done" ? "is-done" : null }, [
+              h("td", { class: "pj-itemname", style: pad }, [h("button", { class: "pj-name", type: "button", onclick: () => itemDialog(i), text: i.name }), i.note ? h("small", { class: "muted pj-note", text: i.note }) : null]),
+              h("td", { "data-label": "상태" }, st),
+              h("td", { "data-label": "담당" }, who),
+              h("td", { "data-label": "마감" }, due),
+              h("td", { class: "pj-actions" })
+            ]));
+          }
+        }
+      };
+      walk(null, 0);
+      const filter = h("select", { "aria-label": "상태로 거르기", onchange: (e) => { statusFilter = e.target.value; draw(); } }, [h("option", { value: "", text: "모든 상태" }), ...PROJECT_STATUS.map(([k, label]) => h("option", { value: k, text: label }))]);
+      filter.value = statusFilter;
+      setMain("projects", [
+        h("nav", { class: "muted small" }, h("a", { href: "#/projects", text: "프로젝트" })),
+        h("div", { class: "page-head page-head--wrap" }, [
+          h("h1", { text: p.name }),
+          h("span", { class: "muted small", title: p.unitId ? unitLabel(p.unitId) : null, text: p.unitId && unitOf(p.unitId) ? unitShort(p.unitId) : "팀 없음" }),
+          h("span", { class: "page-head__end actions" }, [
+            h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => projectDialog(p, apply) }),
+            p.canDelete ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
+              if (!confirm(`'${p.name}' 프로젝트와 그 안의 항목을 모두 지울까요?`)) return;
+              await act(() => api(`/projects/${p.id}`, { method: "DELETE" }));
+              go("#/projects");
+            } }) : null
+          ])
+        ]),
+        p.note ? h("p", { class: "muted pj-desc", text: p.note }) : null,
+        projectBar(p),
+        h("div", { class: "filters" }, [
+          filter,
+          h("span", { class: "filters__end actions" }, [
+            h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "목록 붙여넣기", onclick: importDialog }),
+            h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "+ 묶음", onclick: () => itemDialog(null, { kind: "group" }) }),
+            h("button", { class: "btn btn--primary btn--sm", type: "button", text: "+ 항목", onclick: () => itemDialog(null, { kind: "item" }) })
+          ])
+        ]),
+        rows.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table pj-table" }, [
+          h("thead", {}, h("tr", {}, [...["이름", "상태", "담당", "마감"].map((t) => h("th", { text: t })), h("th", { "aria-label": "추가" })])),
+          h("tbody", {}, rows)
+        ])) : h("div", { class: "card empty", text: data.items.length ? "이 상태의 항목이 없어요." : "아직 항목이 없어요. '+ 항목'이나 '목록 붙여넣기'로 넣어 주세요." })
+      ]);
+    }
+    page = { name: "projects", reload: async () => apply(await api(`/projects/${id}`)) };
+    try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("projects", failed(e)); }
+  }
+
   /* ---------- 봉사자 화면: 직원 화면과 따로 (메뉴는 나중에 이 머리줄 아래로) ---------- */
   function renderVolunteer() {
     layout.main = null;
@@ -3587,6 +3811,8 @@
     if (name === "notices") return pageNotices();
     if (name === "members") return pageMembers();
     if (name === "org") return pageOrg();
+    if (name === "projects" && id) return pageProject(Number(id));
+    if (name === "projects") return pageProjects();
     if (name === "orgchart") return pageOrgChart();
     if (name === "contacts") return pageContacts();
     if (name === "backup") return pageBackup();

@@ -12,13 +12,14 @@
  *   node server/admin.mjs notice-add "<제목>" [pin] < 본문.txt    공지 올리기 (본문은 표준 입력, 작성자는 관리자 계정)
  *   node server/admin.mjs backups                           백업 목록
  *   node server/admin.mjs contacts-import [--dry] < 명단.tsv  연락처 일괄 입력 (구역 | 이름 | 직함 | 내선 | 휴대폰, 조직도 자리의 이름으로 찾음)
+ *   node server/admin.mjs project-import <조직> <프로젝트> [--dry] < 목록.txt  프로젝트 목록 넣기 (1. 묶음, 4-1. 아래 묶음, * 항목, ※ 메모)
  *     이미 값이 있으면 그대로 둠. 조직도에서 못 찾으면 넣지 않고 이름만 알려 줌. 번호는 출력하지 않음
  *
  * VPS 에서:  ssh root@srv1809055.hstgr.cloud 'cd /opt/pschedule && docker compose exec -T api node --disable-warning=ExperimentalWarning server/admin.mjs list'
  */
 import { join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
-import { openDb, hashPassword, tempPassword, cleanContact } from "./db.mjs";
+import { openDb, hashPassword, tempPassword, cleanContact, parseOutline, importOutline } from "./db.mjs";
 import { backupNow, listBackups } from "./backup.mjs";
 
 const DATA_DIR = resolve(process.env.DATA_DIR || "data");
@@ -128,6 +129,25 @@ switch (cmd) {
     } catch (e) { db.exec("ROLLBACK"); throw e; }
     console.log(`${dry ? "[미리보기, 저장 안 함] " : ""}명단 ${rows.length}줄 → 입력 ${result.done}명, 이미 있는 값이라 유지 ${result.kept}칸`);
     for (const [label, l] of [["조직도에서 못 찾음 (넣지 않음)", result.missing], ["같은 이름인데 자리를 못 고름 (넣지 않음)", result.unclear], ["번호 형식 오류 (넣지 않음)", result.invalid], ["동명이인으로 나눔", result.split], ["겸직 (자리마다 같은 값)", result.seats]]) if (l.length) console.log(`${label}: ${l.join(", ")}`);
+    break;
+  }
+
+  // 프로젝트 목록 넣기: admin.mjs project-import <조직 이름> <프로젝트 이름> [--dry] < 목록.txt
+  case "project-import": {
+    const dry = args.includes("--dry");
+    const [unitName, name] = args.filter((a) => a !== "--dry");
+    const units = db.prepare("SELECT id FROM org_units WHERE name = ?").all(String(unitName || "").normalize("NFC"));
+    if (units.length !== 1 || !name) { console.error("조직 이름이 하나로 찾아지지 않거나 프로젝트 이름이 없어요."); process.exit(1); }
+    const unit = units[0].id;
+    if (db.prepare("SELECT 1 FROM projects WHERE unit_id = ? AND name = ?").get(unit, name)) { console.error("같은 이름의 프로젝트가 이미 있어요."); process.exit(1); }
+    const { rows, head } = parseOutline(readFileSync(0, "utf8"));
+    db.exec("BEGIN");
+    try {
+      const id = Number(db.prepare("INSERT INTO projects (unit_id, name, note) VALUES (?, ?, ?)").run(unit, name, head.slice(0, 1000)).lastInsertRowid);
+      const c = importOutline(db, id, rows);
+      db.exec(dry ? "ROLLBACK" : "COMMIT");
+      console.log(`${dry ? "[미리보기, 저장 안 함] " : ""}프로젝트 '${name}': 묶음 ${c.group}개, 항목 ${c.item}개`);
+    } catch (e) { db.exec("ROLLBACK"); throw e; }
     break;
   }
 

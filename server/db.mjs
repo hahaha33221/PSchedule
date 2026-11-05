@@ -258,6 +258,41 @@ export function openDb(file) {
 }
 
 // 구글 캘린더에서 HTML 그대로 들어온 글 정리 (가져온 일정, 그리고 거기서 넣은 우리 일정 + 비교용 원본 내용)
+/*
+ * 프로젝트 목록 붙여넣기: "1. 묶음" / "4-1. 아래 묶음" / "* 항목" / "※ 묶음 메모".
+ * 첫 묶음 앞의 글은 설명(head), 그 뒤의 번호·기호 없는 줄은 항목
+ */
+export function parseOutline(source) {
+  const rows = [], head = [];
+  let top = null, last = null;
+  for (const raw of String(source ?? "").split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    let m;
+    if ((m = line.match(/^\d+-\d+[.)]\s*(.+)$/))) { last = { kind: "group", name: m[1], note: "", kids: [] }; (top ? top.kids : rows).push(last); continue; }
+    if ((m = line.match(/^\d+[.)]\s*(.+)$/))) { top = last = { kind: "group", name: m[1], note: "", kids: [] }; rows.push(top); continue; }
+    if ((m = line.match(/^※\s*(.+)$/))) { if (last) last.note = last.note ? `${last.note}\n${m[1]}` : m[1]; else head.push(line); continue; }
+    m = line.match(/^[*\-•·]\s*(.+)$/);
+    if (!m && !last) { head.push(line); continue; }
+    (last ? last.kids : rows).push({ kind: "item", name: m ? m[1] : line, note: "", kids: [] });
+  }
+  return { rows, head: head.join("\n") };
+}
+// 위 결과를 프로젝트에 넣음 (이름은 80자, 메모는 1000자까지)
+export function importOutline(db, projectId, rows) {
+  const add = db.prepare("INSERT INTO project_items (project_id, parent_id, kind, name, note) VALUES (?, ?, ?, ?, ?)");
+  const counts = { group: 0, item: 0 };
+  const walk = (list, parent) => {
+    for (const r of list) {
+      const id = Number(add.run(projectId, parent, r.kind, r.name.slice(0, 80), r.note.slice(0, 1000)).lastInsertRowid);
+      counts[r.kind]++;
+      walk(r.kids, id);
+    }
+  };
+  walk(rows, null);
+  return counts;
+}
+
 // 연락처 값 검사 (화면 저장·일괄 입력 공통). 오류 문구에 값을 넣지 않음
 export function cleanContact(b) {
   const phone = (v, label) => {
@@ -290,6 +325,37 @@ function addUnitColumns(db) {
   if (!has("users", "unit_id")) db.exec("ALTER TABLE users ADD COLUMN unit_id INTEGER REFERENCES org_units(id) ON DELETE SET NULL");
   // 본부장 권한: role 은 그대로 'member' (관리자 기능 없음), 아래 조직을 보는 범위만 넓음
   if (!has("users", "director")) db.exec("ALTER TABLE users ADD COLUMN director INTEGER NOT NULL DEFAULT 0");
+  // 할 일 시작일: 기존 할 일은 만든 날 (마감이 더 빠르면 마감일)
+  if (!has("tasks", "start_date")) {
+    db.exec("ALTER TABLE tasks ADD COLUMN start_date TEXT");
+    db.exec("UPDATE tasks SET start_date = min(date(created_at, '+9 hours'), coalesce(due_date, '9999-12-31'))");
+  }
+  // 프로젝트: 팀(조직)마다 여러 개, 묶음(group)과 항목(item)을 트리로
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id         INTEGER PRIMARY KEY,
+      unit_id    INTEGER REFERENCES org_units(id) ON DELETE SET NULL,
+      name       TEXT NOT NULL,
+      note       TEXT NOT NULL DEFAULT '',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS project_items (
+      id          INTEGER PRIMARY KEY,
+      project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      parent_id   INTEGER REFERENCES project_items(id) ON DELETE CASCADE,
+      kind        TEXT NOT NULL DEFAULT 'item' CHECK (kind IN ('group', 'item')),
+      name        TEXT NOT NULL,
+      status      TEXT NOT NULL DEFAULT 'none' CHECK (status IN ('none', 'idea', 'review', 'doing', 'fixed', 'hold', 'done')),
+      assignee_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      due_date    TEXT,
+      note        TEXT NOT NULL DEFAULT '',
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS project_items_project ON project_items (project_id);
+  `);
   // 봉사자 계정: 직원 화면·API 를 쓰지 않음 (role 은 member, 서버 입구에서 막음)
   if (!has("users", "volunteer")) db.exec("ALTER TABLE users ADD COLUMN volunteer INTEGER NOT NULL DEFAULT 0");
   if (!has("users", "note")) {

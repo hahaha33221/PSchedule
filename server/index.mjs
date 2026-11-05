@@ -15,7 +15,7 @@ import { createServer } from "node:http";
 import { createReadStream, statSync, watch } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import crypto from "node:crypto";
-import { cleanContact, openDb, ensureAdmin, verifyPassword, hashPassword, tempPassword } from "./db.mjs";
+import { parseOutline, importOutline, cleanContact, openDb, ensureAdmin, verifyPassword, hashPassword, tempPassword } from "./db.mjs";
 import { createCalendarSync, checkUrl, maskUrl } from "./calendars.mjs";
 import { startAutoBackup, listBackups, backupNow, pruneBackups } from "./backup.mjs";
 
@@ -236,6 +236,19 @@ const q = {
   setTask: db.prepare(`UPDATE tasks SET title = ?, due_date = ?, status = ?, assignee_id = ?, meeting_id = ?, phase = ?, note = ?, category_id = ?,
     done_at = CASE WHEN ? = 'done' THEN coalesce(done_at, datetime('now')) END, updated_at = datetime('now') WHERE id = ?`),
   delTask: db.prepare("DELETE FROM tasks WHERE id = ?"),
+  setTaskStart: db.prepare("UPDATE tasks SET start_date = ? WHERE id = ?"),
+  // 프로젝트
+  projects: db.prepare("SELECT * FROM projects ORDER BY id"),
+  project: db.prepare("SELECT * FROM projects WHERE id = ?"),
+  addProject: db.prepare("INSERT INTO projects (unit_id, name, note, created_by) VALUES (?, ?, ?, ?)"),
+  setProject: db.prepare("UPDATE projects SET unit_id = ?, name = ?, note = ?, updated_at = datetime('now') WHERE id = ?"),
+  delProject: db.prepare("DELETE FROM projects WHERE id = ?"),
+  projectItems: db.prepare("SELECT * FROM project_items WHERE project_id = ? ORDER BY id"),
+  allProjectItems: db.prepare("SELECT project_id, kind, status, due_date FROM project_items"),
+  projectItem: db.prepare("SELECT * FROM project_items WHERE id = ?"),
+  addProjectItem: db.prepare("INSERT INTO project_items (project_id, parent_id, kind, name, status, assignee_id, due_date, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
+  setProjectItem: db.prepare("UPDATE project_items SET name = ?, status = ?, assignee_id = ?, due_date = ?, note = ?, updated_at = datetime('now') WHERE id = ?"),
+  delProjectItem: db.prepare("DELETE FROM project_items WHERE id = ?"),
   taskTags: db.prepare("SELECT task_id AS id, tag_id FROM task_tags WHERE task_id IN (SELECT value FROM json_each(?))"),
   clearTaskTags: db.prepare("DELETE FROM task_tags WHERE task_id = ?"),
   addTaskTag: db.prepare("INSERT OR IGNORE INTO task_tags (task_id, tag_id) SELECT ?, id FROM tags WHERE id = ?"),
@@ -290,9 +303,10 @@ Object.assign(q, {
   tasksAll: db.prepare(`SELECT ${q.taskCols} ${TASK_FROM} WHERE ${TASK_VIS("t")} ${TASK_ORDER} LIMIT 2000`),
   tasksRange: db.prepare(`SELECT ${q.taskCols} ${TASK_FROM} WHERE t.due_date BETWEEN ? AND ? AND ${TASK_VIS("t")} ${TASK_ORDER}`),
   tasksMeeting: db.prepare(`SELECT ${q.taskCols} ${TASK_FROM} WHERE t.meeting_id = ? ORDER BY t.phase = 'after', t.status = 'done', t.due_date IS NULL, t.due_date, t.id`),
-  // 그날 할 일: 마감이 그날 / 마감 지난 미완료 / 마감 없이 그날 회의에 연결된 것
+  // 그날 할 일: 마감이 그날 / 시작일~마감일 기간 안 / 마감 지난 미완료 / 마감 없이 그날 회의에 연결된 것
   tasksDay: db.prepare(`SELECT ${q.taskCols} ${TASK_FROM}
     WHERE (t.due_date = :day
+       OR (t.start_date <= :day AND t.due_date >= :day)
        OR (t.due_date < :day AND t.status <> 'done' AND :day = :today)
        OR (t.due_date IS NULL AND e.start_date <= :day AND e.end_date >= :day))
       AND ${TASK_VIS("t")}
@@ -763,13 +777,23 @@ function taskInput(b, cur, v) {
   const phase = meeting ? (get("phase", cur?.phase) === "before" ? "before" : "after") : null;
   return [title, due, status, assignee, meeting, phase, text(get("note", cur?.note), LIMITS.taskNote, "메모"), categoryOf(b, cur, ev?.category_id)];
 }
+// 시작일: 새 할 일은 보내지 않으면 오늘. 마감보다 늦으면 직접 정한 값은 오류, 아니면 마감일에 맞춤
+function taskStart(b, cur, due) {
+  let start = has(b, "startDate") ? b.startDate || null : cur ? cur.start_date : new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+  if (start && !isDate(start)) throw bad("시작일을 확인해 주세요.");
+  if (start && due && start > due) {
+    if (has(b, "startDate")) throw bad("시작일이 마감일보다 늦어요.");
+    start = due;
+  }
+  return start;
+}
 function saveTaskTags(id, b) {
   if (has(b, "tagIds")) { q.clearTaskTags.run(id); for (const t of ids(b.tagIds)) q.addTaskTag.run(id, t); }
 }
 function tasksOut(rows, user) {
   const tags = groupBy(q.taskTags, rows, "tag_id");
   return rows.map((t) => ({
-    id: t.id, title: t.title, dueDate: t.due_date, status: t.status, assigneeId: t.assignee_id,
+    id: t.id, title: t.title, startDate: t.start_date, dueDate: t.due_date, status: t.status, assigneeId: t.assignee_id,
     meetingId: t.meeting_id, meetingTitle: t.meeting_title, meetingDate: t.meeting_date, meetingTime: t.meeting_time,
     phase: t.phase, note: t.note, categoryId: t.category_id, unitId: t.unit_id, tagIds: tags.get(t.id), doneAt: t.done_at, createdBy: t.created_by,
     canDelete: user.role === "admin" || t.created_by === user.id || t.assignee_id === user.id
@@ -942,6 +966,38 @@ function eventDetail(e, user) {
     guests: q.guests.all(e.id),
     comments: q.comments.all("event", e.id).map((c) => commentOut(c, user))
   };
+}
+
+/* ----- 프로젝트: 볼 수 있는 조직(소속·아래 조직·추가로 볼 조직·본부장 범위)의 것을 보고 고침. 관리자는 전부 ----- */
+const PROJECT_STATUS = ["none", "idea", "review", "doing", "fixed", "hold", "done"];
+const projectAllowed = (user, p) => user.role === "admin" || p.created_by === user.id || (p.unit_id !== null && visibleUnits(user).includes(p.unit_id));
+const projectOut = (p, items, user) => {
+  const list = items.filter((i) => i.kind === "item");
+  const counts = {};
+  for (const i of list) counts[i.status] = (counts[i.status] || 0) + 1;
+  const dues = list.filter((i) => i.due_date && i.status !== "done").map((i) => i.due_date).sort();
+  return { id: p.id, unitId: p.unit_id, name: p.name, note: p.note, createdBy: p.created_by, updatedAt: p.updated_at, total: list.length, done: counts.done || 0, counts, nextDue: dues[0] || null, canDelete: user.role === "admin" || p.created_by === user.id };
+};
+const projectItemOut = (i) => ({ id: i.id, parentId: i.parent_id, kind: i.kind, name: i.name, status: i.status, assigneeId: i.assignee_id, dueDate: i.due_date, note: i.note });
+const projectDetail = (p, user) => {
+  const items = q.projectItems.all(p.id);
+  return { project: projectOut(p, items, user), items: items.map(projectItemOut) };
+};
+function projectUnit(v, user) {
+  const unit = unitIdOrNull(v);
+  if (!unit) throw bad("팀을 골라 주세요.");
+  if (user.role !== "admin" && !visibleUnits(user).includes(unit)) throw bad("볼 수 있는 팀만 고를 수 있어요.");
+  return unit;
+}
+function projectItemFields(b, cur) {
+  const get = (k, curVal) => (has(b, k) ? b[k] : curVal);
+  const status = get("status", cur?.status ?? "none");
+  if (!PROJECT_STATUS.includes(status)) throw bad("상태를 확인해 주세요.");
+  const assignee = idOrNull(get("assigneeId", cur?.assignee_id));
+  if (assignee && !q.userExists.get(assignee)) throw bad("담당자를 찾을 수 없어요.");
+  const due = get("dueDate", cur?.due_date) || null;
+  if (due && !isDate(due)) throw bad("마감일을 확인해 주세요.");
+  return [text(get("name", cur?.name), 80, "이름", true), status, assignee, due, text(get("note", cur?.note), 1000, "메모")];
 }
 
 /* ---------- API ---------- */
@@ -1302,9 +1358,11 @@ async function api(req, res, path) {
   if (path === "/api/tasks" && method === "POST") {
     const b = await readJson(req);
     const input = taskInput(b, null, V);
+    const start = taskStart(b, null, input[1]);
     const id = inTx(() => {
       const r = q.addTask.run(...input, user.id, input[2]);
       const id = Number(r.lastInsertRowid);
+      q.setTaskStart.run(start, id);
       q.setTaskUnit.run(itemUnit(b, user, null, input[4]), id);
       saveTaskTags(id, b);
       return id;
@@ -1319,7 +1377,8 @@ async function api(req, res, path) {
     if (method === "PATCH") {
       const b = await readJson(req);
       const input = taskInput(b, t, V);
-      inTx(() => { q.setTask.run(...input, input[2], t.id); q.setTaskUnit.run(itemUnit(b, user, t, input[4]), t.id); saveTaskTags(t.id, b); });
+      const start = taskStart(b, t, input[1]);
+      inTx(() => { q.setTask.run(...input, input[2], t.id); q.setTaskStart.run(start, t.id); q.setTaskUnit.run(itemUnit(b, user, t, input[4]), t.id); saveTaskTags(t.id, b); });
       return send(res, 200, { task: tasksOut([q.task.get(t.id)], user)[0] });
     }
     if (method === "DELETE") {
@@ -1358,9 +1417,11 @@ async function api(req, res, path) {
     if (mm[2]) {
       if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
       const b = await readJson(req);
-      const input = taskInput({ title: b.title || m.body.split("\n")[0].slice(0, LIMITS.title), dueDate: b.dueDate, assigneeId: b.assigneeId, meetingId: m.meeting_id, phase: "after", note: m.body.includes("\n") ? m.body : "", categoryId: has(b, "categoryId") ? b.categoryId : m.category_id });
+      const input = taskInput({ title: b.title || m.body.split("\n")[0].slice(0, LIMITS.title), dueDate: b.dueDate, assigneeId: b.assigneeId, meetingId: m.meeting_id, phase: b.phase === "before" ? "before" : "after", note: m.body.includes("\n") ? m.body : "", categoryId: has(b, "categoryId") ? b.categoryId : m.category_id });
+      const start = taskStart({ startDate: b.startDate }, null, input[1]);
       const id = inTx(() => {
         const id = Number(q.addTask.run(...input, user.id, input[2]).lastInsertRowid);
+        q.setTaskStart.run(start, id);
         q.setTaskUnit.run(m.unit_id ?? itemUnit({}, user, null, m.meeting_id), id); // 메모의 팀을 따름
         saveTaskTags(id, b);
         q.setMemoTask.run(id, m.id);
@@ -1452,6 +1513,68 @@ async function api(req, res, path) {
   }
 
   /* ----- 관리자: 멤버 계정 ----- */
+  /* 프로젝트 */
+  if (path === "/api/projects" && method === "GET") {
+    const items = new Map();
+    for (const i of q.allProjectItems.all()) { if (!items.has(i.project_id)) items.set(i.project_id, []); items.get(i.project_id).push(i); }
+    return send(res, 200, { projects: q.projects.all().filter((p) => projectAllowed(user, p)).map((p) => projectOut(p, items.get(p.id) || [], user)) });
+  }
+  if (path === "/api/projects" && method === "POST") {
+    const b = await readJson(req);
+    const id = Number(q.addProject.run(projectUnit(b.unitId, user), text(b.name, 80, "프로젝트 이름", true), text(b.note, 1000, "설명"), user.id).lastInsertRowid);
+    return send(res, 201, projectDetail(q.project.get(id), user));
+  }
+  const pjm = path.match(/^\/api\/projects\/(\d+)(\/items|\/import)?$/);
+  if (pjm) {
+    const p = q.project.get(Number(pjm[1]));
+    if (!p || !projectAllowed(user, p)) throw notFound("프로젝트");
+    if (!pjm[2] && method === "GET") return send(res, 200, projectDetail(p, user));
+    if (!pjm[2] && method === "PATCH") {
+      const b = await readJson(req);
+      q.setProject.run(has(b, "unitId") ? projectUnit(b.unitId, user) : p.unit_id, has(b, "name") ? text(b.name, 80, "프로젝트 이름", true) : p.name, has(b, "note") ? text(b.note, 1000, "설명") : p.note, p.id);
+      return send(res, 200, projectDetail(q.project.get(p.id), user));
+    }
+    if (!pjm[2] && method === "DELETE") {
+      if (!isAdmin && p.created_by !== user.id) return send(res, 403, { error: "직접 만든 프로젝트만 지울 수 있어요." });
+      q.delProject.run(p.id);
+      return send(res, 204);
+    }
+    if (pjm[2] === "/items" && method === "POST") {
+      const b = await readJson(req);
+      const kind = b.kind === "group" ? "group" : "item";
+      const parent = idOrNull(b.parentId);
+      const up = parent && q.projectItem.get(parent);
+      if (parent && (!up || up.project_id !== p.id || up.kind !== "group")) throw bad("넣을 묶음을 찾을 수 없어요.");
+      q.addProjectItem.run(p.id, parent, kind, ...projectItemFields(b, null));
+      return send(res, 201, projectDetail(p, user));
+    }
+    if (pjm[2] === "/import" && method === "POST") {
+      const b = await readJson(req);
+      const source = String(b.text ?? "");
+      if (source.length > 20000) throw bad("한 번에 20,000자까지 넣을 수 있어요.");
+      const { rows } = parseOutline(source);
+      if (!rows.length) throw bad("넣을 항목이 없어요.");
+      inTx(() => importOutline(db, p.id, rows));
+      return send(res, 200, projectDetail(p, user));
+    }
+    return send(res, 405, { error: "Method not allowed" });
+  }
+  const pim = path.match(/^\/api\/project-items\/(\d+)$/);
+  if (pim) {
+    const i = q.projectItem.get(Number(pim[1]));
+    const p = i && q.project.get(i.project_id);
+    if (!p || !projectAllowed(user, p)) throw notFound("항목");
+    if (method === "PATCH") {
+      q.setProjectItem.run(...projectItemFields(await readJson(req), i), i.id);
+      return send(res, 200, projectDetail(p, user));
+    }
+    if (method === "DELETE") {
+      q.delProjectItem.run(i.id); // 묶음이면 안의 것도 함께
+      return send(res, 200, projectDetail(p, user));
+    }
+    return send(res, 405, { error: "Method not allowed" });
+  }
+
   if (path.startsWith("/api/admin/")) {
     if (!isAdmin) return send(res, 403, { error: "관리자만 볼 수 있어요." });
 
