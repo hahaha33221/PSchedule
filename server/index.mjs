@@ -66,7 +66,7 @@ const q = {
   userByLogin: db.prepare("SELECT * FROM users WHERE login = ?"),
   userById: db.prepare("SELECT * FROM users WHERE id = ?"),
   session: db.prepare(`
-    SELECT u.id, u.login, u.role, u.director, u.name, u.unit_id, u.pw_changed, u.pw_hash FROM sessions s
+    SELECT u.id, u.login, u.role, u.director, u.volunteer, u.name, u.unit_id, u.pw_changed, u.pw_hash FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ? AND s.expires_at > ?`),
   addSession: db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)"),
@@ -77,8 +77,8 @@ const q = {
   setPassword: db.prepare("UPDATE users SET pw_hash = ?, pw_changed = 1 WHERE id = ?"),
   resetPassword: db.prepare("UPDATE users SET pw_hash = ?, pw_changed = 2 WHERE id = ?"),
   touchLogin: db.prepare("UPDATE users SET last_login_at = datetime('now') WHERE id = ?"),
-  team: db.prepare("SELECT id, name, unit_id FROM users ORDER BY name, id"),
-  userExists: db.prepare("SELECT 1 FROM users WHERE id = ?"),
+  team: db.prepare("SELECT id, name, unit_id FROM users WHERE volunteer = 0 ORDER BY name, id"),
+  userExists: db.prepare("SELECT 1 FROM users WHERE id = ? AND volunteer = 0"), // 담당자·책임자·자리 연결: 직원만
 
   // 태그
   // uses: 일정·할 일에 붙은 횟수 (사이드바 '자주 쓰는 태그' 순서)
@@ -93,7 +93,7 @@ const q = {
 
   // 조직도
   units: db.prepare("SELECT id, parent_id, name, short_name, lead_id FROM org_units ORDER BY sort, id"),
-  contactUsers: db.prepare("SELECT id, name, role, unit_id FROM users ORDER BY id"),
+  contactUsers: db.prepare("SELECT id, name, role, unit_id FROM users WHERE volunteer = 0 ORDER BY id"),
   contacts: db.prepare("SELECT position_id, user_id, mobile, office, email FROM contacts ORDER BY updated_at DESC, id DESC"),
   addContact: db.prepare("INSERT INTO contacts (position_id, user_id, mobile, office, email) VALUES (?, ?, ?, ?, ?)"),
   delContactOfPosition: db.prepare("DELETE FROM contacts WHERE position_id = ?"),
@@ -217,7 +217,7 @@ const q = {
   clearEventTags: db.prepare("DELETE FROM event_tags WHERE event_id = ?"),
   addEventTag: db.prepare("INSERT OR IGNORE INTO event_tags (event_id, tag_id) SELECT ?, id FROM tags WHERE id = ?"),
   clearAttendees: db.prepare("DELETE FROM event_attendees WHERE event_id = ?"),
-  addAttendee: db.prepare("INSERT OR IGNORE INTO event_attendees (event_id, user_id) SELECT ?, id FROM users WHERE id = ?"),
+  addAttendee: db.prepare("INSERT OR IGNORE INTO event_attendees (event_id, user_id) SELECT ?, id FROM users WHERE id = ? AND volunteer = 0"),
   links: db.prepare("SELECT id, title, url, created_at FROM event_links WHERE event_id = ? ORDER BY id"),
   guests: db.prepare("SELECT id, name, org, contact FROM event_guests WHERE event_id = ? ORDER BY id"),
   guest: db.prepare("SELECT * FROM event_guests WHERE id = ?"),
@@ -273,8 +273,10 @@ const q = {
 
   // 멤버 (관리자)
   setUserDirector: db.prepare("UPDATE users SET director = ? WHERE id = ?"),
+  setUserVolunteer: db.prepare("UPDATE users SET volunteer = ? WHERE id = ?"),
+  unlinkUserPositions: db.prepare("UPDATE org_positions SET user_id = NULL WHERE user_id = ?"),
   positionUnitsOf: db.prepare("SELECT DISTINCT unit_id AS id FROM org_positions WHERE user_id = ?"),
-  users: db.prepare("SELECT id, login, role, director, name, unit_id, note, pw_changed, created_at, last_login_at FROM users ORDER BY role = 'admin' DESC, name, id"),
+  users: db.prepare("SELECT id, login, role, director, volunteer, name, unit_id, note, pw_changed, created_at, last_login_at FROM users ORDER BY role = 'admin' DESC, name, id"),
   addUser: db.prepare("INSERT INTO users (login, pw_hash, role, name, unit_id, note) VALUES (?, ?, ?, ?, ?, ?)"),
   setUser: db.prepare("UPDATE users SET name = ?, unit_id = ?, note = ?, role = ? WHERE id = ?"),
   delUser: db.prepare("DELETE FROM users WHERE id = ?"),
@@ -400,7 +402,7 @@ function auth(req) {
 }
 const tokenOf = (req) => String(req.headers.authorization).split(/\s+/)[1];
 
-const roleOut = (u) => (u.director ? "director" : u.role); // 화면·API 에서는 멤버 / 본부장 / 관리자
+const roleOut = (u) => (u.volunteer ? "volunteer" : u.director ? "director" : u.role); // 화면·API 에서는 봉사자 / 멤버 / 본부장 / 관리자
 const publicUser = (u) => ({ id: u.id, login: u.login, role: roleOut(u), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), mustChangePassword: u.pw_changed !== 1 });
 const teamOut = () => q.team.all().map((u) => ({ id: u.id, name: u.name, unitId: u.unit_id }));
 
@@ -970,6 +972,11 @@ async function api(req, res, path) {
 
   const user = auth(req);
   if (!user) return send(res, 401, { error: "로그인이 필요해요." });
+  // 봉사자: 내 계정 정보·비밀번호·로그아웃만. 직원 데이터(조직도·연락처·일정 등)는 입구에서 막음
+  if (user.volunteer) {
+    if (path === "/api/me" && method === "GET") return send(res, 200, { user: publicUser(user), team: [], units: [], tags: [], categories: [], calendars: [], unreadNotices: 0 });
+    if (!((path === "/api/logout" || path === "/api/password") && method === "POST")) return send(res, 403, { error: "봉사자 계정으로는 볼 수 없어요." });
+  }
   const isAdmin = user.role === "admin";
   // 보이는 범위 조건 값 (?scope=mine 이면 관리자도 멤버처럼)
   const V = viewer(user, url.searchParams.get("scope") === "mine");
@@ -1461,13 +1468,18 @@ async function api(req, res, path) {
       const login = normalizeLogin(b.login);
       if (!/^[a-z0-9._-]{3,20}$/.test(login)) throw bad("아이디는 영문 소문자·숫자·._- 로 3~20자로 정해 주세요.", "login");
       const name = text(b.name, LIMITS.name, "이름", true);
-      const unit = unitIdOrNull(b.unitId);
+      const volunteer = b.role === "volunteer" ? 1 : 0;
+      const unit = volunteer ? null : unitIdOrNull(b.unitId);
       const role = b.role === "admin" ? "admin" : "member";
       const director = b.role === "director" ? 1 : 0;
       if (q.userByLogin.get(login)) throw bad("이미 있는 아이디예요.", "login");
       const password = tempPassword();
-      const added = q.addUser.run(login, hashPassword(password), role, name, unit, text(b.note, LIMITS.userNote, "메모"));
-      if (director) q.setUserDirector.run(1, Number(added.lastInsertRowid));
+      const note = text(b.note, LIMITS.userNote, "메모"), hash = hashPassword(password);
+      inTx(() => {
+        const id = Number(q.addUser.run(login, hash, role, name, unit, note).lastInsertRowid);
+        if (director) q.setUserDirector.run(1, id);
+        if (volunteer) q.setUserVolunteer.run(1, id);
+      });
       console.log(`[admin] ${user.login} → ${login} 계정 발급`);
       return send(res, 201, { login, name, password });
     }
@@ -1521,7 +1533,7 @@ async function api(req, res, path) {
       const b = await readJson(req);
       const unit = unitIdOrNull(b.unitId);
       const list = ids(b.userIds);
-      inTx(() => { for (const id of list) q.setUserUnit.run(unit, id); });
+      inTx(() => { for (const id of list) if (!q.userById.get(id)?.volunteer) q.setUserUnit.run(unit, id); });
       return send(res, 200, { changed: list.length, team: teamOut() });
     }
 
@@ -1739,8 +1751,9 @@ async function api(req, res, path) {
         const name = b.name === undefined ? target.name : text(b.name, LIMITS.name, "이름", true);
         const unit = has(b, "unitId") ? unitIdOrNull(b.unitId) : target.unit_id;
         const note = has(b, "note") ? text(b.note, LIMITS.userNote, "메모") : target.note;
-        const role = b.role === "admin" ? "admin" : b.role === "member" || b.role === "director" ? "member" : target.role;
-        const director = b.role === "director" ? 1 : b.role === "admin" || b.role === "member" ? 0 : target.director;
+        const role = b.role === "admin" ? "admin" : b.role === "member" || b.role === "director" || b.role === "volunteer" ? "member" : target.role;
+        const director = b.role === "director" ? 1 : b.role === "admin" || b.role === "member" || b.role === "volunteer" ? 0 : target.director;
+        const volunteer = b.role === "volunteer" ? 1 : b.role === "admin" || b.role === "member" || b.role === "director" ? 0 : target.volunteer;
         if (lastAdmin && role !== "admin") throw bad("관리자가 한 명은 있어야 해요.");
         // 추가로 볼 수 있는 조직: [{ unitId, sub }] 로 통째로 바꿈
         let grants = null;
@@ -1749,9 +1762,12 @@ async function api(req, res, path) {
           grants = b.viewUnits.map((g) => ({ unit: unitIdOrNull(g?.unitId), sub: g?.sub === false ? 0 : 1 })).filter((g) => g.unit);
         }
         inTx(() => {
-          q.setUser.run(name, unit, note, role, target.id);
+          q.setUser.run(name, volunteer ? null : unit, note, role, target.id);
           q.setUserDirector.run(director, target.id);
-          if (grants) { q.clearViewUnits.run(target.id); for (const g of grants) q.addViewUnit.run(target.id, g.unit, g.sub); }
+          q.setUserVolunteer.run(volunteer, target.id);
+          if (grants || volunteer) q.clearViewUnits.run(target.id);
+          if (grants && !volunteer) for (const g of grants) q.addViewUnit.run(target.id, g.unit, g.sub);
+          if (volunteer) q.unlinkUserPositions.run(target.id); // 봉사자는 조직도 자리에 연결하지 않음
         });
         if (grants) console.log(`[admin] ${user.login} → ${target.login} 추가로 볼 조직 ${grants.length}개`);
         return send(res, 200, { ok: true, viewUnits: viewUnitsOut(target.id) });

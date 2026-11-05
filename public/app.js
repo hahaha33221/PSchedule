@@ -49,6 +49,7 @@
     month: null,      // 대시보드에서 보고 있는 달의 1일 (Date)
     view: store.get("ps.view", "month"),
     search: "",
+    navDashOpen: store.get("ps.navDash", "") === "1",
     show: JSON.parse(store.get("ps.show", "null") || "null") || { meeting: true, event: true, task: true },
     peek: null,       // 측면 패널 { type: 'event' | 'task' | 'day', id }
     navOpen: false,
@@ -674,7 +675,7 @@
     state.unreadNotices = n;
     if (layout.nav) drawNav(navActive);
   }
-  const checkNotices = () => { if (state.token && state.user && document.visibilityState === "visible") quiet(api("/notices/unread").then((r) => setUnreadNotices(r.unreadNotices))); };
+  const checkNotices = () => { if (state.token && state.user && state.user.role !== "volunteer" && document.visibilityState === "visible") quiet(api("/notices/unread").then((r) => setUnreadNotices(r.unreadNotices))); };
   setInterval(checkNotices, 120000);
   document.addEventListener("visibilitychange", checkNotices);
 
@@ -773,18 +774,33 @@
   function drawNav(active) {
     const items = [
       { id: "today", label: "오늘", icon: "home" },
-      { id: "dashboard", label: "나의 대시보드", icon: "grid" },
-      { id: "tasks", label: "할 일", icon: "check" },
-      { id: "meetings", label: "회의", icon: "people" },
-      { id: "memos", label: "메모", icon: "note" },
+      { id: "dashboard", label: "나의 대시보드", icon: "grid", kids: [
+        { id: "tasks", label: "할 일", icon: "check" },
+        { id: "meetings", label: "회의", icon: "people" },
+        { id: "memos", label: "메모", icon: "note" }
+      ] },
       { id: "orgchart", label: "조직도", icon: "org" },
       { id: "contacts", label: "연락처", icon: "phone" },
       { id: "notices", label: "공지", icon: "bell", badge: state.unreadNotices } // 맨 아래, 안 읽은 공지 수
     ];
-    layout.nav.replaceChildren(...items.map((it) => h("a", {
-      class: "side__link" + (it.id === active ? " is-active" : ""), href: "#/" + it.id, "aria-current": it.id === active ? "page" : null,
-      title: it.badge ? `${it.label} · 새 글 ${it.badge}개` : it.label, onclick: () => toggleNav(false)
-    }, [icon(it.icon), h("span", { class: "side__text", text: it.label }), it.badge ? h("span", { class: "nav-badge", "aria-label": `안 읽은 공지 ${it.badge}개`, text: it.badge > 99 ? "99+" : String(it.badge) }) : null])));
+    const setDashOpen = (open) => { state.navDashOpen = open; store.set("ps.navDash", open ? "1" : "0"); };
+    // 할 일·회의·메모 화면으로 가면 펼침 (접는 것은 사용자가)
+    if (active !== navActive && items[1].kids.some((k) => k.id === active)) setDashOpen(true);
+    const link = (it, sub) => h("a", {
+      class: "side__link" + (sub ? " side__link--sub" : "") + (it.id === active ? " is-active" : ""), href: "#/" + it.id, "aria-current": it.id === active ? "page" : null,
+      title: it.badge ? `${it.label} · 새 글 ${it.badge}개` : it.label,
+      onclick: () => {
+        if (it.kids) { const again = it.id === active; setDashOpen(again ? !state.navDashOpen : true); if (again) drawNav(active); }
+        toggleNav(false);
+      }
+    }, [icon(it.icon), h("span", { class: "side__text", text: it.label }), it.badge ? h("span", { class: "nav-badge", "aria-label": `안 읽은 공지 ${it.badge}개`, text: it.badge > 99 ? "99+" : String(it.badge) }) : null]);
+    layout.nav.replaceChildren(...items.map((it) => (it.kids ? h("div", { class: "side__group" }, [
+      h("div", { class: "side__row" }, [link(it), h("button", {
+        class: "side__toggle" + (state.navDashOpen ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(state.navDashOpen), "aria-label": `${it.label} 아래 메뉴 ${state.navDashOpen ? "접기" : "펼치기"}`,
+        onclick: () => { setDashOpen(!state.navDashOpen); drawNav(active); }
+      })]),
+      h("div", { class: "side__kids", hidden: !state.navDashOpen }, it.kids.map((k) => link(k, true)))
+    ]) : link(it))));
     navActive = active;
     drawUnitNav(active);
     drawAdminNav(active);
@@ -796,12 +812,15 @@
     if (!layout.unitNav) return;
     const mine = myUnit();
     const viewing = active === "unit" ? Number(route().id) || mine : null;
+    // 관리자가 '추가로 볼 수 있는 조직'으로 정한 곳은 내 소속 아래에 늘 보임
+    const extra = [...new Set((state.user.viewUnits || []).map((g) => g.unitId))].filter((id) => id !== mine && unitOf(id));
     const other = h("button", { class: "side__sublink", type: "button", text: "다른 소속 보기" });
     other.addEventListener("click", () => unitPicker(other, viewing, (id) => { if (id) { toggleNav(false); go(`#/unit/${id}`); } }, { noneLabel: null }));
     fill(layout.unitNav,
       mine ? h("a", { class: "side__link side__link--unit" + (viewing === mine ? " is-active" : ""), href: `#/unit/${mine}`, title: unitLabel(mine), onclick: () => toggleNav(false) }, [h("i", { class: `dot c${teamColor(mine) ?? KIND.event.color}` }), h("span", { text: unitPath(mine).map((u) => u.short || u.name).slice(-2).join(" › ") })])
         : h("p", { class: "muted small side__catempty", text: "아직 소속이 없어요" }),
-      viewing && viewing !== mine && unitOf(viewing) ? h("a", { class: "side__link side__link--unit is-active", href: `#/unit/${viewing}` }, [h("i", { class: "dot c4" }), h("span", { text: unitShort(viewing) })]) : null,
+      ...extra.map((id) => h("a", { class: "side__link side__link--unit" + (viewing === id ? " is-active" : ""), href: `#/unit/${id}`, title: unitLabel(id), onclick: () => toggleNav(false) }, [h("i", { class: `dot c${teamColor(id) ?? KIND.event.color}` }), h("span", { text: unitPath(id).map((u) => u.short || u.name).slice(-2).join(" › ") })])),
+      viewing && viewing !== mine && !extra.includes(viewing) && unitOf(viewing) ? h("a", { class: "side__link side__link--unit is-active", href: `#/unit/${viewing}` }, [h("i", { class: "dot c4" }), h("span", { text: unitShort(viewing) })]) : null,
       state.units.length ? other : null
     );
   }
@@ -2522,9 +2541,9 @@
       const users = r.users;
       for (const id of [...picked]) if (!users.some((u) => u.id === id)) picked.delete(id);
       const body = h("div", { class: "stack" });
-      const counts = { all: users.length, none: users.filter((u) => !u.unitId).length, admin: users.filter((u) => u.role === "admin").length };
+      const counts = { all: users.length, none: users.filter((u) => !u.unitId && u.role !== "volunteer").length, admin: users.filter((u) => u.role === "admin").length, volunteer: users.filter((u) => u.role === "volunteer").length };
       const filterUnits = memberFilter.unit && unitOf(memberFilter.unit) ? unitSubtree(memberFilter.unit) : null;
-      const shown = users.filter((u) => (memberFilter.kind === "all" || (memberFilter.kind === "none" ? !u.unitId : u.role === "admin")) && (!filterUnits || filterUnits.has(u.unitId)));
+      const shown = users.filter((u) => (memberFilter.kind === "all" || (memberFilter.kind === "none" ? !u.unitId && u.role !== "volunteer" : u.role === memberFilter.kind)) && (!filterUnits || filterUnits.has(u.unitId)));
 
       const notice = store.get("ps.unitNotice", "") === "1" ? null : h("div", { class: "infobar", role: "status" }, [
         h("strong", { text: "'직책' 칸이 '소속'으로 바뀌었어요." }),
@@ -2532,7 +2551,7 @@
         h("a", { href: "#/org", text: "조직도 열기 →" }),
         h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "안내 닫기", html: ICON.close, onclick: () => { store.set("ps.unitNotice", "1"); load(); } })
       ]);
-      const seg = h("div", { class: "seg seg--sm" }, [["all", "전체"], ["none", "소속 미지정"], ["admin", "관리자"]].map(([k, label]) => h("button", {
+      const seg = h("div", { class: "seg seg--sm" }, [["all", "전체"], ["none", "소속 미지정"], ["admin", "관리자"], ["volunteer", "봉사자"]].map(([k, label]) => h("button", {
         type: "button", "aria-selected": String(memberFilter.kind === k), class: k === "none" && counts.none ? "seg__warn" : null,
         onclick: () => { memberFilter.kind = k; load(); }
       }, `${label} ${counts[k]}`)));
@@ -2547,9 +2566,10 @@
         h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "선택 해제", onclick: () => { picked.clear(); load(); } })
       ]) : h("span", { class: "muted small", text: "여러 명을 골라 한 번에 소속을 바꿀 수 있어요" });
 
-      const all = h("input", { type: "checkbox", "aria-label": "보이는 멤버 모두 고르기", checked: shown.length > 0 && shown.every((u) => picked.has(u.id)) });
-      all.addEventListener("change", () => { shown.forEach((u) => (all.checked ? picked.add(u.id) : picked.delete(u.id))); load(); });
+      const all = h("input", { type: "checkbox", "aria-label": "보이는 멤버 모두 고르기", checked: shown.some((u) => u.role !== "volunteer") && shown.every((u) => u.role === "volunteer" || picked.has(u.id)) });
+      all.addEventListener("change", () => { shown.filter((u) => u.role !== "volunteer").forEach((u) => (all.checked ? picked.add(u.id) : picked.delete(u.id))); load(); });
       const rows = shown.map((u) => {
+        const volunteer = u.role === "volunteer";
         const c = h("input", { type: "checkbox", "aria-label": `${u.name} 고르기`, checked: picked.has(u.id) });
         c.addEventListener("change", () => { c.checked ? picked.add(u.id) : picked.delete(u.id); load(); });
         const unitBtn = h("button", { class: "unit-btn" + (u.unitId ? "" : " unit-btn--empty"), type: "button", title: u.unitId ? unitLabel(u.unitId) : "소속을 골라 주세요" }, [h("span", { text: u.unitId ? unitLabel(u.unitId) : "소속 고르기" }), h("span", { class: "unit-btn__caret", "aria-hidden": "true", text: "▾" })]);
@@ -2558,11 +2578,11 @@
           await reloadTeam(); drawNavAll(); load();
         }, { noneLabel: "소속 빼기" }));
         return h("tr", { class: picked.has(u.id) ? "is-picked" : null }, [
-          h("td", {}, c),
-          h("td", {}, h("span", { class: "person person--stack" }, [avatar(u.id, "sm"), h("span", {}, [h("strong", { text: u.name }), u.me ? h("span", { class: "badge", text: "나" }) : null, u.note ? h("small", { class: "muted person__note", text: u.note }) : null])])),
-          h("td", {}, [unitBtn, (u.viewUnits || []).length ? h("small", { class: "muted member-extra", title: "관리자가 추가로 지정한 볼 수 있는 조직", text: `+ 추가로 봄: ${viewGrantsText(u.viewUnits)}` }) : null]),
+          h("td", {}, volunteer ? null : c), // 봉사자는 소속이 없어서 일괄 변경에서 뺌
+          h("td", {}, h("span", { class: "person person--stack" }, [volunteer ? h("span", { class: "avatar avatar--sm c0", title: u.name, text: u.name.replace(/\s/g, "").slice(-2) }) : avatar(u.id, "sm"), h("span", {}, [h("strong", { text: u.name }), u.me ? h("span", { class: "badge", text: "나" }) : null, u.note ? h("small", { class: "muted person__note", text: u.note }) : null])])),
+          h("td", {}, volunteer ? h("span", { class: "muted", text: "-" }) : [unitBtn, (u.viewUnits || []).length ? h("small", { class: "muted member-extra", title: "관리자가 추가로 지정한 볼 수 있는 조직", text: `+ 추가로 봄: ${viewGrantsText(u.viewUnits)}` }) : null]),
           h("td", { class: "mono", text: u.login }),
-          h("td", {}, u.role === "admin" ? adminBadge("관리자") : h("span", { class: "badge", text: u.role === "director" ? "본부장" : "멤버" })),
+          h("td", {}, u.role === "admin" ? adminBadge("관리자") : h("span", { class: "badge", text: { director: "본부장", volunteer: "봉사자" }[u.role] || "멤버" })),
           h("td", { class: "muted" }, u.pwChanged ? "변경함" : h("span", { class: "warn", text: "임시 비밀번호" })),
           h("td", { class: "muted", text: u.lastLoginAt ? ago(u.lastLoginAt) : "아직 없음" }),
           h("td", { class: "td-actions" }, [
@@ -2627,12 +2647,12 @@
     const name = h("input", { maxlength: "20", autofocus: true, placeholder: "예: 김지현" });
     let unitId = memberFilter.unit && unitOf(memberFilter.unit) ? memberFilter.unit : null;
     const login = h("input", { maxlength: "20", autocapitalize: "none", spellcheck: "false", placeholder: "예: jihyun" });
-    const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "director", text: "본부장" }), h("option", { value: "admin", text: "관리자" })]);
+    const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "director", text: "본부장" }), h("option", { value: "admin", text: "관리자" }), h("option", { value: "volunteer", text: "봉사자" })]);
     const submit = h("button", { class: "btn btn--admin", type: "submit", text: "발급" });
     const form = h("form", { class: "stack", novalidate: true }, [
       h("div", { class: "row2" }, [field("이름", name), field("소속", unitButton(unitId, (id) => { unitId = id; }), "조직도에서 고르기 (나중에 정해도 돼요)")]),
       field("아이디", login, "영문 소문자·숫자·._- 3~20자"),
-      field("권한", role, "관리자는 조직도·멤버·분류·캘린더·백업 관리와 공지 쓰기를 할 수 있어요. 본부장은 맡은 조직(소속·연결한 조직도 자리)과 그 아래 조직의 회의·할 일·메모·연락처를 봐요. 관리 기능은 없어요"),
+      field("권한", role, "봉사자는 봉사자 전용 화면만 보고 소속 없이 관리돼요. 관리자는 조직도·멤버·분류·캘린더·백업 관리와 공지 쓰기를 할 수 있어요. 본부장은 맡은 조직(소속·연결한 조직도 자리)과 그 아래 조직의 회의·할 일·메모·연락처를 봐요. 관리 기능은 없어요"),
       err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), submit])
     ]);
@@ -2671,7 +2691,7 @@
     }
     drawGrants();
     const note = h("input", { value: u.note || "", maxlength: "200", placeholder: "예: 예전 직책, 연락 메모" });
-    const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "director", text: "본부장" }), h("option", { value: "admin", text: "관리자" })]);
+    const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "director", text: "본부장" }), h("option", { value: "admin", text: "관리자" }), h("option", { value: "volunteer", text: "봉사자" })]);
     role.value = u.role;
     const submit = h("button", { class: "btn btn--admin", type: "submit", text: "저장" });
     const form = h("form", { class: "stack", novalidate: true }, [
@@ -2679,7 +2699,7 @@
       // (field 는 <label> 이라 안에 체크 상자가 여럿이면 엉뚱한 것이 눌려서 div 로)
       h("div", { class: "field" }, [h("span", { class: "field__label", text: "추가로 볼 수 있는 조직" }), grantsBox, h("span", { class: "field__hint", text: "소속 말고도 이 조직의 회의·할 일·메모를 봐요. '아래 팀 포함'을 끄면 그 조직(부·본부 직속)만 봐요." })]),
       field("메모", note, "관리자만 보는 메모예요. 예전 '직책'은 여기로 옮겨 두었어요."),
-      field("권한", role, "본부장은 맡은 조직(소속·연결한 조직도 자리)과 그 아래 조직의 회의·할 일·메모·연락처를 봐요. 관리 기능은 없어요"), err,
+      field("권한", role, "봉사자로 바꾸면 소속·추가로 볼 조직·조직도 자리 연결이 지워지고 봉사자 전용 화면만 봐요. 본부장은 맡은 조직(소속·연결한 조직도 자리)과 그 아래 조직의 회의·할 일·메모·연락처를 봐요. 관리 기능은 없어요"), err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), submit])
     ]);
     form.addEventListener("submit", (e) => {
@@ -3522,10 +3542,35 @@
     try { await page.reload(); } catch (e) { if (e.status !== 401) box.replaceChildren(failed(e)); }
   }
 
+  /* ---------- 봉사자 화면: 직원 화면과 따로 (메뉴는 나중에 이 머리줄 아래로) ---------- */
+  function renderVolunteer() {
+    layout.main = null;
+    document.title = `봉사자 · ${TITLE}`;
+    const account = h("button", { class: "vol__account", type: "button", "aria-label": "내 계정" }, [h("strong", { text: state.user.name }), icon("right")]);
+    account.addEventListener("click", () => popover(account, h("div", { class: "pop__list" }, [
+      h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); openDialog("비밀번호 변경", passwordForm(closeDialog)); } }, "비밀번호 변경"),
+      h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); logout(); } }, "로그아웃")
+    ])));
+    const today = new Date().toLocaleDateString("ko-KR", { year: "numeric", month: "long", day: "numeric", weekday: "long" });
+    const card = (title, body) => h("section", { class: "card vol__card" }, [h("h2", { class: "card__title", text: title }), h("p", { class: "muted", text: body })]);
+    app.replaceChildren(h("div", { class: "vol" }, [
+      h("header", { class: "vol__bar" }, [h("span", { class: "brand" }, [h("img", { src: "favicon.svg", alt: "" }), h("span", { text: TITLE })]), h("span", { class: "vol__tag", text: "봉사자" }), account]),
+      h("main", { class: "vol__main", id: "main" }, [
+        h("p", { class: "muted", text: today }),
+        h("h1", { class: "vol__hello", text: `${state.user.name}님, 안녕하세요` }),
+        h("div", { class: "vol__cards" }, [
+          card("내 봉사 일정", "곧 여기에서 볼 수 있어요."),
+          card("안내 사항", "곧 여기에서 볼 수 있어요.")
+        ])
+      ])
+    ]));
+  }
+
   /* ---------- 시작 ---------- */
   function render() {
     if (!state.user) return;
     if (state.user.mustChangePassword) { layout.main = null; return renderForcedPassword(); }
+    if (state.user.role === "volunteer") { closeDialog(); closePop(); return renderVolunteer(); }
     if (!layout.main || !app.contains(layout.main)) buildLayout();
     closeDialog();
     closePop();

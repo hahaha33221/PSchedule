@@ -206,6 +206,28 @@ jobs:
           # 자리의 사람이 바뀌면 연락처 지움
           curl -fs -H "$H" -XPATCH -d '{"name":"새사람"}' $B/admin/org/positions/$PO >/dev/null
           if curl -fs -H "$H" $B/contacts | grep -q 010-0000-0007; then echo "바뀐 자리에 연락처가 남아요"; exit 1; fi
+          # 봉사자: 관리자가 발급, 직원 데이터는 서버에서 전부 막고 직원 명단에도 안 나옴
+          VP=$(curl -fs -H "$H" -XPOST -d '{"login":"vola","name":"봉사자일","role":"volunteer","unitId":'$OPS'}' $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).password')
+          A8=$(tok vola "$VP"); VU=$(USR vola)
+          curl -fs -H "$(bearer "$A8")" $B/me | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.user.role!=="volunteer"||d.user.unitId!==null||d.units.length||d.team.length||d.categories.length)process.exit(1)'
+          for u in tasks "events?from=2026-02-01&to=2026-02-28" contacts org team memos notices notices/unread "search?q=WYD" admin/users people/1 meetings/choices; do test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" "$B/$u")" = 403; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" -XPOST -d '{"title":"x"}' $B/tasks)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" -XPUT -d '{"mobile":"1"}' $B/contacts/u$VU)" = 403
+          if curl -fs -H "$(bearer "$A1")" $B/me | grep -q '봉사자일'; then echo "직원 명단에 봉사자가 나와요"; exit 1; fi
+          if curl -fs -H "$(bearer "$A1")" $B/contacts | grep -q '봉사자일'; then echo "연락처에 봉사자가 나와요"; exit 1; fi
+          J="{\"title\":\"담당 테스트\",\"assigneeId\":$VU}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d "$J" $B/tasks)" = 400
+          curl -fs -H "$H" $B/admin/users | grep -q '"role":"volunteer"'
+          J="{\"current\":\"$VP\",\"next\":\"volunteer-pass-1\"}"; curl -fs -H "$(bearer "$A8")" -XPOST -d "$J" $B/password >/dev/null
+          # 직원 ↔ 봉사자: 바꾸면 바로 적용, 봉사자로 바꾸면 소속·추가 조직이 지워지고 소속 일괄 변경에서도 빠짐
+          A8=$(tok vola volunteer-pass-1)
+          J="{\"role\":\"member\",\"unitId\":$FB}"; curl -fs -H "$H" -XPATCH -d "$J" $B/admin/users/$VU >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" $B/tasks)" = 200
+          J="{\"viewUnits\":[{\"unitId\":$LG,\"sub\":true}]}"; curl -fs -H "$H" -XPATCH -d "$J" $B/admin/users/$VU >/dev/null
+          curl -fs -H "$H" -XPATCH -d '{"role":"volunteer"}' $B/admin/users/$VU >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" $B/tasks)" = 403
+          curl -fs -H "$(bearer "$A8")" $B/me | node -e 'const u=JSON.parse(require("fs").readFileSync(0)).user;if(u.unitId!==null||u.viewUnits.length)process.exit(1)'
+          J="{\"userIds\":[$VU],\"unitId\":$FB}"; curl -fs -H "$H" -XPOST -d "$J" $B/admin/users/unit >/dev/null
+          curl -fs -H "$(bearer "$A8")" $B/me | grep -q '"unitId":null'
           curl -fs -H "$H" -XPOST -d '{"userIds":[1],"unitId":3}' $B/admin/users/unit | grep -q '"changed":1'
           curl -fs -H "$H" "$B/units/1?sub=1" | grep -Eq '"memberIds":\[([0-9]+,)*1[],]'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"name":"x","url":"http://127.0.0.1/a.ics"}' $B/admin/calendars)" = 400

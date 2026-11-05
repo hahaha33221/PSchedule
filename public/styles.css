@@ -801,6 +801,15 @@ button.mgroup__head:hover { color: var(--ink); }
 .side__admin { display: flex; flex-direction: column; gap: 2px; padding: 8px; border-radius: 12px; background: var(--admin-box); border: 1px solid var(--admin-line); }
 .side__adminhead { display: flex; align-items: center; gap: 6px; padding: 2px 6px 6px; font-size: 12px; font-weight: 800; color: var(--admin-text); }
 .side__adminhead .ic svg { width: 13px; height: 13px; }
+.side__row { position: relative; }
+.side__row > .side__link { padding-right: 34px; }
+.side__toggle { position: absolute; top: 50%; right: 4px; transform: translateY(-50%); display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 7px; background: none; color: var(--muted); cursor: pointer; }
+.side__toggle:hover { background: var(--line-2); color: var(--ink-2); }
+.side__toggle svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2.4; transition: transform .15s; }
+.side__toggle.is-open svg { transform: rotate(90deg); }
+.side__kids[hidden] { display: none; }
+.side__link--sub { padding-left: 26px; font-size: 13.5px; }
+.side__link--sub .ic svg { width: 16px; height: 16px; }
 .side__link--admin { color: var(--admin-link); border: 0; background: none; width: 100%; text-align: left; font-size: 14px; }
 .side__link--admin:hover { background: var(--admin-soft); }
 .side__link--admin.is-active { background: var(--admin); color: var(--admin-ink); }
@@ -1153,6 +1162,9 @@ button.mgroup__head:hover { color: var(--ink); }
   .side-mini .side__text, .side-mini .side__who, .side-mini .side__section, .side-mini .side__adminhead, .side-mini .mini { display: none; }
   .side-mini .side__link, .side-mini .side__add { justify-content: center; padding-left: 0; padding-right: 0; position: relative; }
   .side-mini .side__admin { padding: 4px; }
+  .side-mini .side__toggle { display: none; }
+  .side-mini .side__kids[hidden] { display: block; } /* 아이콘만일 때는 늘 보임 */
+  .side-mini .side__row > .side__link { padding-right: 0; }
   .side-mini .side__account { justify-content: center; }
   .side-mini .nav-badge { position: absolute; top: 1px; right: 4px; min-width: 16px; height: 16px; padding: 0 4px; font-size: 10px; line-height: 16px; }
 }
@@ -1194,3 +1206,16 @@ button.mgroup__head:hover { color: var(--ink); }
   .contacts tr.is-mine td { background: none; }
   .contacts__edit { text-align: left; padding-top: 6px !important; }
 }
+
+/* 봉사자 화면 */
+.vol { min-height: 100dvh; background: var(--bg, var(--surface-2)); }
+.vol__bar { display: flex; align-items: center; gap: 10px; padding: 12px 20px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.vol__tag { padding: 2px 9px; border-radius: 999px; background: var(--primary-soft); color: var(--primary); font-size: 12.5px; font-weight: 700; }
+.vol__account { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; padding: 6px 8px; border: 0; border-radius: 9px; background: none; color: var(--ink-2); cursor: pointer; }
+.vol__account:hover { background: var(--surface-2); }
+.vol__account .ic svg { width: 14px; height: 14px; transform: rotate(90deg); }
+.vol__main { max-width: 860px; margin: 0 auto; padding: 28px 20px 48px; }
+.vol__hello { margin: 4px 0 20px; }
+.vol__cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
+.vol__card { padding: 18px 20px; }
+.vol__card p { margin: 8px 0 0; }

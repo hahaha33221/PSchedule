@@ -290,6 +290,8 @@ function addUnitColumns(db) {
   if (!has("users", "unit_id")) db.exec("ALTER TABLE users ADD COLUMN unit_id INTEGER REFERENCES org_units(id) ON DELETE SET NULL");
   // 본부장 권한: role 은 그대로 'member' (관리자 기능 없음), 아래 조직을 보는 범위만 넓음
   if (!has("users", "director")) db.exec("ALTER TABLE users ADD COLUMN director INTEGER NOT NULL DEFAULT 0");
+  // 봉사자 계정: 직원 화면·API 를 쓰지 않음 (role 은 member, 서버 입구에서 막음)
+  if (!has("users", "volunteer")) db.exec("ALTER TABLE users ADD COLUMN volunteer INTEGER NOT NULL DEFAULT 0");
   if (!has("users", "note")) {
     db.exec("ALTER TABLE users ADD COLUMN note TEXT NOT NULL DEFAULT ''");
     db.exec("UPDATE users SET note = '직책: ' || title WHERE title <> ''");
