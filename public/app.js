@@ -3972,9 +3972,11 @@
       const next = STOCK_STEPS.slice(0, 3).find((s) => !done[s.id]);
       return h("a", { class: "card pj-card", href: href(l) }, [
         h("strong", { text: l.name }),
+        l.volunteerEntry ? h("span", { class: "stock-tag", text: "봉사자 입력" }) : null,
         h("div", { class: "stock-card__nums" }, [`입고 ${fmtN(l.inTotal)}`, h("span", { text: `출고 ${fmtN(l.outTotal)}` }), h("strong", { class: l.inTotal - l.outTotal < 0 ? "stock-minus" : null, text: `재고 ${fmtN(l.inTotal - l.outTotal)} ${l.unit}` })]),
         h("div", { class: "stock-dots", "aria-hidden": "true" }, STOCK_STEPS.map((s) => h("i", { class: done[s.id] ? "is-done" : null, title: s.label }))),
-        h("span", { class: next ? "stock-card__next" : "muted small", text: next ? `다음 단계: ${next.label}` : "기록 단계 완료" })
+        h("span", { class: next ? "stock-card__next" : "muted small", text: next ? `다음 단계: ${next.label}` : "기록 단계 완료" }),
+        l.last ? h("span", { class: "muted small", text: `최근 ${l.last.type === "in" ? "입고" : "출고"} ${l.last.date}${l.last.enteredBy ? ` · ${l.last.enteredBy}` : ""}` }) : null
       ]);
     };
     const groups = [...new Set(list.map((l) => l.itemId))].map((itemId) => list.filter((l) => l.itemId === itemId));
@@ -4024,7 +4026,10 @@
     const apply = (r) => { data = r; draw(); };
     function moveDialog(type, m) {
       const err = errorLine();
-      const date = h("input", { value: m?.date || today(), maxlength: "20", autofocus: true, placeholder: today() });
+      // 봉사자는 달력으로 고르기 (예전 기록의 '10월 이전' 같은 글자 날짜는 직원 화면에서만)
+      const date = vol ? h("input", { type: "date", value: m?.date || today(), autofocus: true }) : h("input", { value: m?.date || today(), maxlength: "20", autofocus: true, placeholder: today() });
+      const qtyOf = (mv, oid) => mv.qty[oid] || 0;
+      const leftOf = (oid) => data.moves.reduce((n, x) => (m && x.id === m.id ? n : n + (x.type === "in" ? qtyOf(x, oid) : -qtyOf(x, oid))), 0); // 이 기록을 뺀 재고
       const handler = h("input", { value: m?.handler ?? (vol && type === "out" ? state.user.name : ""), maxlength: "40" });
       const note = h("textarea", { rows: "2", maxlength: "500" }, m?.note || "");
       const sum = h("strong");
@@ -4034,7 +4039,7 @@
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: m ? "저장" : "추가" });
       const form = h("form", { class: "stack", novalidate: true }, [
         h("div", { class: "row2" }, [field(type === "in" ? "입고일" : "출고일", date), type === "out" ? field("전달자", handler) : null]),
-        inputs.length ? h("div", { class: "stock-grid" }, inputs.map((x) => h("label", { class: "stock-grid__cell" }, [h("span", { class: "small", text: x.o.name }), x.el]))) : h("p", { class: "muted small", text: "먼저 1단계 기본 정보에서 품목 열을 추가해 주세요." }),
+        inputs.length ? h("div", { class: "stock-grid" }, inputs.map((x) => h("label", { class: "stock-grid__cell" }, [h("span", { class: "small", text: x.o.name }), x.el, h("span", { class: "muted stock-grid__left", text: `재고 ${fmtN(leftOf(x.o.id))}` })]))) : h("p", { class: "muted small", text: "먼저 1단계 기본 정보에서 품목 열을 추가해 주세요." }),
         sum, field("비고", note),
         m?.enteredBy ? h("p", { class: "muted small", text: `입력: ${m.enteredBy}` }) : null,
         err,
@@ -4051,6 +4056,10 @@
         e.preventDefault();
         busy(ok, async () => {
           try {
+            if (!date.value) return showError(err, "날짜를 골라 주세요.");
+            if (!inputs.some((x) => Number(x.el.value) > 0)) return showError(err, "수량을 하나 이상 적어 주세요.");
+            const over = type === "out" ? inputs.filter((x) => Number(x.el.value) > leftOf(x.o.id)) : [];
+            if (over.length && !confirm(`재고보다 많이 출고해요: ${over.map((x) => `${x.o.name} (재고 ${fmtN(leftOf(x.o.id))})`).join(", ")}\n그래도 저장할까요?`)) return;
             const qty = Object.fromEntries(inputs.map((x) => [x.o.id, x.el.value]));
             const body = { date: date.value, handler: handler.value, note: note.value, qty };
             const r = await api(m ? moveUrl(m.id) : `${base}/moves`, { method: m ? "PATCH" : "POST", body: m ? body : { ...body, type } });
@@ -4079,17 +4088,17 @@
           return h("tr", rowAttrs, [
             h("td", { class: "num muted", text: String(i + 1) }), h("td", { class: "nowrap", text: m.date }),
             ...options.map((o) => num(m.qty[o.id])), num(day, "stock-strong"), num(running),
-            isOut ? h("td", { text: m.handler || "-" }) : null, h("td", { class: "stock-note", text: m.note })
+            isOut ? h("td", { text: m.handler || "-" }) : null, h("td", { class: "stock-note", text: m.note }), vol ? null : h("td", { class: "nowrap", text: m.enteredBy || "-" })
           ]);
         });
-        const colsAfter = isOut ? 2 : 1;
+        const colsAfter = (isOut ? 2 : 1) + (vol ? 0 : 1);
         return h("section", { class: "stock-sec" }, [
           h("div", { class: "card__head" }, [
             h("h2", { class: "card__title" }, [isOut ? "출고 현황 " : "입고 현황 ", h("span", { class: "muted small", text: isOut ? l.outLabel : l.inLabel })]),
             h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => moveDialog(type) }, [icon("plus"), isOut ? "출고 추가" : "입고 추가"])
           ]),
           h("div", { class: "card table-wrap" }, h("table", { class: "table stock-table" }, [
-            h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "순번" }), h("th", { text: isOut ? "출고일" : "입고일" }), ...options.map((o) => h("th", { class: "num", text: o.name })), h("th", { class: "num", text: "일계" }), h("th", { class: "num", text: "누계" }), isOut ? h("th", { text: "전달자" }) : null, h("th", { text: "비고" })])),
+            h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "순번" }), h("th", { text: isOut ? "출고일" : "입고일" }), ...options.map((o) => h("th", { class: "num", text: o.name })), h("th", { class: "num", text: "일계" }), h("th", { class: "num", text: "누계" }), isOut ? h("th", { text: "전달자" }) : null, h("th", { text: "비고" }), vol ? null : h("th", { text: "입력자" })])),
             h("tbody", {}, body.length ? body : h("tr", {}, h("td", { colspan: String(options.length + 4 + colsAfter), class: "muted empty", text: "아직 기록이 없어요." }))),
             h("tfoot", {}, [
               h("tr", {}, [h("th", { colspan: "2", text: "합계" }), ...options.map((o) => num(sumOf(type, o.id))), num(sumOf(type)), h("td", { colspan: String(1 + colsAfter) })]),
@@ -4157,6 +4166,7 @@
         h("nav", { class: "muted small" }, [h("a", { href: listHash, text: vol ? "입출고" : "입출고 관리" }), ` › ${data.itemName} › ${l.name}`]),
         h("div", { class: "page-head page-head--wrap" }, [
           h("h1", { text: l.name }),
+          !vol && l.volunteerEntry ? h("span", { class: "stock-tag", text: "봉사자 입력" }) : null,
           l.canDelete ? h("span", { class: "page-head__end actions" }, h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
             if (!confirm(`'${l.name}' 입출고 현황과 모든 기록을 지울까요?`)) return;
             await act(() => api(`/stock/${id}`, { method: "DELETE" }));
@@ -4167,7 +4177,7 @@
           l.contract ? stat("계약", l.contract) : null, stat("입고", inAll), l.contract ? stat("미입고", l.contract - inAll) : null, stat("출고", outAll), stat("창고 재고", stock, stock < 0)
         ]),
         h("ol", { class: "stock-steps", "aria-label": "진행 단계" }, STOCK_STEPS.map((s, i) => h("li", {}, h("button", { class: "stock-step" + (s.id === step ? " is-active" : "") + (done[s.id] ? " is-done" : ""), type: "button", "aria-current": s.id === step ? "step" : null, onclick: () => pick(s.id) }, [stepNum(i, done[s.id]), h("span", { class: "stock-step__label", text: s.label })])))),
-        h("div", { class: "card stock-guide" }, [h("span", { class: "stock-guide__count", text: `${at + 1} / ${STOCK_STEPS.length}단계` }), h("h2", { text: cur.title }), h("p", { text: cur.hint }), vol && (step === "in" || step === "out") ? h("p", { class: "muted small", text: "직접 입력한 기록만 고칠 수 있어요. 다른 기록을 고쳐야 하면 담당 직원에게 알려 주세요." }) : null]),
+        h("div", { class: "card stock-guide" }, [h("span", { class: "stock-guide__count", text: `${at + 1} / ${STOCK_STEPS.length}단계` }), h("h2", { text: cur.title }), h("p", { text: cur.hint }), vol && (step === "in" || step === "out") ? h("p", { class: "muted small", text: "직접 입력한 기록만 고칠 수 있어요. 다른 기록을 고쳐야 하면 담당 직원에게 알려 주세요." }) : null, !vol && l.volunteerEntry && (step === "in" || step === "out") ? h("p", { class: "muted small", text: "이 대장은 봉사자가 입력해요. 직원은 확인하고, 필요하면 기록을 눌러 고칠 수 있어요." }) : null]),
         panel,
         h("div", { class: "stock-nav" }, [
           prev ? h("button", { class: "btn btn--ghost", type: "button", text: `이전: ${prev.label}`, onclick: () => pick(prev.id) }) : null,
@@ -4175,7 +4185,15 @@
         ])
       ]);
     }
-    if (vol) { apply(await api(base)); return; }
+    if (vol) {
+      if (vol.open) { step = vol.open; store.set(`ps.stockStep.${id}`, step); }
+      apply(await api(base));
+      if (vol.open && vol.isCurrent()) {
+        history.replaceState(null, "", `#/vstock/${id}`); // 새로고침해도 입력 창이 다시 열리지 않게
+        moveDialog(vol.open);
+      }
+      return;
+    }
     page = { name: "stock", reload: async () => apply(await api(base)) };
     try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("stock", failed(e)); }
   }
@@ -4205,7 +4223,10 @@
     const show = (...kids) => { if (seq === volSeq) fill(main, ...kids); };
     const load = async () => {
       if (tab === "vstock") {
-        if (id) return pageStock(Number(id), { show });
+        if (id) {
+          const open = location.hash.split("/")[3];
+          return pageStock(Number(id), { show, open: open === "in" || open === "out" ? open : null, isCurrent: () => seq === volSeq });
+        }
         const { ledgers } = await api("/volunteer/stock");
         document.title = `입출고 · ${TITLE}`;
         return show([
@@ -4216,13 +4237,15 @@
       if (tab === "vprojects") {
         if (id) {
           const d = await api(`/volunteer/projects/${Number(id)}`);
-          return show(volProject(d));
+          return show(volProject(d, false, (await api("/volunteer/stock")).ledgers.filter((l) => l.projectId === d.project.id)));
         }
         const { projects } = await api("/volunteer/projects");
-        if (projects.length === 1) return show(volProject(await api(`/volunteer/projects/${projects[0].id}`), true)); // 하나면 바로
+        const { ledgers } = await api("/volunteer/stock");
+        if (projects.length === 1) return show(volProject(await api(`/volunteer/projects/${projects[0].id}`), true, ledgers)); // 하나면 바로
         return show(volProjects(projects));
       }
       const d = await api("/volunteer/home");
+      if (tab === "vhome") d.ledgers = (await api("/volunteer/stock")).ledgers;
       if (tab === "vschedule") return show(volSchedules(d.schedules));
       if (tab === "vtraining") return show(volTrainings(d.trainings));
       return show(volHome(d));
@@ -4237,7 +4260,15 @@
       s.note ? h("p", { class: "vol-pre small", text: s.note }) : null
     ])
   ]);
-  function volHome({ schedules, trainings }) {
+  // 대장 한 줄: 입고·출고·재고와 바로 입력 버튼
+  const volStockRow = (l) => {
+    const left = l.inTotal - l.outTotal;
+    return h("li", { class: "vol-stock" }, [
+      h("a", { class: "vol-stock__name", href: `#/vstock/${l.id}` }, [h("strong", { text: l.name }), h("span", { class: "muted small", text: `입고 ${fmtN(l.inTotal)} · 출고 ${fmtN(l.outTotal)}` }), h("span", { class: left < 0 ? "small stock-minus" : "small", text: `재고 ${fmtN(left)} ${l.unit}` })]),
+      h("span", { class: "vol-stock__btns" }, [h("a", { class: "btn btn--primary btn--sm", href: `#/vstock/${l.id}/in`, "aria-label": `${l.name} 입고 입력`, text: "입고" }), h("a", { class: "btn btn--primary btn--sm", href: `#/vstock/${l.id}/out`, "aria-label": `${l.name} 출고 입력`, text: "출고" })])
+    ]);
+  };
+  function volHome({ schedules, trainings, ledgers }) {
     const next = schedules.filter((s) => s.date >= today()).slice(0, 3);
     const doneN = trainings.filter((t) => t.done).length;
     const todo = trainings.filter((t) => !t.done).slice(0, 3);
@@ -4257,8 +4288,8 @@
           todo.length ? h("ul", { class: "vol-todo" }, todo.map((t) => h("li", { text: t.title }))) : null
         ]),
         h("section", { class: "card vol__card" }, [
-          h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "입출고" }), more("#/vstock", "입력하기")]),
-          h("p", { class: "muted", text: "입고와 출고 수량을 직접 입력해요." })
+          h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "묵주 입출고" }), more("#/vstock", "전체 보기")]),
+          ledgers.length ? h("ul", { class: "vol-list" }, ledgers.map(volStockRow)) : h("p", { class: "muted", text: "아직 입력할 수 있는 대장이 없어요." })
         ]),
         h("section", { class: "card vol__card" }, [
           h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "묵주" }), more("#/vprojects", "보기")]),
@@ -4306,7 +4337,7 @@
       ]))) : h("div", { class: "card empty", text: "아직 볼 수 있는 프로젝트가 없어요." })
     ];
   }
-  function volProject({ project, items }, only) {
+  function volProject({ project, items }, only, ledgers) {
     const kids = (pid) => items.filter((i) => i.parentId === pid);
     const itemRow = (i) => h("li", { class: "vol-item" }, [
       h("div", { class: "vol-item__head" }, [h("span", { text: i.name }), h("span", { class: `pj-st pj-st--${i.status}`, text: projectStatusLabel(i.status) }), i.dueDate ? h("span", { class: "muted small", text: `마감 ${shortDate(i.dueDate)}` }) : null]),
@@ -4330,7 +4361,10 @@
       h("p", { class: "muted small", text: `${project.name} · 읽기 전용` }),
       single?.note ? h("p", { class: "vol-pre muted", text: single.note }) : null,
       h("div", { class: "card vol__card" }, list(single ? single.id : null)),
-      h("p", { class: "vol-actions" }, h("a", { class: "btn btn--primary", href: "#/vstock", text: "입출고 입력하기" }))
+      h("section", { class: "card vol__card vol-stock-card" }, [
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "입출고" }), h("a", { class: "link-btn", href: "#/vstock", text: "전체 보기" })]),
+        ledgers.length ? h("ul", { class: "vol-list" }, ledgers.map(volStockRow)) : h("p", { class: "muted", text: "아직 입력할 수 있는 대장이 없어요." })
+      ])
     ];
   }
 
@@ -4340,9 +4374,9 @@
     document.title = `봉사자 관리 · ${TITLE}`;
     drawMini(null);
     setMain("volunteers", loading());
-    const tab = route().id === "training" ? "training" : "schedule";
-    let vols = [], schedules = [], trainings = [];
-    const seg = h("div", { class: "seg", role: "tablist" }, [["schedule", "일정"], ["training", "기본 교육"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "training" ? "#/volunteers/training" : "#/volunteers") })));
+    const tab = ["training", "stock"].includes(route().id) ? route().id : "schedule";
+    let vols = [], schedules = [], trainings = [], stockMoves = [];
+    const seg = h("div", { class: "seg", role: "tablist" }, [["schedule", "일정"], ["training", "기본 교육"], ["stock", "입출고 입력"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "schedule" ? "#/volunteers" : `#/volunteers/${k}`) })));
     const dateAndTime = (date, start, end) => h("div", { class: "row2" }, [field("날짜", date), h("div", { class: "row2" }, [field("시작", start), end ? field("끝", end) : h("span")])]);
     const saveForm = (form, ok, err, send) => form.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -4417,19 +4451,26 @@
           h("td", { text: t.title }), h("td", { class: "nowrap", text: [t.date ? volDay(t.date) : "", t.startTime].filter(Boolean).join(" ") || "-" }), h("td", { text: t.place || "-" }), h("td", { class: "nowrap", text: `${t.doneBy.length} / ${vols.length}명` })
         ])))
       ])) : h("div", { class: "card empty", text: "아직 등록한 교육이 없어요." });
+      const when = (m) => { const d = new Date(`${m.createdAt.replace(" ", "T")}Z`); return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+      const stockView = stockMoves.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
+        h("thead", {}, h("tr", {}, ["입력 시각", "입력자", "대장", "구분", "날짜", "수량", "비고"].map((x) => h("th", { text: x })))),
+        h("tbody", {}, stockMoves.map((m) => h("tr", rowAttrs(() => go(`#/stock/${m.ledgerId}`)), [
+          h("td", { class: "nowrap", text: when(m) }), h("td", { class: "nowrap", text: m.enteredBy }), h("td", { text: m.ledgerName }), h("td", { class: "nowrap", text: m.type === "in" ? "입고" : "출고" }), h("td", { class: "nowrap", text: m.date }), h("td", { class: "nowrap", text: `${fmtN(m.total)} ${m.unit}` }), h("td", { text: m.note || "-" })
+        ])))
+      ])) : h("div", { class: "card empty", text: "아직 봉사자가 입력한 기록이 없어요." });
       setMain("volunteers", [
         h("div", { class: "page-head" }, [
           h("h1", { text: "봉사자 관리" }),
-          h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => (tab === "training" ? trainingDialog() : scheduleDialog()) }, [icon("plus"), tab === "training" ? "교육 등록" : "일정 등록"])
+          tab === "stock" ? null : h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => (tab === "training" ? trainingDialog() : scheduleDialog()) }, [icon("plus"), tab === "training" ? "교육 등록" : "일정 등록"])
         ]),
         h("div", { class: "filters" }, [seg, h("span", { class: "muted small", text: `봉사자 ${vols.length}명` })]),
-        tab === "training" ? trainingView : scheduleView
+        tab === "stock" ? stockView : tab === "training" ? trainingView : scheduleView
       ]);
     };
     page = { name: "volunteers", reload: async () => {
-      const [u, s, t] = await Promise.all([api("/admin/users"), api("/admin/vol-schedules"), api("/admin/vol-trainings")]);
+      const [u, s, t, m] = await Promise.all([api("/admin/users"), api("/admin/vol-schedules"), api("/admin/vol-trainings"), api("/admin/vol-stock-moves")]);
       vols = u.users.filter((x) => x.role === "volunteer");
-      schedules = s.schedules; trainings = t.trainings;
+      schedules = s.schedules; trainings = t.trainings; stockMoves = m.moves;
       draw();
     } };
     try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("volunteers", failed(e)); }

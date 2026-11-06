@@ -277,6 +277,10 @@ const q = {
   volDoneOfTraining: db.prepare("SELECT d.user_id, u.name, d.done_at FROM vol_training_done d JOIN users u ON u.id = d.user_id AND u.volunteer = 1 WHERE d.training_id = ? ORDER BY d.done_at"),
   setVolDone: db.prepare("INSERT OR IGNORE INTO vol_training_done (training_id, user_id) VALUES (?, ?)"),
   clearVolDone: db.prepare("DELETE FROM vol_training_done WHERE training_id = ? AND user_id = ?"),
+  lastStockMove: db.prepare("SELECT m.date, m.type, u.name AS author FROM stock_moves m LEFT JOIN users u ON u.id = m.created_by WHERE m.ledger_id = ? ORDER BY m.id DESC LIMIT 1"),
+  volStockMoves: db.prepare(`SELECT m.id, m.type, m.date, m.note, m.handler, m.created_at, u.name AS author, l.id AS ledger_id, l.name AS ledger_name, l.unit,
+      (SELECT coalesce(sum(x.qty), 0) FROM stock_qty x WHERE x.move_id = m.id) AS total
+    FROM stock_moves m JOIN users u ON u.id = m.created_by AND u.volunteer = 1 JOIN stock_ledgers l ON l.id = m.ledger_id ORDER BY m.id DESC LIMIT 100`),
   ledgersAll: db.prepare(`SELECT l.*, i.project_id, i.name AS item_name,
       (SELECT count(*) FROM stock_options o WHERE o.ledger_id = l.id) AS option_count,
       (SELECT coalesce(sum(q.qty), 0) FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE m.ledger_id = l.id AND m.type = 'in') AS in_total,
@@ -1115,7 +1119,7 @@ function ledgerOut(l, p, user) {
   for (const r of q.stockQtyOfLedger.all(l.id)) { if (!qty.has(r.move_id)) qty.set(r.move_id, {}); qty.get(r.move_id)[r.option_id] = r.qty; }
   const item = q.projectItem.get(l.item_id);
   return {
-    ledger: { id: l.id, name: l.name, unit: l.unit, inLabel: l.in_label, outLabel: l.out_label, contract: l.contract, after: JSON.parse(l.after), canDelete: user.role === "admin" || p.created_by === user.id },
+    ledger: { id: l.id, name: l.name, unit: l.unit, inLabel: l.in_label, outLabel: l.out_label, contract: l.contract, after: JSON.parse(l.after), canDelete: user.role === "admin" || p.created_by === user.id, volunteerEntry: !!volLedgerProject(l) },
     project: { id: p.id, name: p.name, unitId: p.unit_id }, itemName: item.name,
     options: q.stockOptions.all(l.id),
     moves: q.stockMoves.all(l.id).map((m) => ({
@@ -1141,10 +1145,18 @@ function patchStockMoveFrom(m, l, b) {
     if (rows) { q.clearStockQty.run(m.id); for (const [o, n] of rows) q.addStockQty.run(m.id, o, n); }
   });
 }
-const stockListRow = (l, p) => ({
-  id: l.id, name: l.name, unit: l.unit, contract: l.contract, itemId: l.item_id, itemName: l.item_name, projectId: p.id, projectName: p.name, unitId: p.unit_id,
-  options: l.option_count, inTotal: l.in_total, outTotal: l.out_total, hasAfter: !!JSON.parse(l.after).label
-});
+const stockListRow = (l, p, staff) => {
+  const row = {
+    id: l.id, name: l.name, unit: l.unit, contract: l.contract, itemId: l.item_id, itemName: l.item_name, projectId: p.id, projectName: p.name, unitId: p.unit_id,
+    options: l.option_count, inTotal: l.in_total, outTotal: l.out_total, hasAfter: !!JSON.parse(l.after).label
+  };
+  if (staff) { // 직원 화면: 봉사자가 입력하는 대장인지, 마지막 입력
+    const last = q.lastStockMove.get(l.id);
+    row.volunteerEntry = !!volLedgerProject(l);
+    row.last = last ? { date: last.date, type: last.type, enteredBy: last.author || "" } : null;
+  }
+  return row;
+};
 function stockQtyInput(ledgerId, raw) {
   const allowed = new Set(q.stockOptions.all(ledgerId).map((o) => o.id));
   const out = [];
@@ -1824,7 +1836,7 @@ async function api(req, res, path) {
     for (const l of q.ledgersAll.all()) {
       const p = q.project.get(l.project_id);
       if (!projectAllowed(user, p)) continue;
-      ledgers.push(stockListRow(l, p));
+      ledgers.push(stockListRow(l, p, true));
     }
     return send(res, 200, { ledgers });
   }
@@ -1903,6 +1915,9 @@ async function api(req, res, path) {
         return send(res, 204);
       }
       return send(res, 405, { error: "Method not allowed" });
+    }
+    if (path === "/api/admin/vol-stock-moves" && method === "GET") {
+      return send(res, 200, { moves: q.volStockMoves.all().map((m) => ({ id: m.id, type: m.type, date: m.date, note: m.note, handler: m.handler, createdAt: m.created_at, enteredBy: m.author, ledgerId: m.ledger_id, ledgerName: m.ledger_name, unit: m.unit, total: m.total })) });
     }
     const volTrainingAdminOut = (t) => ({ ...volTrainingOut(t), doneBy: q.volDoneOfTraining.all(t.id).map((d) => ({ id: d.user_id, name: d.name, doneAt: d.done_at })) });
     if (path === "/api/admin/vol-trainings" && method === "GET") return send(res, 200, { trainings: q.volTrainings.all().map(volTrainingAdminOut) });

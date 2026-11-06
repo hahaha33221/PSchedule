@@ -358,6 +358,12 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XDELETE $B/volunteer/stock/$VL)" = 405
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d '{"name":"x"}' $B/project-items/$VI/ledgers)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/volunteer/stock)" = 404
+          # 연계: 직원 목록에 봉사자 입력 표시·최근 입력, 봉사자 응답에는 직원 정보 없음, 관리자 입력 내역
+          curl -fs -H "$H" $B/stock | node -e 'const a=JSON.parse(require("fs").readFileSync(0)).ledgers.find(x=>x.name==="봉사 대장");if(!a.volunteerEntry||a.last.enteredBy!=="관리자"&&!a.last.enteredBy)process.exit(1)'
+          curl -fs -H "$VH" $B/volunteer/stock | node -e 'const a=JSON.parse(require("fs").readFileSync(0)).ledgers.find(x=>x.name==="봉사 대장");if("last" in a||"volunteerEntry" in a)process.exit(1)'
+          curl -fs -H "$H" $B/admin/vol-stock-moves | node -e 'const m=JSON.parse(require("fs").readFileSync(0)).moves;if(m.length!==1||m[0].enteredBy!=="봉사자일"||m[0].total!==8||m[0].ledgerName!=="봉사 대장"||!m[0].createdAt)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/admin/vol-stock-moves)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/admin/vol-stock-moves)" = 403
           curl -fs -H "$VH" -XDELETE $B/volunteer/stock-moves/$VM >/dev/null
           curl -fs -H "$H" -XDELETE $B/stock/$VL >/dev/null; curl -fs -H "$H" -XDELETE $B/stock/$HL >/dev/null
           # 개인 지정 봉사자를 지워도 일정이 전체 공개로 바뀌지 않음
