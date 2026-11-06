@@ -1037,13 +1037,29 @@ const projectDetail = (p, user) => {
     ledgers: q.ledgersOfProject.all(p.id).map((l) => ({ id: l.id, itemId: l.item_id, name: l.name, unit: l.unit, contract: l.contract, inTotal: l.in_total, outTotal: l.out_total }))
   };
 };
-// 봉사자에게 보여 줄 프로젝트: 기념품팀 것만, 읽기 전용, 만든 사람·담당 직원은 빼고 (입출고도 빼고)
+// 봉사자에게 보여 줄 범위: 기념품팀 프로젝트의 '묵주' 묶음과 그 아래만, 읽기 전용 (만든 사람·담당 직원·프로젝트 설명은 뺌)
 const VOLUNTEER_PROJECT_TEAM = "기념품팀";
+const VOLUNTEER_GROUP = "묵주";
+function volItems(p) {
+  const items = q.projectItems.all(p.id);
+  const shown = new Set(items.filter((i) => i.kind === "group" && i.name === VOLUNTEER_GROUP).map((i) => i.id));
+  for (let grew = shown.size > 0; grew;) {
+    grew = false;
+    for (const i of items) if (i.parent_id && shown.has(i.parent_id) && !shown.has(i.id)) { shown.add(i.id); grew = true; }
+  }
+  return { items: items.filter((i) => shown.has(i.id)), shown };
+}
+const volProjectsShown = () => q.volProjects.all(VOLUNTEER_PROJECT_TEAM).filter((p) => volItems(p).items.length);
 const volProjectSummary = (p) => {
-  const list = q.projectItems.all(p.id).filter((i) => i.kind === "item");
-  return { id: p.id, name: p.name, note: p.note, total: list.length, done: list.filter((i) => i.status === "done").length };
+  const list = volItems(p).items.filter((i) => i.kind === "item");
+  return { id: p.id, name: p.name, total: list.length, done: list.filter((i) => i.status === "done").length };
 };
-const volItemOut = (i) => ({ id: i.id, parentId: i.parent_id, kind: i.kind, name: i.name, status: i.status, dueDate: i.due_date, note: i.note });
+// 대장도 묵주 묶음 아래 것만 (보이면 프로젝트를 돌려줌)
+function volLedgerProject(l) {
+  const p = l && q.volProject.get(VOLUNTEER_PROJECT_TEAM, q.projectItem.get(l.item_id).project_id);
+  return p && volItems(p).shown.has(l.item_id) ? p : null;
+}
+const volItemOut = (i, shown) => ({ id: i.id, parentId: shown.has(i.parent_id) ? i.parent_id : null, kind: i.kind, name: i.name, status: i.status, dueDate: i.due_date, note: i.note });
 const volScheduleOut = (s) => ({ id: s.id, title: s.title, date: s.date, startTime: s.start_time, endTime: s.end_time, place: s.place, note: s.note });
 const volScheduleAdminOut = (s) => ({ ...volScheduleOut(s), audience: s.audience, userIds: q.volScheduleUsers.all(s.id).map((x) => x.user_id) });
 const volTrainingOut = (t) => ({ id: t.id, title: t.title, body: t.body, date: t.date, startTime: t.start_time, place: t.place, link: t.link });
@@ -1102,9 +1118,33 @@ function ledgerOut(l, p, user) {
     ledger: { id: l.id, name: l.name, unit: l.unit, inLabel: l.in_label, outLabel: l.out_label, contract: l.contract, after: JSON.parse(l.after), canDelete: user.role === "admin" || p.created_by === user.id },
     project: { id: p.id, name: p.name, unitId: p.unit_id }, itemName: item.name,
     options: q.stockOptions.all(l.id),
-    moves: q.stockMoves.all(l.id).map((m) => ({ id: m.id, type: m.type, date: m.date, handler: m.handler, note: m.note, qty: qty.get(m.id) || {} }))
+    moves: q.stockMoves.all(l.id).map((m) => ({
+      id: m.id, type: m.type, date: m.date, handler: m.handler, note: m.note, qty: qty.get(m.id) || {}, mine: m.created_by === user.id,
+      ...(user.volunteer ? {} : { enteredBy: (m.created_by && q.userById.get(m.created_by)?.name) || "" }) // 입력한 사람: 직원 화면만
+    }))
   };
 }
+function addStockMoveFrom(l, b, user) {
+  if (b.type !== "in" && b.type !== "out") throw bad("입고·출고를 골라 주세요.");
+  const date = text(b.date, 20, "날짜", true), handler = text(b.handler, 40, "전달자"), note = text(b.note, 500, "비고");
+  const rows = stockQtyInput(l.id, b.qty);
+  inTx(() => {
+    const id = Number(q.addStockMove.run(l.id, b.type, date, handler, note, user.id).lastInsertRowid);
+    for (const [o, n] of rows) q.addStockQty.run(id, o, n);
+  });
+}
+function patchStockMoveFrom(m, l, b) {
+  const date = text(has(b, "date") ? b.date : m.date, 20, "날짜", true), handler = text(has(b, "handler") ? b.handler : m.handler, 40, "전달자"), note = text(has(b, "note") ? b.note : m.note, 500, "비고");
+  const rows = has(b, "qty") ? stockQtyInput(l.id, b.qty) : null;
+  inTx(() => {
+    q.setStockMove.run(date, handler, note, m.id);
+    if (rows) { q.clearStockQty.run(m.id); for (const [o, n] of rows) q.addStockQty.run(m.id, o, n); }
+  });
+}
+const stockListRow = (l, p) => ({
+  id: l.id, name: l.name, unit: l.unit, contract: l.contract, itemId: l.item_id, itemName: l.item_name, projectId: p.id, projectName: p.name, unitId: p.unit_id,
+  options: l.option_count, inTotal: l.in_total, outTotal: l.out_total, hasAfter: !!JSON.parse(l.after).label
+});
 function stockQtyInput(ledgerId, raw) {
   const allowed = new Set(q.stockOptions.all(ledgerId).map((o) => o.id));
   const out = [];
@@ -1174,12 +1214,42 @@ async function api(req, res, path) {
         trainings: q.volTrainings.all().map((t) => ({ ...volTrainingOut(t), done: done.has(t.id), doneAt: done.get(t.id) || null }))
       });
     }
-    if (path === "/api/volunteer/projects" && method === "GET") return send(res, 200, { projects: q.volProjects.all(VOLUNTEER_PROJECT_TEAM).map(volProjectSummary) });
+    if (path === "/api/volunteer/projects" && method === "GET") return send(res, 200, { projects: volProjectsShown().map(volProjectSummary) });
     const vpm = path.match(/^\/api\/volunteer\/projects\/(\d+)$/);
     if (vpm && method === "GET") {
       const p = q.volProject.get(VOLUNTEER_PROJECT_TEAM, Number(vpm[1]));
-      if (!p) throw notFound("프로젝트");
-      return send(res, 200, { project: volProjectSummary(p), items: q.projectItems.all(p.id).map(volItemOut) });
+      const shown = p && volItems(p);
+      if (!shown?.items.length) throw notFound("프로젝트");
+      return send(res, 200, { project: volProjectSummary(p), items: shown.items.map((i) => volItemOut(i, shown.shown)) });
+    }
+    // 입출고: 묵주 묶음 대장에 기록 입력. 대장·품목은 못 바꾸고, 고치기·지우기는 자기가 입력한 기록만
+    if (path === "/api/volunteer/stock" && method === "GET") {
+      const ledgers = [];
+      for (const l of q.ledgersAll.all()) {
+        const p = volLedgerProject(l);
+        if (p) ledgers.push(stockListRow(l, p));
+      }
+      return send(res, 200, { ledgers });
+    }
+    const vstm = path.match(/^\/api\/volunteer\/stock\/(\d+)(\/moves)?$/);
+    if (vstm) {
+      const l = q.ledger.get(Number(vstm[1]));
+      const p = volLedgerProject(l);
+      if (!p) throw notFound("입출고 현황");
+      if (vstm[2] && method === "POST") { addStockMoveFrom(l, await readJson(req), user); return send(res, 201, ledgerOut(l, p, user)); }
+      if (!vstm[2] && method === "GET") return send(res, 200, ledgerOut(l, p, user));
+      return send(res, 405, { error: "Method not allowed" });
+    }
+    const vsmm = path.match(/^\/api\/volunteer\/stock-moves\/(\d+)$/);
+    if (vsmm) {
+      const m = q.stockMove.get(Number(vsmm[1]));
+      const l = m && q.ledger.get(m.ledger_id);
+      const p = volLedgerProject(l);
+      if (!p) throw notFound("기록");
+      if (m.created_by !== user.id) return send(res, 403, { error: "직접 입력한 기록만 고칠 수 있어요." });
+      if (method === "PATCH") { patchStockMoveFrom(m, l, await readJson(req)); return send(res, 200, ledgerOut(l, p, user)); }
+      if (method === "DELETE") { q.delStockMove.run(m.id); return send(res, 200, ledgerOut(l, p, user)); }
+      return send(res, 405, { error: "Method not allowed" });
     }
     const vtm = path.match(/^\/api\/volunteer\/trainings\/(\d+)\/done$/);
     if (vtm && method === "POST") {
@@ -1754,10 +1824,7 @@ async function api(req, res, path) {
     for (const l of q.ledgersAll.all()) {
       const p = q.project.get(l.project_id);
       if (!projectAllowed(user, p)) continue;
-      ledgers.push({
-        id: l.id, name: l.name, unit: l.unit, contract: l.contract, itemId: l.item_id, itemName: l.item_name, projectId: p.id, projectName: p.name, unitId: p.unit_id,
-        options: l.option_count, inTotal: l.in_total, outTotal: l.out_total, hasAfter: !!JSON.parse(l.after).label
-      });
+      ledgers.push(stockListRow(l, p));
     }
     return send(res, 200, { ledgers });
   }
@@ -1768,14 +1835,7 @@ async function api(req, res, path) {
     if (!p || !projectAllowed(user, p)) throw notFound("입출고 현황");
     if (stm[2]) {
       if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
-      const b = await readJson(req);
-      if (b.type !== "in" && b.type !== "out") throw bad("입고·출고를 골라 주세요.");
-      const date = text(b.date, 20, "날짜", true), handler = text(b.handler, 40, "전달자"), note = text(b.note, 500, "비고");
-      const rows = stockQtyInput(l.id, b.qty);
-      inTx(() => {
-        const id = Number(q.addStockMove.run(l.id, b.type, date, handler, note, user.id).lastInsertRowid);
-        for (const [o, n] of rows) q.addStockQty.run(id, o, n);
-      });
+      addStockMoveFrom(l, await readJson(req), user);
       return send(res, 201, ledgerOut(l, p, user));
     }
     if (method === "GET") return send(res, 200, ledgerOut(l, p, user));
@@ -1799,13 +1859,7 @@ async function api(req, res, path) {
     const p = l && q.project.get(q.projectItem.get(l.item_id).project_id);
     if (!p || !projectAllowed(user, p)) throw notFound("기록");
     if (method === "PATCH") {
-      const b = await readJson(req);
-      const date = text(has(b, "date") ? b.date : m.date, 20, "날짜", true), handler = text(has(b, "handler") ? b.handler : m.handler, 40, "전달자"), note = text(has(b, "note") ? b.note : m.note, 500, "비고");
-      const rows = has(b, "qty") ? stockQtyInput(l.id, b.qty) : null;
-      inTx(() => {
-        q.setStockMove.run(date, handler, note, m.id);
-        if (rows) { q.clearStockQty.run(m.id); for (const [o, n] of rows) q.addStockQty.run(m.id, o, n); }
-      });
+      patchStockMoveFrom(m, l, await readJson(req));
       return send(res, 200, ledgerOut(l, p, user));
     }
     if (method === "DELETE") {
@@ -2258,5 +2312,5 @@ createServer(async (req, res) => {
     if (!e.status) console.error(e);
   }
 }).listen(PORT, () => {
-  console.log(`PSchedule 서버: http://localhost:${PORT}${STATIC_DIR ? " (정적 파일 포함)" : ""}`);
+  console.log(`P-Schedule 서버: http://localhost:${PORT}${STATIC_DIR ? " (정적 파일 포함)" : ""}`);
 });

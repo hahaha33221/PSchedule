@@ -300,12 +300,18 @@ jobs:
           SOU=$(curl -fs -H "$H" $B/me | node -pe 'JSON.parse(require("fs").readFileSync(0)).units.find(u=>u.name==="기념품팀")?.id||""')
           if [ -z "$SOU" ]; then SOU=$(curl -fs -H "$H" -XPOST -d '{"name":"기념품팀","parentId":null}' $B/admin/units | node -pe 'const d=JSON.parse(require("fs").readFileSync(0));d.unit?d.unit.id:d.id'); fi
           J="{\"name\":\"봉사자 공개 프로젝트\",\"unitId\":$SOU}"; VPJ=$(curl -fs -H "$H" -XPOST -d "$J" $B/projects | node -pe 'JSON.parse(require("fs").readFileSync(0)).project.id')
-          J="{\"kind\":\"item\",\"name\":\"공개 항목\",\"assigneeId\":$(curl -fs -H "$H" $B/me | node -pe 'JSON.parse(require("fs").readFileSync(0)).user.id')}"; curl -fs -H "$H" -XPOST -d "$J" $B/projects/$VPJ/items >/dev/null
+          VG=$(curl -fs -H "$H" -XPOST -d '{"kind":"group","name":"묵주"}' $B/projects/$VPJ/items | node -pe 'JSON.parse(require("fs").readFileSync(0)).items.find(i=>i.name==="묵주").id')
+          J="{\"kind\":\"item\",\"name\":\"공개 항목\",\"parentId\":$VG,\"assigneeId\":$(curl -fs -H "$H" $B/me | node -pe 'JSON.parse(require("fs").readFileSync(0)).user.id')}"; curl -fs -H "$H" -XPOST -d "$J" $B/projects/$VPJ/items >/dev/null
+          OTH=$(curl -fs -H "$H" -XPOST -d '{"kind":"group","name":"가방"}' $B/projects/$VPJ/items | node -pe 'JSON.parse(require("fs").readFileSync(0)).items.find(i=>i.name==="가방").id')
+          curl -fs -H "$H" -XPOST -d '{"kind":"item","name":"종이묵주"}' $B/projects/$VPJ/items >/dev/null
+          J="{\"name\":\"묵주 없는 프로젝트\",\"unitId\":$SOU}"; NPJ=$(curl -fs -H "$H" -XPOST -d "$J" $B/projects | node -pe 'JSON.parse(require("fs").readFileSync(0)).project.id')
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/volunteer/projects/$NPJ)" = 404
+          if curl -fs -H "$VH" $B/volunteer/projects | grep -q '묵주 없는 프로젝트'; then echo "묵주 없는 프로젝트가 봉사자에게 보여요"; exit 1; fi
           J="{\"name\":\"숨김 프로젝트\",\"unitId\":$OPS}"; HPJ=$(curl -fs -H "$H" -XPOST -d "$J" $B/projects | node -pe 'JSON.parse(require("fs").readFileSync(0)).project.id')
           curl -fs -H "$VH" $B/volunteer/projects | grep -q '봉사자 공개 프로젝트'
           if curl -fs -H "$VH" $B/volunteer/projects | grep -q '숨김 프로젝트'; then echo "다른 팀 프로젝트가 봉사자에게 보여요"; exit 1; fi
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/volunteer/projects/$HPJ)" = 404
-          curl -fs -H "$VH" $B/volunteer/projects/$VPJ | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const s=JSON.stringify(d);if(d.items.length!==1||d.items[0].name!=="공개 항목"||/assignee|createdBy|ledger/i.test(s))process.exit(1)'
+          curl -fs -H "$VH" $B/volunteer/projects/$VPJ | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const s=JSON.stringify(d);if(d.items.length!==2||!d.items.some(i=>i.name==="공개 항목")||/가방|종이묵주|assignee|createdBy|ledger/i.test(s))process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d '{"name":"x"}' $B/volunteer/projects/$VPJ/items)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/projects/$VPJ)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/admin/vol-schedules)" = 403
@@ -327,12 +333,39 @@ jobs:
           curl -fs -H "$H" $B/admin/vol-trainings | grep -q '"name":"봉사자일"'
           curl -fs -H "$VH" -XPOST -d '{"done":false}' $B/volunteer/trainings/$VT/done >/dev/null
           if curl -fs -H "$H" $B/admin/vol-trainings | grep -q '"name":"봉사자일"'; then echo "이수 취소가 안 돼요"; exit 1; fi
+          # 봉사자 입출고: 기념품팀 대장만, 기록 입력 가능, 대장은 못 바꿈, 고치기·지우기는 자기 기록만
+          VI=$VG
+          HI=$(curl -fs -H "$H" -XPOST -d '{"kind":"item","name":"숨김 항목"}' $B/projects/$HPJ/items | node -pe 'JSON.parse(require("fs").readFileSync(0)).items[0].id')
+          VLJ=$(curl -fs -H "$H" -XPOST -d '{"name":"봉사 대장","unit":"개","options":["가"]}' $B/project-items/$VI/ledgers)
+          VL=$(printf '%s' "$VLJ" | node -pe 'JSON.parse(require("fs").readFileSync(0)).ledger.id'); VO=$(printf '%s' "$VLJ" | node -pe 'JSON.parse(require("fs").readFileSync(0)).options[0].id')
+          HL=$(curl -fs -H "$H" -XPOST -d '{"name":"숨김 대장","options":["가"]}' $B/project-items/$HI/ledgers | node -pe 'JSON.parse(require("fs").readFileSync(0)).ledger.id')
+          OL=$(curl -fs -H "$H" -XPOST -d '{"name":"가방 대장","options":["가"]}' $B/project-items/$OTH/ledgers | node -pe 'JSON.parse(require("fs").readFileSync(0)).ledger.id')
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/volunteer/stock/$OL)" = 404
+          if curl -fs -H "$VH" $B/volunteer/stock | grep -q '가방 대장'; then echo "묵주 외 대장이 봉사자에게 보여요"; exit 1; fi
+          curl -fs -H "$H" -XDELETE $B/stock/$OL >/dev/null
+          curl -fs -H "$VH" $B/volunteer/stock | grep -q '봉사 대장'
+          if curl -fs -H "$VH" $B/volunteer/stock | grep -q '숨김 대장'; then echo "다른 팀 대장이 봉사자에게 보여요"; exit 1; fi
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/volunteer/stock/$HL)" = 404
+          J="{\"type\":\"in\",\"date\":\"2030-03-01\",\"qty\":{\"$VO\":1}}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d "$J" $B/volunteer/stock/$HL/moves)" = 404
+          J="{\"type\":\"in\",\"date\":\"2030-03-01\",\"qty\":{\"$VO\":-1}}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d "$J" $B/volunteer/stock/$VL/moves)" = 400
+          J="{\"type\":\"in\",\"date\":\"2030-03-01\",\"qty\":{\"$VO\":7}}"; VM=$(curl -fs -H "$VH" -XPOST -d "$J" $B/volunteer/stock/$VL/moves | node -pe 'const m=JSON.parse(require("fs").readFileSync(0)).moves[0];if(!m.mine||"enteredBy" in m)process.exit(1);m.id')
+          J="{\"type\":\"out\",\"date\":\"2030-03-02\",\"qty\":{\"$VO\":2}}"; SM=$(curl -fs -H "$H" -XPOST -d "$J" $B/stock/$VL/moves | node -pe 'const d=JSON.parse(require("fs").readFileSync(0));if(d.moves[0].enteredBy!=="봉사자일")process.exit(1);d.moves[1].id')
+          J="{\"qty\":{\"$VO\":8}}"; curl -fs -H "$VH" -XPATCH -d "$J" $B/volunteer/stock-moves/$VM | grep -q '"qty":{"'$VO'":8}'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPATCH -d "$J" $B/volunteer/stock-moves/$SM)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XDELETE $B/volunteer/stock-moves/$SM)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A9")" -XDELETE $B/volunteer/stock-moves/$VM)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPATCH -d '{"name":"x"}' $B/volunteer/stock/$VL)" = 405
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XDELETE $B/volunteer/stock/$VL)" = 405
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d '{"name":"x"}' $B/project-items/$VI/ledgers)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/volunteer/stock)" = 404
+          curl -fs -H "$VH" -XDELETE $B/volunteer/stock-moves/$VM >/dev/null
+          curl -fs -H "$H" -XDELETE $B/stock/$VL >/dev/null; curl -fs -H "$H" -XDELETE $B/stock/$HL >/dev/null
           # 개인 지정 봉사자를 지워도 일정이 전체 공개로 바뀌지 않음
           curl -fs -H "$H" -XDELETE $B/admin/users/$VB >/dev/null
           if curl -fs -H "$VH" $B/volunteer/home | grep -q '개인 일정'; then echo "지정 봉사자를 지우니 일정이 전체에 보여요"; exit 1; fi
           curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$VS >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/vol-trainings/$VT >/dev/null
-          curl -fs -H "$H" -XDELETE $B/projects/$VPJ >/dev/null; curl -fs -H "$H" -XDELETE $B/projects/$HPJ >/dev/null
+          curl -fs -H "$H" -XDELETE $B/projects/$VPJ >/dev/null; curl -fs -H "$H" -XDELETE $B/projects/$HPJ >/dev/null; curl -fs -H "$H" -XDELETE $B/projects/$NPJ >/dev/null
           # 직원 ↔ 봉사자: 바꾸면 바로 적용, 봉사자로 바꾸면 소속·추가 조직이 지워지고 소속 일괄 변경에서도 빠짐
           A8=$(tok vola volunteer-pass-1)
           J="{\"role\":\"member\",\"unitId\":$FB}"; curl -fs -H "$H" -XPATCH -d "$J" $B/admin/users/$VU >/dev/null

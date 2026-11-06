@@ -1362,7 +1362,9 @@ button.mgroup__head:hover { color: var(--ink); }
 .theme-volunteer .vol__bar .brand, .theme-volunteer .vol__account { color: var(--vol-bar-ink); }
 .theme-volunteer .vol__account:hover { background: rgba(0, 0, 0, .08); }
 .theme-volunteer .vol__tag { background: var(--vol-bar-ink); color: var(--primary); }
-.theme-volunteer .pj-st--doing, .theme-volunteer .pj-st--fixed { color: var(--vol-accent); }
+.theme-volunteer .pj-st--doing, .theme-volunteer .pj-st--fixed, .theme-volunteer .stock-step.is-active, .theme-volunteer .stock-step.is-done .stock-step__num, .theme-volunteer .stock-guide__count, .theme-volunteer .stock-card__next, .theme-volunteer .vol-chip.is-done { color: var(--vol-accent); }
+.theme-volunteer .stock-step.is-active .stock-step__num { color: var(--primary-ink); }
+.theme-volunteer .stock-step:hover, .theme-volunteer .stock-step.is-active { border-color: var(--vol-accent); }
 
 /* 봉사자 메뉴·일정·교육·프로젝트 */
 .vol__nav { display: flex; gap: 4px; padding: 6px 12px; overflow-x: auto; background: var(--surface); border-bottom: 1px solid var(--line); }

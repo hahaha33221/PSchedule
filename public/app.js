@@ -1,7 +1,7 @@
 (function () {
   "use strict";
 
-  const TITLE = "PSchedule";
+  const TITLE = "P-Schedule";
   const API = "/api";
   const app = document.getElementById("app");
   const dialog = document.getElementById("dialog");
@@ -1296,7 +1296,7 @@
     const form = h("form", { class: "stack", novalidate: true }, [
       h("ul", { class: "import-list" }, items.slice(0, 8).map((x) => h("li", {}, [h("i", { class: `dot c${x.color}` }), h("span", { text: `${shortDate(x.startDate)} ${x.startTime || "종일"}` }), h("strong", { text: x.title })]))),
       items.length > 8 ? h("p", { class: "muted small", text: `외 ${items.length - 8}개` }) : null,
-      h("p", { class: "muted small", text: "제목·날짜·시간·장소·설명을 복사해 PSchedule 일정으로 만들어요. 원본은 그대로 두고, 원본이 바뀌면 알려 드려요." }),
+      h("p", { class: "muted small", text: "제목·날짜·시간·장소·설명을 복사해 P-Schedule 일정으로 만들어요. 원본은 그대로 두고, 원본이 바뀌면 알려 드려요." }),
       field("종류", kindSeg),
       field("팀", unitBtn, isAdmin() ? "이 팀(과 위 조직) 사람들, 참석자, 관리자가 볼 수 있어요" : "내 소속과 그 아래 팀 중에서 고를 수 있어요"),
       field("참석자", attBtn), err,
@@ -1827,7 +1827,7 @@
           inlineText(c.name, { label: "캘린더 이름", max: 30, required: true, onSave: (v) => patch(c, { name: v }) }),
           h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: (ev) => busy(ev.currentTarget, async () => { const r = await act(() => api(`/admin/calendars/${c.id}/sync`, { method: "POST" })); report(r, "다시 읽었어요."); await load(); await after(); }) }, "지금 읽기"),
           h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": `${c.name} 연결 끊기`, title: "연결 끊기", html: ICON.trash, onclick: async () => {
-            if (!confirm(`'${c.name}' 연결을 끊을까요? 가져온 일정이 PSchedule 에서 사라져요 (구글 캘린더는 그대로예요).`)) return;
+            if (!confirm(`'${c.name}' 연결을 끊을까요? 가져온 일정이 P-Schedule 에서 사라져요 (구글 캘린더는 그대로예요).`)) return;
             await act(() => api(`/admin/calendars/${c.id}`, { method: "DELETE" })); await load(); await after();
           } })
         ]),
@@ -1872,7 +1872,7 @@
       });
     });
     body.replaceChildren(
-      h("p", { class: "muted small", text: "구글 캘린더의 일정을 읽기 전용으로 가져와 달력·오늘 화면에 함께 보여 줘요. PSchedule 에서 고친 내용은 구글로 가지 않아요 (한 방향)." }),
+      h("p", { class: "muted small", text: "구글 캘린더의 일정을 읽기 전용으로 가져와 달력·오늘 화면에 함께 보여 줘요. P-Schedule 에서 고친 내용은 구글로 가지 않아요 (한 방향)." }),
       list, form
     );
     try { await load(); } catch (e) { list.replaceChildren(failed(e)); }
@@ -2784,7 +2784,7 @@
   }
 
   /* ---------- 조직도 공통 ---------- */
-  // 자리(직함·이름)는 PSchedule 계정과 따로. 이름이 비면 공석, userId 로 계정 연결
+  // 자리(직함·이름)는 P-Schedule 계정과 따로. 이름이 비면 공석, userId 로 계정 연결
   async function loadOrg() {
     const r = await api("/org");
     state.units = r.units; state.positions = r.positions; state.orgBaseDate = r.baseDate;
@@ -3086,7 +3086,7 @@
         section("check", ["맡은 할 일 ", h("span", { class: "muted", text: String(r.tasks.length) })], null, taskRows(r.tasks, { compact: true, empty: "남은 할 일이 없어요." }))
       );
     } else if (p.name) {
-      body.push(h("p", { class: "notice-box small", text: isAdmin() ? "PSchedule 계정이 연결되지 않은 자리예요. '조직도 편집'의 계정 칸에서 연결하면 회의·할 일이 여기 보여요." : "PSchedule 계정이 연결되지 않은 자리예요." }));
+      body.push(h("p", { class: "notice-box small", text: isAdmin() ? "P-Schedule 계정이 연결되지 않은 자리예요. '조직도 편집'의 계정 칸에서 연결하면 회의·할 일이 여기 보여요." : "P-Schedule 계정이 연결되지 않은 자리예요." }));
     }
     return peekFrame(head, body);
   }
@@ -3155,7 +3155,7 @@
         ]),
         ...lists,
         h("div", { class: "table-wrap" }, h("table", { class: "table ot-table" }, [
-          h("thead", {}, h("tr", {}, ["순번", "본부", "부", "팀 · 분과", "직함", "이름", "PSchedule 계정", "비고", ""].map((t) => h("th", { text: t })))),
+          h("thead", {}, h("tr", {}, ["순번", "본부", "부", "팀 · 분과", "직함", "이름", "P-Schedule 계정", "비고", ""].map((t) => h("th", { text: t })))),
           h("tbody", {}, out.length ? out : h("tr", {}, h("td", { colspan: "9", class: "muted empty", text: all.length ? "조건에 맞는 줄이 없어요." : "아직 조직도가 없어요. '엑셀 불러오기 · 붙여넣기'로 시작해 주세요." })))
         ])),
         h("div", { class: "ot-foot" }, [
@@ -3965,6 +3965,32 @@
     openDialog("새 입출고 현황", form);
     panels[cur].querySelector("input, select")?.focus();
   }
+  // 입출고 목록 공통: 묶음(예: 묵주)마다 제목을 두고 그 아래에 대장 (onAdd 가 없으면 추가 버튼 없음)
+  function stockGroupSections(list, href, onAdd) {
+    const card = (l) => {
+      const done = stockDone(l);
+      const next = STOCK_STEPS.slice(0, 3).find((s) => !done[s.id]);
+      return h("a", { class: "card pj-card", href: href(l) }, [
+        h("strong", { text: l.name }),
+        h("div", { class: "stock-card__nums" }, [`입고 ${fmtN(l.inTotal)}`, h("span", { text: `출고 ${fmtN(l.outTotal)}` }), h("strong", { class: l.inTotal - l.outTotal < 0 ? "stock-minus" : null, text: `재고 ${fmtN(l.inTotal - l.outTotal)} ${l.unit}` })]),
+        h("div", { class: "stock-dots", "aria-hidden": "true" }, STOCK_STEPS.map((s) => h("i", { class: done[s.id] ? "is-done" : null, title: s.label }))),
+        h("span", { class: next ? "stock-card__next" : "muted small", text: next ? `다음 단계: ${next.label}` : "기록 단계 완료" })
+      ]);
+    };
+    const groups = [...new Set(list.map((l) => l.itemId))].map((itemId) => list.filter((l) => l.itemId === itemId));
+    return groups.map((rows) => {
+      const { itemId, itemName, projectId, projectName, unitId } = rows[0];
+      const team = unitId && unitOf(unitId) ? unitShort(unitId) : "";
+      return h("section", { class: "pj-team stock-group" }, [
+        h("div", { class: "pj-team__head" }, [
+          h("h2", { class: "stock-group__name", text: itemName }),
+          h("span", { class: "muted small", text: [team, projectName, `대장 ${rows.length}개`].filter(Boolean).join(" · ") }),
+          onAdd ? h("button", { class: "link-btn stock-group__add", type: "button", text: "+ 대장", "aria-label": `${itemName}에 입출고 대장 추가`, onclick: () => onAdd({ projectId, itemId }) }) : null
+        ]),
+        h("div", { class: "pj-cards" }, rows.map(card))
+      ]);
+    });
+  }
   // 입출고 관리 목록
   async function pageStocks() {
     drawMini(null);
@@ -3973,30 +3999,7 @@
     let list = [];
     const draw = () => {
       const newBtn = (cls) => h("button", { class: `btn btn--primary ${cls}`, type: "button", onclick: () => ledgerWizard() }, [icon("plus"), "새 입출고 현황"]);
-      const card = (l) => {
-        const done = stockDone(l);
-        const next = STOCK_STEPS.slice(0, 3).find((s) => !done[s.id]);
-        return h("a", { class: "card pj-card", href: `#/stock/${l.id}` }, [
-          h("strong", { text: l.name }),
-          h("div", { class: "stock-card__nums" }, [`입고 ${fmtN(l.inTotal)}`, h("span", { text: `출고 ${fmtN(l.outTotal)}` }), h("strong", { class: l.inTotal - l.outTotal < 0 ? "stock-minus" : null, text: `재고 ${fmtN(l.inTotal - l.outTotal)} ${l.unit}` })]),
-          h("div", { class: "stock-dots", "aria-hidden": "true" }, STOCK_STEPS.map((s) => h("i", { class: done[s.id] ? "is-done" : null, title: s.label }))),
-          h("span", { class: next ? "stock-card__next" : "muted small", text: next ? `다음 단계: ${next.label}` : "기록 단계 완료" })
-        ]);
-      };
-      // 묶음(예: 묵주)마다 제목을 두고 그 아래에 대장
-      const groups = [...new Set(list.map((l) => l.itemId))].map((itemId) => list.filter((l) => l.itemId === itemId));
-      const sections = groups.map((rows) => {
-        const { itemId, itemName, projectId, projectName, unitId } = rows[0];
-        const team = unitId && unitOf(unitId) ? unitShort(unitId) : "";
-        return h("section", { class: "pj-team stock-group" }, [
-          h("div", { class: "pj-team__head" }, [
-            h("h2", { class: "stock-group__name", text: itemName }),
-            h("span", { class: "muted small", text: [team, projectName, `대장 ${rows.length}개`].filter(Boolean).join(" · ") }),
-            h("button", { class: "link-btn stock-group__add", type: "button", text: "+ 대장", "aria-label": `${itemName}에 입출고 대장 추가`, onclick: () => ledgerWizard({ projectId, itemId }) })
-          ]),
-          h("div", { class: "pj-cards" }, rows.map(card))
-        ]);
-      });
+      const sections = stockGroupSections(list, (l) => `#/stock/${l.id}`, ledgerWizard);
       setMain("stock", [
         h("div", { class: "page-head" }, [h("h1", { text: "입출고 관리" }), newBtn("page-head__end")]),
         list.length ? h("div", { class: "stack" }, sections) : h("div", { class: "card stock-guide stack" }, [
@@ -4009,16 +4012,20 @@
     page = { name: "stock", reload: async () => { list = (await api("/stock")).ledgers; draw(); } };
     try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("stock", failed(e)); }
   }
-  async function pageStock(id) {
-    drawMini(null);
-    setMain("stock", loading());
+  // vol 이 있으면 봉사자 화면: 기록 입력만 (대장 고치기·지우기 없음, 자기 기록만 수정), 그리는 곳도 봉사자 화면
+  async function pageStock(id, vol) {
+    const base = vol ? `/volunteer/stock/${id}` : `/stock/${id}`;
+    const moveUrl = (mid) => (vol ? `/volunteer/stock-moves/${mid}` : `/stock-moves/${mid}`);
+    const listHash = vol ? "#/vstock" : "#/stock";
+    const put = (kids) => (vol ? vol.show(kids) : setMain("stock", kids));
+    if (!vol) { drawMini(null); setMain("stock", loading()); }
     let data, step = store.get(`ps.stockStep.${id}`, "");
     const edit = (opts) => ledgerDialog(data, async (body) => { const r = await api(`/stock/${id}`, { method: "PATCH", body }); closeDialog(); apply(r); }, opts);
     const apply = (r) => { data = r; draw(); };
     function moveDialog(type, m) {
       const err = errorLine();
       const date = h("input", { value: m?.date || today(), maxlength: "20", autofocus: true, placeholder: today() });
-      const handler = h("input", { value: m?.handler || "", maxlength: "40" });
+      const handler = h("input", { value: m?.handler ?? (vol && type === "out" ? state.user.name : ""), maxlength: "40" });
       const note = h("textarea", { rows: "2", maxlength: "500" }, m?.note || "");
       const sum = h("strong");
       const inputs = data.options.map((o) => ({ o, el: h("input", { type: "number", min: "0", inputmode: "numeric", value: m?.qty[o.id] || "", "aria-label": o.name, oninput: () => drawSum() }) }));
@@ -4028,11 +4035,13 @@
       const form = h("form", { class: "stack", novalidate: true }, [
         h("div", { class: "row2" }, [field(type === "in" ? "입고일" : "출고일", date), type === "out" ? field("전달자", handler) : null]),
         inputs.length ? h("div", { class: "stock-grid" }, inputs.map((x) => h("label", { class: "stock-grid__cell" }, [h("span", { class: "small", text: x.o.name }), x.el]))) : h("p", { class: "muted small", text: "먼저 1단계 기본 정보에서 품목 열을 추가해 주세요." }),
-        sum, field("비고", note), err,
+        sum, field("비고", note),
+        m?.enteredBy ? h("p", { class: "muted small", text: `입력: ${m.enteredBy}` }) : null,
+        err,
         h("div", { class: "actions" }, [
           m ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
             if (!confirm(`${m.date} 기록을 지울까요?`)) return;
-            const r = await act(() => api(`/stock-moves/${m.id}`, { method: "DELETE" }));
+            const r = await act(() => api(moveUrl(m.id), { method: "DELETE" }));
             closeDialog(); apply(r);
           } }) : null,
           h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok
@@ -4044,7 +4053,7 @@
           try {
             const qty = Object.fromEntries(inputs.map((x) => [x.o.id, x.el.value]));
             const body = { date: date.value, handler: handler.value, note: note.value, qty };
-            const r = await api(m ? `/stock-moves/${m.id}` : `/stock/${id}/moves`, { method: m ? "PATCH" : "POST", body: m ? body : { ...body, type } });
+            const r = await api(m ? moveUrl(m.id) : `${base}/moves`, { method: m ? "PATCH" : "POST", body: m ? body : { ...body, type } });
             closeDialog(); apply(r);
           } catch (ex) { showError(err, ex.message); }
         });
@@ -4066,7 +4075,8 @@
         const body = list.map((m, i) => {
           const day = Object.values(m.qty).reduce((a, b) => a + b, 0);
           running += day;
-          return h("tr", { class: "stock-row", tabindex: "0", title: "눌러서 고치기", onclick: () => moveDialog(type, m), onkeydown: (e) => { if (e.key === "Enter") moveDialog(type, m); } }, [
+          const rowAttrs = !vol || m.mine ? { class: "stock-row", tabindex: "0", title: "눌러서 고치기", onclick: () => moveDialog(type, m), onkeydown: (e) => { if (e.key === "Enter") moveDialog(type, m); } } : {};
+          return h("tr", rowAttrs, [
             h("td", { class: "num muted", text: String(i + 1) }), h("td", { class: "nowrap", text: m.date }),
             ...options.map((o) => num(m.qty[o.id])), num(day, "stock-strong"), num(running),
             isOut ? h("td", { text: m.handler || "-" }) : null, h("td", { class: "stock-note", text: m.note })
@@ -4098,7 +4108,7 @@
         const line = (label, cells, cls) => h("tr", { class: cls || null }, [h("th", { text: label }), ...cells.map((c) => h("td", { class: "num", text: fmtN(c) }))]);
         const each = lens.map((x) => Math.floor(x / a.perLength));
         after = h("section", { class: "stock-sec" }, [
-          h("div", { class: "card__head" }, [h("h2", { class: "card__title" }, ["전달 후 현황 ", h("span", { class: "muted small", text: a.label })]), h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => edit({ openAfter: true }) })]),
+          h("div", { class: "card__head" }, [h("h2", { class: "card__title" }, ["전달 후 현황 ", h("span", { class: "muted small", text: a.label })]), vol ? null : h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => edit({ openAfter: true }) })]),
           h("div", { class: "card table-wrap" }, h("table", { class: "table stock-table stock-after-table" }, lens.length ? [
             h("thead", {}, h("tr", {}, [h("th", { text: `1${l.unit} 길이` }), ...lens.map((x) => h("th", { class: "num", text: fmtN(x) }))])),
             h("tbody", {}, [
@@ -4119,14 +4129,14 @@
       const at = STOCK_STEPS.findIndex((s) => s.id === step);
       const pick = (sid) => { step = sid; store.set(`ps.stockStep.${id}`, sid); draw(); window.scrollTo(0, 0); };
       const setupPanel = () => h("div", { class: "stock-sec" }, [
-        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "대장 정보" }), h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => edit() })]),
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "대장 정보" }), vol ? null : h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => edit() })]),
         h("dl", { class: "card stock-info" }, [
-          h("dt", { text: "위치" }), h("dd", {}, [h("a", { href: `#/projects/${data.project.id}`, text: data.project.name }), ` › ${data.itemName}`]),
+          h("dt", { text: "위치" }), h("dd", {}, vol ? `${data.project.name} › ${data.itemName}` : [h("a", { href: `#/projects/${data.project.id}`, text: data.project.name }), ` › ${data.itemName}`]),
           h("dt", { text: "단위" }), h("dd", { text: l.unit }),
           h("dt", { text: "계약 수량" }), h("dd", { text: l.contract ? `${fmtN(l.contract)} ${l.unit}` : "정하지 않음" }),
           h("dt", { text: "입고 경로" }), h("dd", { text: l.inLabel || "-" }),
           h("dt", { text: "출고 경로" }), h("dd", { text: l.outLabel || "-" }),
-          h("dt", { text: `품목 ${options.length}개` }), h("dd", {}, options.length ? h("div", { class: "stock-chips" }, options.map((o) => h("span", { text: o.name }))) : "아직 없어요. '고치기'에서 추가해 주세요.")
+          h("dt", { text: `품목 ${options.length}개` }), h("dd", {}, options.length ? h("div", { class: "stock-chips" }, options.map((o) => h("span", { text: o.name }))) : vol ? "아직 없어요. 관리자에게 문의해 주세요." : "아직 없어요. '고치기'에서 추가해 주세요.")
         ])
       ]);
       const leftPanel = () => h("div", { class: "stock-sec" }, h("div", { class: "card table-wrap" }, h("table", { class: "table stock-table" }, [
@@ -4138,34 +4148,35 @@
         h("tfoot", {}, h("tr", {}, [h("th", { text: "합계" }), num(inAll), num(outAll), num(stock, stock < 0 ? "stock-minus" : ""), h("td", { class: "num", text: pct(outAll) })]))
       ])));
       const afterPanel = () => after || h("div", { class: "card stock-empty stock-sec" }, [
-        h("p", { text: "아직 전달 후 현황을 적지 않았어요. 필요 없으면 건너뛰어도 돼요." }),
-        h("button", { class: "btn btn--primary btn--sm", type: "button", text: "전달 후 현황 적기", onclick: () => edit({ openAfter: true }) })
+        h("p", { text: vol ? "아직 전달 후 현황이 없어요." : "아직 전달 후 현황을 적지 않았어요. 필요 없으면 건너뛰어도 돼요." }),
+        vol ? null : h("button", { class: "btn btn--primary btn--sm", type: "button", text: "전달 후 현황 적기", onclick: () => edit({ openAfter: true }) })
       ]);
       const panel = { setup: setupPanel, in: () => table("in"), out: () => table("out"), left: leftPanel, after: afterPanel }[step]();
       const cur = STOCK_STEPS[at], prev = STOCK_STEPS[at - 1], next = STOCK_STEPS[at + 1];
-      setMain("stock", [
-        h("nav", { class: "muted small" }, [h("a", { href: "#/stock", text: "입출고 관리" }), ` › ${data.itemName} › ${l.name}`]),
+      put([
+        h("nav", { class: "muted small" }, [h("a", { href: listHash, text: vol ? "입출고" : "입출고 관리" }), ` › ${data.itemName} › ${l.name}`]),
         h("div", { class: "page-head page-head--wrap" }, [
           h("h1", { text: l.name }),
           l.canDelete ? h("span", { class: "page-head__end actions" }, h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
             if (!confirm(`'${l.name}' 입출고 현황과 모든 기록을 지울까요?`)) return;
             await act(() => api(`/stock/${id}`, { method: "DELETE" }));
-            go("#/stock");
+            go(listHash);
           } })) : null
         ]),
         h("div", { class: "unit-stats" }, [
           l.contract ? stat("계약", l.contract) : null, stat("입고", inAll), l.contract ? stat("미입고", l.contract - inAll) : null, stat("출고", outAll), stat("창고 재고", stock, stock < 0)
         ]),
         h("ol", { class: "stock-steps", "aria-label": "진행 단계" }, STOCK_STEPS.map((s, i) => h("li", {}, h("button", { class: "stock-step" + (s.id === step ? " is-active" : "") + (done[s.id] ? " is-done" : ""), type: "button", "aria-current": s.id === step ? "step" : null, onclick: () => pick(s.id) }, [stepNum(i, done[s.id]), h("span", { class: "stock-step__label", text: s.label })])))),
-        h("div", { class: "card stock-guide" }, [h("span", { class: "stock-guide__count", text: `${at + 1} / ${STOCK_STEPS.length}단계` }), h("h2", { text: cur.title }), h("p", { text: cur.hint })]),
+        h("div", { class: "card stock-guide" }, [h("span", { class: "stock-guide__count", text: `${at + 1} / ${STOCK_STEPS.length}단계` }), h("h2", { text: cur.title }), h("p", { text: cur.hint }), vol && (step === "in" || step === "out") ? h("p", { class: "muted small", text: "직접 입력한 기록만 고칠 수 있어요. 다른 기록을 고쳐야 하면 담당 직원에게 알려 주세요." }) : null]),
         panel,
         h("div", { class: "stock-nav" }, [
           prev ? h("button", { class: "btn btn--ghost", type: "button", text: `이전: ${prev.label}`, onclick: () => pick(prev.id) }) : null,
-          next ? h("button", { class: "btn btn--primary", type: "button", text: `다음: ${next.label}`, onclick: () => pick(next.id) }) : h("a", { class: "btn btn--primary", href: "#/stock", text: "목록으로" })
+          next ? h("button", { class: "btn btn--primary", type: "button", text: `다음: ${next.label}`, onclick: () => pick(next.id) }) : h("a", { class: "btn btn--primary", href: listHash, text: "목록으로" })
         ])
       ]);
     }
-    page = { name: "stock", reload: async () => apply(await api(`/stock/${id}`)) };
+    if (vol) { apply(await api(base)); return; }
+    page = { name: "stock", reload: async () => apply(await api(base)) };
     try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("stock", failed(e)); }
   }
 
@@ -4177,7 +4188,7 @@
     layout.main = null;
     const seq = ++volSeq;
     const { name, id } = route();
-    const tab = ["vschedule", "vtraining", "vprojects"].includes(name) ? name : "vhome";
+    const tab = ["vschedule", "vtraining", "vstock", "vprojects"].includes(name) ? name : "vhome";
     document.title = `봉사자 · ${TITLE}`;
     const account = h("button", { class: "vol__account", type: "button", "aria-label": "내 계정" }, [h("strong", { text: state.user.name }), icon("right")]);
     account.addEventListener("click", () => popover(account, h("div", { class: "pop__list" }, [
@@ -4188,17 +4199,27 @@
     const navLink = (k, label) => h("a", { class: "vol__tab" + (k === tab ? " is-active" : ""), href: `#/${k}`, "aria-current": k === tab ? "page" : null, text: label });
     app.replaceChildren(h("div", { class: "vol" }, [
       h("header", { class: "vol__bar" }, [h("span", { class: "brand" }, [h("img", { src: "favicon.svg", alt: "" }), h("span", { text: TITLE })]), h("span", { class: "vol__tag", text: "봉사자" }), account]),
-      h("nav", { class: "vol__nav", "aria-label": "봉사자 메뉴" }, [navLink("vhome", "대시보드"), navLink("vschedule", "일정"), navLink("vtraining", "기본 교육"), navLink("vprojects", "프로젝트")]),
+      h("nav", { class: "vol__nav", "aria-label": "봉사자 메뉴" }, [navLink("vhome", "대시보드"), navLink("vschedule", "일정"), navLink("vtraining", "기본 교육"), navLink("vprojects", "묵주"), navLink("vstock", "입출고")]),
       main
     ]));
     const show = (...kids) => { if (seq === volSeq) fill(main, ...kids); };
     const load = async () => {
+      if (tab === "vstock") {
+        if (id) return pageStock(Number(id), { show });
+        const { ledgers } = await api("/volunteer/stock");
+        document.title = `입출고 · ${TITLE}`;
+        return show([
+          h("h1", { class: "vol__hello", text: "입출고" }),
+          ledgers.length ? h("div", { class: "stack" }, stockGroupSections(ledgers, (l) => `#/vstock/${l.id}`)) : h("div", { class: "card empty", text: "아직 입력할 수 있는 입출고 대장이 없어요." })
+        ]);
+      }
       if (tab === "vprojects") {
         if (id) {
           const d = await api(`/volunteer/projects/${Number(id)}`);
           return show(volProject(d));
         }
         const { projects } = await api("/volunteer/projects");
+        if (projects.length === 1) return show(volProject(await api(`/volunteer/projects/${projects[0].id}`), true)); // 하나면 바로
         return show(volProjects(projects));
       }
       const d = await api("/volunteer/home");
@@ -4236,8 +4257,12 @@
           todo.length ? h("ul", { class: "vol-todo" }, todo.map((t) => h("li", { text: t.title }))) : null
         ]),
         h("section", { class: "card vol__card" }, [
-          h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "기념품팀 프로젝트" }), more("#/vprojects", "보기")]),
-          h("p", { class: "muted", text: "진행 상황을 볼 수 있어요." })
+          h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "입출고" }), more("#/vstock", "입력하기")]),
+          h("p", { class: "muted", text: "입고와 출고 수량을 직접 입력해요." })
+        ]),
+        h("section", { class: "card vol__card" }, [
+          h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "묵주" }), more("#/vprojects", "보기")]),
+          h("p", { class: "muted", text: "묵주 진행 상황을 볼 수 있어요." })
         ])
       ])
     ];
@@ -4274,15 +4299,14 @@
   }
   function volProjects(list) {
     return [
-      h("h1", { class: "vol__hello", text: "기념품팀 프로젝트" }),
+      h("h1", { class: "vol__hello", text: "묵주" }),
       list.length ? h("div", { class: "pj-cards" }, list.map((p) => h("a", { class: "card pj-card", href: `#/vprojects/${p.id}` }, [
         h("strong", { text: p.name }),
-        p.note ? h("p", { class: "pj-card__note muted small", text: p.note }) : null,
         h("span", { class: "muted small", text: `항목 ${p.total}개 · 완료 ${p.done}개` })
       ]))) : h("div", { class: "card empty", text: "아직 볼 수 있는 프로젝트가 없어요." })
     ];
   }
-  function volProject({ project, items }) {
+  function volProject({ project, items }, only) {
     const kids = (pid) => items.filter((i) => i.parentId === pid);
     const itemRow = (i) => h("li", { class: "vol-item" }, [
       h("div", { class: "vol-item__head" }, [h("span", { text: i.name }), h("span", { class: `pj-st pj-st--${i.status}`, text: projectStatusLabel(i.status) }), i.dueDate ? h("span", { class: "muted small", text: `마감 ${shortDate(i.dueDate)}` }) : null]),
@@ -4297,12 +4321,16 @@
         ...groups.map((g) => h("div", { class: "vol-group" }, [h("h3", { class: "vol-group__name", text: g.name }), g.note ? h("p", { class: "vol-pre small muted", text: g.note }) : null, ...list(g.id)]))
       ];
     };
+    // 맨 위가 '묵주' 묶음 하나면 제목과 겹치지 않게 그 안부터
+    const tops = kids(null);
+    const single = tops.length === 1 && tops[0].kind === "group" ? tops[0] : null;
     return [
-      h("nav", { class: "muted small" }, h("a", { href: "#/vprojects", text: "프로젝트" })),
-      h("h1", { class: "vol__hello", text: project.name }),
-      project.note ? h("p", { class: "vol-pre muted", text: project.note }) : null,
-      h("p", { class: "muted small", text: "읽기 전용이에요." }),
-      h("div", { class: "card vol__card" }, items.length ? list(null) : h("p", { class: "muted", text: "아직 항목이 없어요." }))
+      only ? null : h("nav", { class: "muted small" }, h("a", { href: "#/vprojects", text: "묵주" })),
+      h("h1", { class: "vol__hello", text: "묵주" }),
+      h("p", { class: "muted small", text: `${project.name} · 읽기 전용` }),
+      single?.note ? h("p", { class: "vol-pre muted", text: single.note }) : null,
+      h("div", { class: "card vol__card" }, list(single ? single.id : null)),
+      h("p", { class: "vol-actions" }, h("a", { class: "btn btn--primary", href: "#/vstock", text: "입출고 입력하기" }))
     ];
   }
 

@@ -2,7 +2,7 @@
   "name": "pschedule",
   "version": "1.0.0",
   "private": true,
-  "description": "PSchedule — 팀·모임 일정 공유",
+  "description": "P-Schedule — 팀·모임 일정 공유",
   "type": "module",
   "scripts": {
     "dev": "node tools/dev.mjs",
