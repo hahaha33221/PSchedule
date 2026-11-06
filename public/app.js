@@ -51,6 +51,7 @@
     search: "",
     navDashOpen: store.get("ps.navDash", "") === "1",
     navProjOpen: store.get("ps.navProj", "") !== "0", // 입출고 관리를 찾기 쉽게 처음에는 펼침
+    navRosaryOpen: store.get("ps.navRosary", "") !== "0", // 봉사자: 묵주 아래 입출고도 처음에는 펼침
     show: JSON.parse(store.get("ps.show", "null") || "null") || { meeting: true, event: true, task: true },
     peek: null,       // 측면 패널 { type: 'event' | 'task' | 'day', id }
     navOpen: false,
@@ -4208,18 +4209,63 @@
     const { name, id } = route();
     const tab = ["vschedule", "vtraining", "vstock", "vprojects"].includes(name) ? name : "vhome";
     document.title = `봉사자 · ${TITLE}`;
-    const account = h("button", { class: "vol__account", type: "button", "aria-label": "내 계정" }, [h("strong", { text: state.user.name }), icon("right")]);
+    // 왼쪽 메뉴: 직원 화면과 같은 틀 (묵주 아래에 입출고를 접고 펴기)
+    layout.tags = null;
+    const main = h("main", { class: "vol__main", id: "main" }, loading());
+    const navBox = h("nav", { class: "side__nav", "aria-label": "봉사자 메뉴" });
+    const drawVolNav = () => {
+      const link = (id, label, ic, sub, onclick) => h("a", {
+        class: "side__link" + (sub ? " side__link--sub" : "") + (id === tab ? " is-active" : ""), href: `#/${id}`, "aria-current": id === tab ? "page" : null, title: label,
+        onclick: () => { if (onclick) onclick(); toggleNav(false); }
+      }, [icon(ic), h("span", { class: "side__text", text: label })]);
+      const setOpen = (open) => { state.navRosaryOpen = open; store.set("ps.navRosary", open ? "1" : "0"); };
+      if (tab === "vstock") setOpen(true);
+      const open = state.navRosaryOpen;
+      navBox.replaceChildren(
+        link("vhome", "대시보드", "grid"),
+        link("vschedule", "일정", "cal"),
+        link("vtraining", "기본 교육", "check"),
+        h("div", { class: "side__group" }, [
+          h("div", { class: "side__row" }, [
+            link("vprojects", "묵주", "folder", false, () => { const again = tab === "vprojects"; setOpen(again ? !state.navRosaryOpen : true); if (again) drawVolNav(); }),
+            h("button", { class: "side__toggle" + (open ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(open), "aria-label": `묵주 아래 메뉴 ${open ? "접기" : "펼치기"}`, onclick: () => { setOpen(!state.navRosaryOpen); drawVolNav(); } })
+          ]),
+          h("div", { class: "side__kids", hidden: !open }, link("vstock", "입출고", "db", true))
+        ])
+      );
+    };
+    drawVolNav();
+    const account = h("button", { class: "side__account", type: "button", "aria-label": "내 계정" }, [
+      h("span", { class: `avatar c${state.user.id % 6}`, text: state.user.name.replace(/\s/g, "").slice(-2) }),
+      h("span", { class: "side__who" }, [h("strong", { text: state.user.name }), h("small", { text: "봉사자" })])
+    ]);
     account.addEventListener("click", () => popover(account, h("div", { class: "pop__list" }, [
       h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); openDialog("비밀번호 변경", passwordForm(closeDialog)); } }, "비밀번호 변경"),
       h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); logout(); } }, "로그아웃")
     ])));
-    const main = h("main", { class: "vol__main", id: "main" }, loading());
-    const navLink = (k, label) => h("a", { class: "vol__tab" + (k === tab ? " is-active" : ""), href: `#/${k}`, "aria-current": k === tab ? "page" : null, text: label });
-    app.replaceChildren(h("div", { class: "vol" }, [
-      h("header", { class: "vol__bar" }, [h("span", { class: "brand" }, [h("img", { src: "favicon.svg", alt: "" }), h("span", { text: TITLE })]), h("span", { class: "vol__tag", text: "봉사자" }), account]),
-      h("nav", { class: "vol__nav", "aria-label": "봉사자 메뉴" }, [navLink("vhome", "대시보드"), navLink("vschedule", "일정"), navLink("vtraining", "기본 교육"), navLink("vprojects", "묵주"), navLink("vstock", "입출고")]),
-      main
+    const brand = () => h("a", { class: "brand", href: "#/vhome", title: TITLE }, [h("img", { src: "favicon.svg", alt: "" }), h("span", { class: "side__text", text: TITLE })]);
+    app.replaceChildren(h("div", { class: "shell shell--vol" }, [
+      h("aside", { class: "side" }, [
+        h("div", { class: "side__top" }, [
+          brand(),
+          h("button", { class: "icon-btn side__collapse", type: "button", html: ICON.left, onclick: toggleSideMini }),
+          h("button", { class: "icon-btn side__close", type: "button", "aria-label": "메뉴 닫기", html: ICON.close, onclick: () => toggleNav(false) })
+        ]),
+        navBox,
+        account,
+        sideResizer()
+      ]),
+      h("div", { class: "scrim", onclick: () => toggleNav(false) }),
+      h("div", { class: "content" }, [
+        h("header", { class: "mobilebar" }, [
+          h("button", { class: "icon-btn", type: "button", "aria-label": "메뉴", html: ICON.menu, onclick: () => toggleNav(true) }),
+          brand(),
+          h("span", { class: "vol__tag", text: "봉사자" })
+        ]),
+        main
+      ])
     ]));
+    applySide();
     const show = (...kids) => { if (seq === volSeq) fill(main, ...kids); };
     const load = async () => {
       if (tab === "vstock") {

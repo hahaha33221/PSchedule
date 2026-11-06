@@ -1273,13 +1273,8 @@ button.mgroup__head:hover { color: var(--ink); }
 }
 
 /* 봉사자 화면 */
-.vol { min-height: 100dvh; background: var(--bg, var(--surface-2)); }
-.vol__bar { display: flex; align-items: center; gap: 10px; padding: 12px 20px; background: var(--surface); border-bottom: 1px solid var(--line); }
 .vol__tag { padding: 2px 9px; border-radius: 999px; background: var(--primary-soft); color: var(--primary); font-size: 12.5px; font-weight: 700; }
-.vol__account { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; padding: 6px 8px; border: 0; border-radius: 9px; background: none; color: var(--ink-2); cursor: pointer; }
-.vol__account:hover { background: var(--surface-2); }
-.vol__account .ic svg { width: 14px; height: 14px; transform: rotate(90deg); }
-.vol__main { max-width: 860px; margin: 0 auto; padding: 28px 20px 48px; }
+.vol__main { width: 100%; max-width: 900px; margin: 0 auto; padding: 28px 24px 48px; min-width: 0; }
 .vol__hello { margin: 4px 0 20px; }
 .vol__cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
 .vol__card { padding: 18px 20px; }
@@ -1358,19 +1353,12 @@ button.mgroup__head:hover { color: var(--ink); }
   --vol-bar-ink: #2b2400;
 }
 .theme-volunteer .link-btn { color: var(--vol-accent); }
-.theme-volunteer .vol__bar { background: var(--primary); border-bottom-color: transparent; color: var(--vol-bar-ink); }
-.theme-volunteer .vol__bar .brand, .theme-volunteer .vol__account { color: var(--vol-bar-ink); }
-.theme-volunteer .vol__account:hover { background: rgba(0, 0, 0, .08); }
 .theme-volunteer .vol__tag { background: var(--vol-bar-ink); color: var(--primary); }
 .theme-volunteer .pj-st--doing, .theme-volunteer .pj-st--fixed, .theme-volunteer .stock-step.is-active, .theme-volunteer .stock-step.is-done .stock-step__num, .theme-volunteer .stock-guide__count, .theme-volunteer .stock-card__next, .theme-volunteer .vol-chip.is-done { color: var(--vol-accent); }
 .theme-volunteer .stock-step.is-active .stock-step__num { color: var(--primary-ink); }
 .theme-volunteer .stock-step:hover, .theme-volunteer .stock-step.is-active { border-color: var(--vol-accent); }
 
 /* 봉사자 메뉴·일정·교육·프로젝트 */
-.vol__nav { display: flex; gap: 4px; padding: 6px 12px; overflow-x: auto; background: var(--surface); border-bottom: 1px solid var(--line); }
-.vol__tab { flex: none; padding: 7px 12px; border-radius: 9px; color: var(--ink-2); font-size: 14px; font-weight: 600; text-decoration: none; }
-.vol__tab:hover { background: var(--surface-2); }
-.vol__tab.is-active { background: var(--primary); color: var(--primary-ink); }
 .vol__card .card__head { margin-bottom: 6px; }
 .vol-list { margin: 0; padding: 0; list-style: none; }
 .vol-sched { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 4px 12px; padding: 10px 0; border-top: 1px solid var(--line-2); }
@@ -1407,3 +1395,13 @@ button.mgroup__head:hover { color: var(--ink); }
 .vol-stock__name { flex: 1 1 170px; display: flex; flex-direction: column; gap: 1px; min-width: 0; color: inherit; text-decoration: none; font-size: 13.5px; }
 .vol-stock__btns { display: flex; gap: 6px; }
 .vol-stock-card { margin-top: 14px; }
+
+/* 봉사자 왼쪽 메뉴: 노란 테마에서 글자가 잘 보이게 */
+.theme-volunteer .side__link.is-active { background: var(--primary); color: var(--primary-ink); }
+.theme-volunteer .side { background: var(--surface); }
+.theme-volunteer .mobilebar { background: var(--primary); color: var(--vol-bar-ink); }
+.theme-volunteer .mobilebar .brand, .theme-volunteer .mobilebar .icon-btn { color: var(--vol-bar-ink); }
+.shell--vol .side__account { margin-top: auto; }
+@media (max-width: 900px) {
+  .vol__main { padding: 18px 16px 40px; }
+}
