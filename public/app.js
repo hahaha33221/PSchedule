@@ -4392,7 +4392,8 @@
     const listHash = vol ? "#/vstock" : "#/stock";
     const put = (kids) => (vol ? vol.show(kids) : setMain("stock", kids));
     if (!vol) { drawMini(null); setMain("stock", loading()); }
-    let data, step = store.get(`ps.stockStep.${id}`, "");
+    let data, step = store.get(`ps.stockStep.${id}`, ""), historyOpen = false;
+    const utcLabel = (at) => { const d = new Date(`${at.replace(" ", "T")}Z`); return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
     const edit = (opts) => ledgerDialog(data, async (body) => { const r = await api(`/stock/${id}`, { method: "PATCH", body }); closeDialog(); apply(r); }, opts);
     const apply = (r) => { data = r; draw(); };
     function moveDialog(type, m) {
@@ -4553,7 +4554,11 @@
         h("div", { class: "stock-nav" }, [
           prev ? h("button", { class: "btn btn--ghost", type: "button", text: `이전: ${prev.label}`, onclick: () => pick(prev.id) }) : null,
           next ? h("button", { class: "btn btn--primary", type: "button", text: `다음: ${next.label}`, onclick: () => pick(next.id) }) : h("a", { class: "btn btn--primary", href: listHash, text: "목록으로" })
-        ])
+        ]),
+        data.history ? h("details", { class: "stock-history", open: historyOpen, ontoggle: (e) => { historyOpen = e.currentTarget.open; } }, [
+          h("summary", { text: `수정 기록 ${data.history.length}건${data.history.length >= 100 ? " (최근 100건)" : ""}` }),
+          data.history.length ? h("ul", {}, data.history.map((x) => h("li", {}, [h("span", { class: "stock-history__when", text: utcLabel(x.at) }), h("span", { class: "stock-history__who", text: x.by || "-" }), h("span", { class: "stock-history__what", text: x.summary })]))) : h("p", { class: "muted", text: "아직 수정 기록이 없어요. 앞으로 입력하거나 고치면 여기에 남아요." })
+        ]) : null
       ]);
     }
     if (vol) {

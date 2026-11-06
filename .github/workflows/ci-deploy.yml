@@ -395,7 +395,15 @@ jobs:
           curl -fs -H "$H" $B/admin/vol-stock-moves | node -e 'const m=JSON.parse(require("fs").readFileSync(0)).moves;if(m.length!==1||m[0].enteredBy!=="봉사자일"||m[0].total!==8||m[0].ledgerName!=="봉사 대장"||!m[0].createdAt)process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/admin/vol-stock-moves)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/admin/vol-stock-moves)" = 403
+          # 수정 기록: 추가·수정 내용과 사람이 남고, 봉사자 응답에는 없음. 바뀐 것 없는 저장은 안 남음
+          curl -fs -H "$H" $B/stock/$VL | node -e 'const h=JSON.parse(require("fs").readFileSync(0)).history;const e=h.find(x=>x.action==="edit");const a=h.filter(x=>x.action==="add");if(!e||e.by!=="봉사자일"||!e.summary.includes("7 → 8")||!e.at||a.length!==2||!h.some(x=>x.action==="ledger"))process.exit(1)'
+          if curl -fs -H "$VH" $B/volunteer/stock/$VL | grep -q '"history"'; then echo "봉사자 응답에 수정 기록이 있어요"; exit 1; fi
+          HN=$(curl -fs -H "$H" $B/stock/$VL | node -pe 'JSON.parse(require("fs").readFileSync(0)).history.length')
+          J="{\"qty\":{\"$VO\":8}}"; curl -fs -H "$VH" -XPATCH -d "$J" $B/volunteer/stock-moves/$VM >/dev/null
+          test "$(curl -fs -H "$H" $B/stock/$VL | node -pe 'JSON.parse(require("fs").readFileSync(0)).history.length')" = "$HN"
+          curl -fs -H "$H" -XPATCH -d '{"contract":50}' $B/stock/$VL | node -e 'const h=JSON.parse(require("fs").readFileSync(0)).history[0];if(h.action!=="ledger"||!h.summary.includes("계약 수량")||!h.summary.includes("50"))process.exit(1)'
           curl -fs -H "$VH" -XDELETE $B/volunteer/stock-moves/$VM >/dev/null
+          curl -fs -H "$H" $B/stock/$VL | node -e 'const h=JSON.parse(require("fs").readFileSync(0)).history[0];if(h.action!=="delete"||h.by!=="봉사자일"||!h.summary.includes("입고 삭제"))process.exit(1)'
           curl -fs -H "$H" -XDELETE $B/stock/$VL >/dev/null; curl -fs -H "$H" -XDELETE $B/stock/$HL >/dev/null
           # 봉사자 일정 직접 입력: 본인에게만 보임, 대상은 못 고름, 자기 일정만 수정, 관리자는 입력자와 함께 봄
           MS=$(curl -fs -H "$VH" -XPOST -d '{"title":"내가 넣은 일정","date":"2030-04-01","startTime":"10:00","audience":"all"}' $B/volunteer/schedules | node -pe 'JSON.parse(require("fs").readFileSync(0)).schedule.id')

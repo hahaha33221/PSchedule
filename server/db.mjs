@@ -405,6 +405,17 @@ function addUnitColumns(db) {
       qty       INTEGER NOT NULL,
       PRIMARY KEY (move_id, option_id)
     );
+    -- 입출고 수정 기록: 누가 언제 무엇을 바꿨는지 (사람이 지워져도 이름은 남김)
+    CREATE TABLE IF NOT EXISTS stock_history (
+      id         INTEGER PRIMARY KEY,
+      ledger_id  INTEGER NOT NULL REFERENCES stock_ledgers(id) ON DELETE CASCADE,
+      action     TEXT NOT NULL,
+      summary    TEXT NOT NULL,
+      user_id    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      user_name  TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS stock_history_ledger ON stock_history (ledger_id, id);
     -- 프로젝트 상세 프로세스: 구분 > 단계 > 세부 업무, 진행 상세·산출물, 시작일·예정일, 상태
     CREATE TABLE IF NOT EXISTS project_processes (
       id         INTEGER PRIMARY KEY,

@@ -309,6 +309,9 @@ const q = {
   addStockMove: db.prepare("INSERT INTO stock_moves (ledger_id, type, date, handler, note, created_by) VALUES (?, ?, ?, ?, ?, ?)"),
   setStockMove: db.prepare("UPDATE stock_moves SET date = ?, handler = ?, note = ? WHERE id = ?"),
   delStockMove: db.prepare("DELETE FROM stock_moves WHERE id = ?"),
+  stockQtyOfMove: db.prepare("SELECT option_id, qty FROM stock_qty WHERE move_id = ?"),
+  addStockHistory: db.prepare("INSERT INTO stock_history (ledger_id, action, summary, user_id, user_name) VALUES (?, ?, ?, ?, ?)"),
+  stockHistory: db.prepare("SELECT * FROM stock_history WHERE ledger_id = ? ORDER BY id DESC LIMIT 100"),
   stockQtyOfLedger: db.prepare("SELECT q.move_id, q.option_id, q.qty FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE m.ledger_id = ?"),
   clearStockQty: db.prepare("DELETE FROM stock_qty WHERE move_id = ?"),
   addStockQty: db.prepare("INSERT INTO stock_qty (move_id, option_id, qty) VALUES (?, ?, ?)"),
@@ -1149,9 +1152,17 @@ function ledgerOut(l, p, user) {
     moves: q.stockMoves.all(l.id).map((m) => ({
       id: m.id, type: m.type, date: m.date, handler: m.handler, note: m.note, qty: qty.get(m.id) || {}, mine: m.created_by === user.id,
       ...(user.volunteer ? {} : { enteredBy: (m.created_by && q.userById.get(m.created_by)?.name) || "" }) // 입력한 사람: 직원 화면만
-    }))
+    })),
+    ...(user.volunteer ? {} : { history: q.stockHistory.all(l.id).map((h) => ({ id: h.id, action: h.action, summary: h.summary, by: h.user_name, at: h.created_at })) }) // 수정 기록: 직원 화면만
   };
 }
+// 수정 기록: 사람이 읽는 한 줄로 남김
+const logStock = (ledgerId, action, summary, user) => q.addStockHistory.run(ledgerId, action, String(summary).slice(0, 500), user.id, user.name);
+const moveKind = (m) => (m.type === "in" ? "입고" : "출고");
+const moveQty = (moveId) => new Map(q.stockQtyOfMove.all(moveId).map((x) => [x.option_id, x.qty]));
+const optionNames = (ledgerId) => new Map(q.stockOptions.all(ledgerId).map((o) => [o.id, o.name]));
+const qtyText = (qty, names) => [...qty].filter(([, n]) => n).map(([o, n]) => `${names.get(o) || "품목"} ${n}`).join(", ") || "수량 없음";
+const changeText = (label, a, b) => (String(a ?? "") === String(b ?? "") ? null : `${label} ${a === "" || a == null ? "(없음)" : a} → ${b === "" || b == null ? "(없음)" : b}`);
 function addStockMoveFrom(l, b, user) {
   if (b.type !== "in" && b.type !== "out") throw bad("입고·출고를 골라 주세요.");
   const date = text(b.date, 20, "날짜", true), handler = text(b.handler, 40, "전달자"), note = text(b.note, 500, "비고");
@@ -1159,14 +1170,28 @@ function addStockMoveFrom(l, b, user) {
   inTx(() => {
     const id = Number(q.addStockMove.run(l.id, b.type, date, handler, note, user.id).lastInsertRowid);
     for (const [o, n] of rows) q.addStockQty.run(id, o, n);
+    logStock(l.id, "add", `${moveKind(b)} 추가 (${date}): ${qtyText(moveQty(id), optionNames(l.id))}`, user);
   });
 }
-function patchStockMoveFrom(m, l, b) {
+function deleteStockMoveBy(m, l, user) {
+  inTx(() => {
+    logStock(l.id, "delete", `${moveKind(m)} 삭제 (${m.date}): ${qtyText(moveQty(m.id), optionNames(l.id))}`, user);
+    q.delStockMove.run(m.id);
+  });
+}
+function patchStockMoveFrom(m, l, b, user) {
   const date = text(has(b, "date") ? b.date : m.date, 20, "날짜", true), handler = text(has(b, "handler") ? b.handler : m.handler, 40, "전달자"), note = text(has(b, "note") ? b.note : m.note, 500, "비고");
   const rows = has(b, "qty") ? stockQtyInput(l.id, b.qty) : null;
   inTx(() => {
+    const before = moveQty(m.id), names = optionNames(l.id);
     q.setStockMove.run(date, handler, note, m.id);
     if (rows) { q.clearStockQty.run(m.id); for (const [o, n] of rows) q.addStockQty.run(m.id, o, n); }
+    const after = moveQty(m.id);
+    const changes = [
+      changeText("날짜", m.date, date), changeText("전달자", m.handler, handler), changeText("비고", m.note, note),
+      ...[...new Set([...before.keys(), ...after.keys()])].map((o) => changeText(names.get(o) || "품목", before.get(o) || 0, after.get(o) || 0))
+    ].filter(Boolean);
+    if (changes.length) logStock(l.id, "edit", `${moveKind(m)} 수정 (${m.date}): ${changes.join(", ")}`, user);
   });
 }
 const stockListRow = (l, p, staff) => {
@@ -1308,8 +1333,8 @@ async function api(req, res, path) {
       const p = volLedgerProject(l);
       if (!p) throw notFound("기록");
       if (m.created_by !== user.id) return send(res, 403, { error: "직접 입력한 기록만 고칠 수 있어요." });
-      if (method === "PATCH") { patchStockMoveFrom(m, l, await readJson(req)); return send(res, 200, ledgerOut(l, p, user)); }
-      if (method === "DELETE") { q.delStockMove.run(m.id); return send(res, 200, ledgerOut(l, p, user)); }
+      if (method === "PATCH") { patchStockMoveFrom(m, l, await readJson(req), user); return send(res, 200, ledgerOut(l, p, user)); }
+      if (method === "DELETE") { deleteStockMoveBy(m, l, user); return send(res, 200, ledgerOut(l, p, user)); }
       return send(res, 405, { error: "Method not allowed" });
     }
     const vtm = path.match(/^\/api\/volunteer\/trainings\/(\d+)\/done$/);
@@ -1880,6 +1905,7 @@ async function api(req, res, path) {
       const id = inTx(() => {
         const id = Number(q.addLedger.run(i.id, ...fields).lastInsertRowid);
         saveStockOptions(id, (Array.isArray(b.options) ? b.options : []).map((name) => ({ name })));
+        logStock(id, "ledger", `대장 만듦: ${fields[0]}`, user);
         return id;
       });
       return send(res, 201, ledgerOut(q.ledger.get(id), p, user));
@@ -1944,7 +1970,20 @@ async function api(req, res, path) {
     if (method === "PATCH") {
       const b = await readJson(req);
       const fields = ledgerFields(b, l);
-      inTx(() => { q.setLedger.run(...fields, l.id); if (has(b, "options")) saveStockOptions(l.id, b.options); });
+      inTx(() => {
+        const beforeOpts = q.stockOptions.all(l.id);
+        q.setLedger.run(...fields, l.id);
+        if (has(b, "options")) saveStockOptions(l.id, b.options);
+        const now = q.ledger.get(l.id), afterOpts = q.stockOptions.all(l.id);
+        const changes = [
+          changeText("이름", l.name, now.name), changeText("단위", l.unit, now.unit), changeText("계약 수량", l.contract, now.contract),
+          changeText("입고 경로", l.in_label, now.in_label), changeText("출고 경로", l.out_label, now.out_label),
+          l.after !== now.after ? "전달 후 현황 변경" : null,
+          ...afterOpts.map((o) => { const was = beforeOpts.find((x) => x.id === o.id); return !was ? `품목 추가 ${o.name}` : changeText("품목", was.name, o.name); }),
+          ...beforeOpts.filter((o) => !afterOpts.some((x) => x.id === o.id)).map((o) => `품목 삭제 ${o.name}`)
+        ].filter(Boolean);
+        if (changes.length) logStock(l.id, "ledger", `대장 수정: ${changes.join(", ")}`, user);
+      });
       return send(res, 200, ledgerOut(q.ledger.get(l.id), p, user));
     }
     if (method === "DELETE") {
@@ -1961,11 +2000,11 @@ async function api(req, res, path) {
     const p = l && q.project.get(q.projectItem.get(l.item_id).project_id);
     if (!p || !projectAllowed(user, p)) throw notFound("기록");
     if (method === "PATCH") {
-      patchStockMoveFrom(m, l, await readJson(req));
+      patchStockMoveFrom(m, l, await readJson(req), user);
       return send(res, 200, ledgerOut(l, p, user));
     }
     if (method === "DELETE") {
-      q.delStockMove.run(m.id);
+      deleteStockMoveBy(m, l, user);
       return send(res, 200, ledgerOut(l, p, user));
     }
     return send(res, 405, { error: "Method not allowed" });
