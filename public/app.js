@@ -3763,7 +3763,7 @@
       const shows = (i) => !statusFilter || i.status === statusFilter;
       // 구역 카드: 구역이 하나라도 있으면 프로젝트 첫 화면
       const named = [...new Set([...data.items.filter((i) => !i.parentId).map((i) => i.area), ...procs.map((r) => r.area)].filter(Boolean))];
-      if (named.length && area === null) return drawAreas(p, named, inside);
+      if (named.length && area === null && tab !== "process") return drawAreas(p, named, inside);
       const rows = [];
       const walk = (pid, depth) => {
         for (const i of kids(pid)) {
@@ -3813,7 +3813,7 @@
           ])
         ]),
         area === null && p.note ? h("p", { class: "muted pj-desc", text: p.note }) : null,
-        isAdmin() ? h("div", { class: "seg pj-tabs", role: "tablist" }, [["items", "항목"], ["process", "상세 프로세스"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), title: k === "process" ? "관리자만 볼 수 있어요" : null, onclick: () => go(k === "process" ? `${base}/process` : base) }, k === "process" ? [label, " ", adminBadge()] : label))) : null,
+        isAdmin() ? h("div", { class: "seg pj-tabs", role: "tablist" }, [["items", named.length && area === null ? "구역" : "항목"], ["process", "상세 프로세스"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), title: k === "process" ? "관리자만 볼 수 있어요" : null, onclick: () => go(k === "process" ? `${base}/process` : base) }, k === "process" ? [label, " ", adminBadge()] : label))) : null,
         ...(tab === "process" ? [processPanel(id, area, () => (area === null ? p.name : `${p.name} ${area || COMMON_NAME}`))] : [area === null ? projectBar(p) : (() => { const its = kids(null).flatMap((k) => (k.kind === "group" ? inside(k) : [k])); return projectBar({ total: its.length, done: its.filter((x) => x.status === "done").length }); })(),
         h("div", { class: "filters" }, [
           filter,
@@ -3866,6 +3866,10 @@
           ])
         ]),
         p.note ? h("p", { class: "muted pj-desc", text: p.note }) : null,
+        isAdmin() ? h("div", { class: "seg pj-tabs", role: "tablist" }, [
+          h("button", { type: "button", role: "tab", "aria-selected": "true", text: "구역" }),
+          h("button", { type: "button", role: "tab", "aria-selected": "false", title: "프로젝트 전체 WBS와 PDF. 관리자만 볼 수 있어요", onclick: () => go(`#/projects/${id}/process`) }, ["상세 프로세스", " ", adminBadge()])
+        ]) : null,
         h("div", { class: "pj-areas" }, [...named.map((n) => card(n, n)), common ? card("", COMMON_NAME) : null])
       ]);
     }
