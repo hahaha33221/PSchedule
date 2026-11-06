@@ -586,16 +586,26 @@
     return r.task;
   }
 
-  /* ---------- 로그인 ---------- */
-  function renderLogin(message) {
+  /* ---------- 로그인: 직원·봉사자를 먼저 고르고, 고른 쪽 입력 화면으로 (마지막 선택은 기억) ---------- */
+  const LOGIN_AS = {
+    staff: { title: "직원 로그인", pick: "직원", desc: "조직위 직원 · 관리자", icon: "user" },
+    volunteer: { title: "봉사자 로그인", pick: "봉사자", desc: "봉사자 전용 화면", icon: "people" }
+  };
+  const authBrand = () => h("div", { class: "brand brand--lg" }, [h("img", { src: "favicon.svg", alt: "" }), h("span", { text: TITLE })]);
+  function renderLogin(message, as, keepId) {
     document.title = TITLE;
+    const mode = LOGIN_AS[as] ? as : store.get("ps.loginAs", "");
+    if (!LOGIN_AS[mode]) return renderLoginChoice(message);
+    const info = LOGIN_AS[mode];
     const err = errorLine();
-    const login = h("input", { name: "login", autocomplete: "username", autocapitalize: "none", spellcheck: "false", required: true, autofocus: true });
+    const login = h("input", { name: "login", autocomplete: "username", autocapitalize: "none", spellcheck: "false", required: true, value: keepId || "" });
     const pw = h("input", { name: "password", type: "password", autocomplete: "current-password", required: true });
     const submit = h("button", { class: "btn btn--primary btn--block", type: "submit", text: "로그인" });
     const form = h("form", { class: "auth__card stack", novalidate: true }, [
-      h("div", { class: "brand brand--lg" }, [h("img", { src: "favicon.svg", alt: "" }), h("span", { text: TITLE })]),
+      authBrand(),
+      h("h1", { class: "auth__title", text: info.title }),
       field("아이디", login), field("비밀번호", pw), err, submit,
+      h("button", { class: "link-btn auth__back", type: "button", text: "직원·봉사자 다시 고르기", onclick: () => { store.remove("ps.loginAs"); renderLoginChoice(); } }),
       h("p", { class: "auth__foot", text: "계정이 없거나 비밀번호를 잊었다면 관리자에게 문의해 주세요." })
     ]);
     if (message) showError(err, message);
@@ -604,15 +614,38 @@
       if (!login.value.trim() || !pw.value) return showError(err, "아이디와 비밀번호를 적어 주세요.");
       busy(submit, async () => {
         try {
-          const r = await api("/login", { method: "POST", body: { login: login.value, password: pw.value } });
+          const r = await api("/login", { method: "POST", body: { login: login.value, password: pw.value, as: mode } });
           state.token = r.token;
           store.set("ps.token", r.token);
+          store.set("ps.loginAs", mode);
           await boot();
-        } catch (ex) { showError(err, ex.message); pw.select(); }
+        } catch (ex) {
+          if (ex.field === "as") { // 다른 쪽 계정: 맞는 화면으로 옮겨 주기 (비밀번호는 다시)
+            const other = mode === "staff" ? "volunteer" : "staff";
+            store.set("ps.loginAs", other);
+            return renderLogin(`${ex.message} ${LOGIN_AS[other].title} 화면으로 옮겼어요. 비밀번호를 다시 적어 주세요.`, other, login.value);
+          }
+          showError(err, ex.message); pw.select();
+        }
       });
     });
     app.replaceChildren(h("main", { class: "auth" }, form));
-    login.focus();
+    (keepId ? pw : login).focus();
+  }
+  function renderLoginChoice(message) {
+    const pick = (as) => h("button", { class: "auth__pick", type: "button", onclick: () => { store.set("ps.loginAs", as); renderLogin(message, as); } }, [
+      icon(LOGIN_AS[as].icon),
+      h("span", { class: "auth__pick-text" }, [h("strong", { text: LOGIN_AS[as].pick }), h("span", { class: "muted small", text: LOGIN_AS[as].desc })]),
+      icon("right")
+    ]);
+    const err = errorLine();
+    if (message) showError(err, message);
+    app.replaceChildren(h("main", { class: "auth" }, h("div", { class: "auth__card stack" }, [
+      authBrand(),
+      h("h1", { class: "auth__title", text: "어느 쪽으로 로그인할까요?" }),
+      err, pick("staff"), pick("volunteer"),
+      h("p", { class: "auth__foot", text: "계정이 없거나 비밀번호를 잊었다면 관리자에게 문의해 주세요." })
+    ])));
   }
 
   function passwordForm(onDone, forced) {

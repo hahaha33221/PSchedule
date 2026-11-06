@@ -1087,7 +1087,7 @@ async function api(req, res, path) {
   if (path === "/api/health" && method === "GET") return send(res, 200, { ok: true });
 
   if (path === "/api/login" && method === "POST") {
-    const { login, password } = await readJson(req);
+    const { login, password, as } = await readJson(req);
     const id = normalizeLogin(login);
     const ip = "ip:" + clientIp(req), key = "id:" + id;
     if (tooMany(ip, key)) return send(res, 429, { error: "로그인 시도가 너무 많아요. 10분 뒤에 다시 시도해 주세요." });
@@ -1096,6 +1096,10 @@ async function api(req, res, path) {
     if (!ok) {
       recordFail(ip, key);
       return send(res, 401, { error: "아이디 또는 비밀번호를 다시 확인해 주세요." });
+    }
+    // 직원·봉사자 로그인 구분: 비밀번호가 맞을 때만 알려 줌 (아이디만으로 계정 종류를 알 수 없게)
+    if ((as === "staff" && user.volunteer) || (as === "volunteer" && !user.volunteer)) {
+      return send(res, 403, { error: user.volunteer ? "봉사자 계정이에요." : "직원 계정이에요.", field: "as" });
     }
     const token = crypto.randomBytes(32).toString("base64url");
     const expiresAt = Date.now() + SESSION_DAYS * 86400 * 1000;

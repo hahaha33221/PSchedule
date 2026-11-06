@@ -282,6 +282,17 @@ jobs:
           J="{\"title\":\"담당 테스트\",\"assigneeId\":$VU}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d "$J" $B/tasks)" = 400
           curl -fs -H "$H" $B/admin/users | grep -q '"role":"volunteer"'
           J="{\"current\":\"$VP\",\"next\":\"volunteer-pass-1\"}"; curl -fs -H "$(bearer "$A8")" -XPOST -d "$J" $B/password >/dev/null
+          # 로그인 구분: 다른 쪽으로 들어오면 세션 없이 거절, 비밀번호가 틀리면 계정 종류를 알리지 않음
+          lg() { curl -s -H 'content-type: application/json' -XPOST -d "$1" $B/login; }
+          lc() { curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -XPOST -d "$1" $B/login; }
+          test "$(lc '{"login":"vola","password":"volunteer-pass-1","as":"staff"}')" = 403
+          lg '{"login":"vola","password":"volunteer-pass-1","as":"staff"}' | grep -q '"field":"as"'
+          if lg '{"login":"vola","password":"volunteer-pass-1","as":"staff"}' | grep -q '"token"'; then echo "다른 쪽 로그인에 세션이 나와요"; exit 1; fi
+          test "$(lc '{"login":"master","password":"ci-pass-1","as":"volunteer"}')" = 403
+          test "$(lc '{"login":"vola","password":"wrong-pass-1","as":"staff"}')" = 401
+          test "$(lc '{"login":"vola","password":"volunteer-pass-1","as":"volunteer"}')" = 200
+          test "$(lc '{"login":"master","password":"ci-pass-1","as":"staff"}')" = 200
+          test "$(lc '{"login":"vola","password":"volunteer-pass-1"}')" = 200
           # 직원 ↔ 봉사자: 바꾸면 바로 적용, 봉사자로 바꾸면 소속·추가 조직이 지워지고 소속 일괄 변경에서도 빠짐
           A8=$(tok vola volunteer-pass-1)
           J="{\"role\":\"member\",\"unitId\":$FB}"; curl -fs -H "$H" -XPATCH -d "$J" $B/admin/users/$VU >/dev/null
