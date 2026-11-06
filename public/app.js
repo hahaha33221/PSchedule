@@ -3689,6 +3689,7 @@
     let data;
     const closed = new Set();
     let statusFilter = "";
+    const tab = location.hash.split("/")[3] === "process" ? "process" : "items";
     const apply = (r) => { data = r; draw(); };
     function itemDialog(item, defaults) {
       const v = item || defaults;
@@ -3699,16 +3700,10 @@
       const status = h("select", {}, PROJECT_STATUS.map(([k, label]) => h("option", { value: k, text: label })));
       status.value = item?.status || "none";
       const due = h("input", { type: "date", value: item?.dueDate || "" });
-      let assignee = item?.assigneeId || null;
-      const who = h("button", { class: "select-btn", type: "button" });
-      const drawWho = () => who.replaceChildren(assignee ? personLine(assignee) : h("span", { class: "muted", text: "담당자 없음" }));
-      drawWho();
-      who.addEventListener("click", () => personPicker(who, assignee ? [assignee] : [], false, (uid) => { assignee = uid; drawWho(); }));
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: item ? "저장" : "추가" });
       const form = h("form", { class: "stack", novalidate: true }, [
         field(isGroup ? "묶음 이름" : "항목 이름", name),
-        isGroup ? null : h("div", { class: "row2" }, [field("상태", status), field("담당자", who)]),
-        isGroup ? null : field("마감일", due),
+        isGroup ? null : h("div", { class: "row2" }, [field("상태", status), field("마감일", due)]),
         field("메모", note), err,
         h("div", { class: "actions" }, [
           item ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
@@ -3723,7 +3718,7 @@
         e.preventDefault();
         busy(ok, async () => {
           try {
-            const body = { name: name.value, note: note.value, ...(isGroup ? {} : { status: status.value, assigneeId: assignee, dueDate: due.value || null }) };
+            const body = { name: name.value, note: note.value, ...(isGroup ? {} : { status: status.value, dueDate: due.value || null }) };
             const r = await api(item ? `/project-items/${item.id}` : `/projects/${id}/items`, { method: item ? "PATCH" : "POST", body: item ? body : { ...body, kind: v.kind, parentId: v.parentId || null } });
             closeDialog(); apply(r);
           } catch (ex) { showError(err, ex.message); }
@@ -3764,7 +3759,7 @@
             if (statusFilter && !under.some(shows)) continue;
             const open = !closed.has(i.id);
             rows.push(h("tr", { class: "pj-group" }, [
-              h("td", { colspan: "4", style: pad }, h("div", { class: "pj-group__row" }, [
+              h("td", { colspan: "3", style: pad }, h("div", { class: "pj-group__row" }, [
                 h("button", { class: "org-row__chev" + (open ? " is-open" : ""), type: "button", "aria-label": `${i.name} ${open ? "접기" : "펼치기"}`, html: ICON.right, onclick: () => { open ? closed.add(i.id) : closed.delete(i.id); draw(); } }),
                 h("button", { class: "pj-name", type: "button", onclick: () => itemDialog(i) }, [h("strong", { text: i.name })]),
                 h("span", { class: "muted small", text: `${under.filter((x) => x.status === "done").length}/${under.length}` }),
@@ -3776,12 +3771,10 @@
           } else if (shows(i)) {
             const st = h("select", { class: `pj-select pj-st--${i.status}`, "aria-label": `${i.name} 상태`, onchange: (e) => patchItem(i, { status: e.target.value }) }, PROJECT_STATUS.map(([k, label]) => h("option", { value: k, text: label })));
             st.value = i.status;
-            const who = h("button", { class: "assignee-btn", type: "button", title: member(i.assigneeId)?.name || "담당자 정하기", onclick: (ev) => personPicker(ev.currentTarget, i.assigneeId ? [i.assigneeId] : [], false, (uid) => patchItem(i, { assigneeId: uid })) }, i.assigneeId ? personLine(i.assigneeId) : h("span", { class: "muted small", text: "담당자" }));
             const due = h("input", { type: "date", class: "inline inline--box", value: i.dueDate || "", "aria-label": `${i.name} 마감일`, onchange: (e) => patchItem(i, { dueDate: e.target.value || null }) });
             rows.push(h("tr", { class: i.status === "done" ? "is-done" : null }, [
               h("td", { class: "pj-itemname", style: pad }, [h("button", { class: "pj-name", type: "button", onclick: () => itemDialog(i), text: i.name }), i.note ? h("small", { class: "muted pj-note", text: i.note }) : null]),
               h("td", { "data-label": "상태" }, st),
-              h("td", { "data-label": "담당" }, who),
               h("td", { "data-label": "마감" }, due),
               h("td", { class: "pj-actions" })
             ]));
@@ -3799,14 +3792,15 @@
           h("span", { class: "page-head__end actions" }, [
             h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => projectDialog(p, apply) }),
             p.canDelete ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
-              if (!confirm(`'${p.name}' 프로젝트와 그 안의 항목을 모두 지울까요?`)) return;
+              if (!confirm(`'${p.name}' 프로젝트와 그 안의 항목·상세 프로세스를 모두 지울까요?`)) return;
               await act(() => api(`/projects/${p.id}`, { method: "DELETE" }));
               go("#/projects");
             } }) : null
           ])
         ]),
         p.note ? h("p", { class: "muted pj-desc", text: p.note }) : null,
-        projectBar(p),
+        h("div", { class: "seg pj-tabs", role: "tablist" }, [["items", "항목"], ["process", "상세 프로세스"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "process" ? `#/projects/${id}/process` : `#/projects/${id}`) }))),
+        ...(tab === "process" ? [processPanel(id)] : [projectBar(p),
         h("div", { class: "filters" }, [
           filter,
           h("span", { class: "filters__end actions" }, [
@@ -3816,13 +3810,178 @@
           ])
         ]),
         rows.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table pj-table" }, [
-          h("thead", {}, h("tr", {}, [...["이름", "상태", "담당", "마감"].map((t) => h("th", { text: t })), h("th", { "aria-label": "추가" })])),
+          h("thead", {}, h("tr", {}, [...["이름", "상태", "마감"].map((t) => h("th", { text: t })), h("th", { "aria-label": "추가" })])),
           h("tbody", {}, rows)
         ])) : h("div", { class: "card empty", text: data.items.length ? "이 상태의 항목이 없어요." : "아직 항목이 없어요. '+ 항목'이나 '목록 붙여넣기'로 넣어 주세요." })
+        ])
       ]);
     }
     page = { name: "projects", reload: async () => apply(await api(`/projects/${id}`)) };
     try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("projects", failed(e)); }
+  }
+
+  /* ---------- 상세 프로세스: 구분 > 단계 > 세부 업무, 목록과 일정표 ---------- */
+  const PROC_STATUS = [["todo", "예정"], ["doing", "진행"], ["done", "완료"], ["hold", "보류"]];
+  const procFilter = { section: "", status: "" };
+  function processPanel(projectId) {
+    const box = h("div", { class: "stack" }, loading());
+    let list = [];
+    const closed = new Set();
+    const uniq = (xs) => [...new Set(xs.filter(Boolean))];
+    const late = (r) => r.dueDate && r.dueDate < today() && r.status !== "done" && r.status !== "hold";
+    const when = (r) => (r.startDate && r.dueDate && r.startDate !== r.dueDate ? `${shortDate(r.startDate)}~${shortDate(r.dueDate)}` : r.dueDate ? shortDate(r.dueDate) : r.startDate ? shortDate(r.startDate) : "-");
+    const yearOf = (r) => (r.dueDate || r.startDate || "").slice(0, 4);
+    const whenFull = (r) => { const y = yearOf(r); return y && y !== today().slice(0, 4) ? `${y}년 ${when(r)}` : when(r); };
+    function dialog(r, preset) {
+      const err = errorLine();
+      const v = r || preset || {};
+      const options = (id, vals) => h("datalist", { id }, vals.map((x) => h("option", { value: x })));
+      const section = h("input", { value: v.section || "", maxlength: "60", list: "proc-sections", placeholder: "예: 순례자 키트" });
+      const phase = h("input", { value: v.phase || "", maxlength: "60", list: "proc-phases", placeholder: "예: 디자인/기획" });
+      const task = h("input", { value: v.task || "", maxlength: "120", list: "proc-tasks", autofocus: true, placeholder: "예: 제품 기획" });
+      const detail = h("textarea", { rows: "2", maxlength: "500" }, v.detail || "");
+      const output = h("input", { value: v.output || "", maxlength: "200" });
+      const label = h("input", { value: v.label || "", maxlength: "40" });
+      const start = h("input", { type: "date", value: v.startDate || "" });
+      const due = h("input", { type: "date", value: v.dueDate || "" });
+      const status = h("select", {}, PROC_STATUS.map(([k, t]) => h("option", { value: k, text: t })));
+      status.value = v.status || "todo";
+      const note = h("textarea", { rows: "2", maxlength: "1000" }, v.note || "");
+      const ok = h("button", { class: "btn btn--primary", type: "submit", text: r ? "저장" : "추가" });
+      const form = h("form", { class: "stack", novalidate: true }, [
+        options("proc-sections", uniq(list.map((x) => x.section))), options("proc-phases", uniq(list.map((x) => x.phase))), options("proc-tasks", uniq(list.map((x) => x.task))),
+        h("div", { class: "row2" }, [field("구분", section), field("단계", phase)]),
+        field("세부 업무", task), field("진행 상세", detail), field("산출물 · 과업", output),
+        h("div", { class: "row2" }, [field("시작일", start), field("예정일", due)]),
+        h("div", { class: "row2" }, [field("상태", status), field("일정표 표시 이름", label, "비우면 세부 업무로 보여요")]),
+        field("메모", note), err,
+        h("div", { class: "actions" }, [
+          r ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
+            if (!confirm(`'${r.detail || r.task}' 프로세스를 지울까요?`)) return;
+            list = (await act(() => api(`/project-processes/${r.id}`, { method: "DELETE" }))).processes;
+            closeDialog(); draw();
+          } }) : null,
+          h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok
+        ])
+      ]);
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        busy(ok, async () => {
+          try {
+            const body = { section: section.value, phase: phase.value, task: task.value, detail: detail.value, output: output.value, label: label.value, startDate: start.value || null, dueDate: due.value || null, status: status.value, note: note.value };
+            list = (await api(r ? `/project-processes/${r.id}` : `/projects/${projectId}/processes`, { method: r ? "PATCH" : "POST", body })).processes;
+            closeDialog(); draw();
+          } catch (ex) { showError(err, ex.message); }
+        });
+      });
+      openDialog(r ? "프로세스 고치기" : "프로세스 추가", form, { wide: true });
+    }
+    const statusSel = (r) => {
+      const st = h("select", { class: `pj-select proc-st--${r.status}`, "aria-label": `${r.detail || r.task} 상태`, onclick: (e) => e.stopPropagation(), onchange: async (e) => {
+        list = (await act(() => api(`/project-processes/${r.id}`, { method: "PATCH", body: { status: e.target.value } }))).processes; draw();
+      } }, PROC_STATUS.map(([k, t]) => h("option", { value: k, text: t })));
+      st.value = r.status;
+      return st;
+    };
+    // 구분 → 단계 순서는 처음 나온 순서대로
+    const grouped = (rows) => uniq(rows.map((r) => r.section || "구분 없음")).map((section) => {
+      const inSec = rows.filter((r) => (r.section || "구분 없음") === section);
+      return { section, rows: inSec, phases: [...new Set(inSec.map((r) => r.phase))].map((phase) => ({ phase, rows: inSec.filter((r) => r.phase === phase) })) };
+    });
+    const listView = (groups) => h("div", { class: "stack" }, groups.map((g) => {
+      const open = !closed.has(g.section);
+      const done = g.rows.filter((r) => r.status === "done").length;
+      return h("section", { class: "card proc-sec" }, [
+        h("div", { class: "proc-sec__head" }, [
+          h("button", { class: "org-row__chev" + (open ? " is-open" : ""), type: "button", "aria-label": `${g.section} ${open ? "접기" : "펼치기"}`, html: ICON.right, onclick: () => { if (open) closed.add(g.section); else closed.delete(g.section); draw(); } }),
+          h("h2", { class: "card__title", text: g.section }),
+          h("span", { class: "muted small", text: `${done}/${g.rows.length} 완료` }),
+          h("button", { class: "link-btn proc-sec__add", type: "button", text: "+ 프로세스", onclick: () => dialog(null, { section: g.section === "구분 없음" ? "" : g.section }) })
+        ]),
+        open ? h("div", { class: "table-wrap" }, h("table", { class: "table proc-table" }, [
+          h("thead", {}, h("tr", {}, ["단계", "세부 업무", "진행 상세", "산출물 · 과업", "일정", "상태"].map((t) => h("th", { text: t })))),
+          h("tbody", {}, g.phases.flatMap((ph) => ph.rows.map((r, i) => h("tr", { class: "stock-row" + (r.status === "done" ? " is-done" : ""), tabindex: "0", title: "눌러서 고치기", onclick: () => dialog(r), onkeydown: (e) => { if (e.key === "Enter" && e.target === e.currentTarget) dialog(r); } }, [
+            h("td", { class: "proc-phase", text: i === 0 ? ph.phase : "" }),
+            h("td", { class: "proc-task", text: r.task }),
+            h("td", {}, [r.detail, r.note ? h("small", { class: "muted proc-note", text: r.note }) : null]),
+            h("td", { class: "muted small", text: r.output || "-" }),
+            h("td", { class: "nowrap" + (late(r) ? " proc-late" : ""), text: `${whenFull(r)}${late(r) ? " 지남" : ""}` }),
+            h("td", {}, statusSel(r))
+          ]))))
+        ])) : null
+      ]);
+    }));
+    const DAY = 86400000, WEEK_W = 24;
+    const chartView = (groups) => {
+      const dated = list.filter((r) => r.startDate || r.dueDate);
+      if (!dated.length) return h("div", { class: "card empty", text: "날짜가 있는 프로세스가 아직 없어요." });
+      const dates = dated.flatMap((r) => [r.startDate, r.dueDate]).filter(Boolean).sort();
+      const mondayOf = (s) => { const d = parseYmd(s); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; };
+      const from = mondayOf(dates[0]);
+      const to = mondayOf(dates[dates.length - 1]); to.setDate(to.getDate() + 7);
+      const dayX = (s) => Math.round((parseYmd(s) - from) / DAY) * (WEEK_W / 7);
+      const width = (Math.round((to - from) / DAY) / 7) * WEEK_W;
+      const months = [];
+      for (const d = new Date(from.getFullYear(), from.getMonth(), 1); d < to; d.setMonth(d.getMonth() + 1)) {
+        const left = Math.max(0, dayX(ymd(d)));
+        months.push(h("span", { class: "gantt__month", style: `left:${left}px`, text: d.getMonth() === 0 || !months.length ? `${String(d.getFullYear()).slice(2)}년 ${d.getMonth() + 1}월` : `${d.getMonth() + 1}월` }));
+      }
+      const t = today();
+      const todayLine = () => (t >= ymd(from) && t < ymd(to) ? h("i", { class: "gantt__today", style: `left:${dayX(t)}px` }) : null);
+      const row = (r) => {
+        const s = r.startDate || r.dueDate, e = r.dueDate || r.startDate;
+        const left = s ? dayX(s) : 0;
+        const w = s ? Math.max(8, dayX(e) - left + WEEK_W / 7) : 0;
+        return h("div", { class: "gantt__row", role: "row" }, [
+          h("button", { class: "gantt__name", type: "button", title: [r.task, r.detail, whenFull(r)].filter(Boolean).join(" · "), onclick: () => dialog(r) }, [h("span", { text: r.detail || r.task }), h("small", { class: "muted", text: r.task })]),
+          h("div", { class: "gantt__track", style: `width:${width}px` }, [
+            todayLine(),
+            s ? h("button", { class: `gantt__bar proc-bar--${late(r) ? "late" : r.status}`, type: "button", style: `left:${left}px;width:${w}px`, title: `${r.detail || r.task} (${whenFull(r)})`, "aria-label": `${r.detail || r.task} ${whenFull(r)}`, onclick: () => dialog(r) }) : null,
+            s ? h("span", { class: "gantt__label", style: `left:${left + w + 4}px`, text: r.label || r.task }) : null
+          ])
+        ]);
+      };
+      const scroller = h("div", { class: "card gantt", role: "table" }, [
+        h("div", { class: "gantt__row gantt__row--head" }, [h("div", { class: "gantt__name gantt__name--head", text: "프로세스" }), h("div", { class: "gantt__track", style: `width:${width}px` }, [...months, todayLine()])]),
+        ...groups.flatMap((g) => [
+          h("div", { class: "gantt__row gantt__row--sec" }, [h("div", { class: "gantt__name gantt__name--sec", text: g.section }), h("div", { class: "gantt__track", style: `width:${width}px` }, todayLine())]),
+          ...g.rows.map(row)
+        ])
+      ]);
+      requestAnimationFrame(() => { if (t >= ymd(from) && t < ymd(to)) scroller.scrollLeft = Math.max(0, dayX(t) - 120); });
+      return h("div", { class: "stack stack--sm" }, [
+        scroller,
+        h("div", { class: "gantt__legend muted small" }, [["done", "완료"], ["doing", "진행"], ["todo", "예정"], ["hold", "보류"], ["late", "일정 지남"]].map(([k, t2]) => h("span", {}, [h("i", { class: `proc-bar--${k}` }), t2])))
+      ]);
+    };
+    function draw() {
+      const view = store.get("ps.procView", "list") === "chart" ? "chart" : "list";
+      const sections = uniq(list.map((r) => r.section));
+      if (procFilter.section && !sections.includes(procFilter.section)) procFilter.section = "";
+      const shown = list.filter((r) => (!procFilter.section || r.section === procFilter.section) && (!procFilter.status || (procFilter.status === "late" ? late(r) : r.status === procFilter.status)));
+      const counts = (k) => list.filter((r) => r.status === k).length;
+      const lateN = list.filter(late).length;
+      const next = list.filter((r) => r.dueDate && r.dueDate >= today() && r.status !== "done" && r.status !== "hold").sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0];
+      const secSel = h("select", { "aria-label": "구분으로 거르기", onchange: (e) => { procFilter.section = e.target.value; draw(); } }, [h("option", { value: "", text: "모든 구분" }), ...sections.map((x) => h("option", { value: x, text: x }))]);
+      secSel.value = procFilter.section;
+      const stSel = h("select", { "aria-label": "상태로 거르기", onchange: (e) => { procFilter.status = e.target.value; draw(); } }, [h("option", { value: "", text: "모든 상태" }), ...PROC_STATUS.map(([k, t]) => h("option", { value: k, text: t })), h("option", { value: "late", text: "일정 지남" })]);
+      stSel.value = procFilter.status;
+      const seg = h("div", { class: "seg seg--sm" }, [["list", "목록"], ["chart", "일정표"]].map(([k, t]) => h("button", { type: "button", "aria-selected": String(k === view), text: t, onclick: () => { store.set("ps.procView", k); draw(); } })));
+      fill(box,
+        list.length ? h("div", { class: "unit-stats" }, [
+          h("div", { class: "card unit-stat" }, [h("strong", { text: `${counts("done")}/${list.length}` }), h("span", { text: "완료" })]),
+          h("div", { class: "card unit-stat" }, [h("strong", { text: String(counts("doing")) }), h("span", { text: "진행" })]),
+          h("div", { class: "card unit-stat" + (lateN ? " is-warn" : "") }, [h("strong", { text: String(lateN) }), h("span", { text: "일정 지남" })]),
+          h("div", { class: "card unit-stat" }, [h("strong", { class: "proc-next", title: next ? next.detail || next.task : null, text: next ? shortDate(next.dueDate) : "-" }), h("span", { text: next ? `다음: ${next.label || next.task}` : "다음 일정" })])
+        ]) : null,
+        h("div", { class: "filters" }, [secSel, stSel, seg, h("span", { class: "filters__end actions" }, h("button", { class: "btn btn--primary btn--sm", type: "button", text: "+ 프로세스", onclick: () => dialog() }))]),
+        !list.length ? h("div", { class: "card empty", text: "아직 상세 프로세스가 없어요. '+ 프로세스'로 단계별 일정을 넣어 주세요." })
+          : !shown.length ? h("div", { class: "card empty", text: "조건에 맞는 프로세스가 없어요." })
+            : view === "chart" ? chartView(grouped(shown)) : listView(grouped(shown))
+      );
+    }
+    api(`/projects/${projectId}/processes`).then((r) => { list = r.processes; draw(); }).catch((e) => { if (e.status !== 401) fill(box, failed(e)); });
+    return box;
   }
 
   /* ---------- 입출고 관리: 단계별로 안내 (기본 정보 → 입고 → 출고 → 재고 확인 → 전달 후) ---------- */

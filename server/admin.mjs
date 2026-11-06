@@ -13,6 +13,7 @@
  *   node server/admin.mjs backups                           백업 목록
  *   node server/admin.mjs contacts-import [--dry] < 명단.tsv  연락처 일괄 입력 (구역 | 이름 | 직함 | 내선 | 휴대폰, 조직도 자리의 이름으로 찾음)
  *   node server/admin.mjs stock-import [--dry] < 대장.json  입출고 대장 넣기 (README '프로젝트' 참고)
+ *   node server/admin.mjs process-import [--dry] < 프로세스.json  상세 프로세스 넣기 ({ project, rows: [{ section, phase, task, detail, output, label, start, due, status, note }] })
  *   node server/admin.mjs project-import <조직> <프로젝트> [--dry] < 목록.txt  프로젝트 목록 넣기 (1. 묶음, 4-1. 아래 묶음, * 항목, ※ 메모)
  *     이미 값이 있으면 그대로 둠. 조직도에서 못 찾으면 넣지 않고 이름만 알려 줌. 번호는 출력하지 않음
  *
@@ -167,6 +168,29 @@ switch (cmd) {
         const t = importLedger(db, groups[0].id, l);
         console.log(`${dry ? "[미리보기, 저장 안 함] " : ""}${l.name}: 기록 ${t.moves}건, 입고 ${t.in}, 출고 ${t.out}, 재고 ${t.in - t.out}`);
       }
+      db.exec(dry ? "ROLLBACK" : "COMMIT");
+    } catch (e) { db.exec("ROLLBACK"); console.error(e.message); process.exit(1); }
+    break;
+  }
+
+  // 상세 프로세스 넣기: 이미 프로세스가 있는 프로젝트에는 넣지 않음
+  case "process-import": {
+    const dry = args.includes("--dry");
+    const data = JSON.parse(readFileSync(0, "utf8"));
+    const projects = db.prepare("SELECT id FROM projects WHERE name = ?").all(data.project);
+    if (projects.length !== 1) { console.error("프로젝트가 하나로 찾아지지 않아요."); process.exit(1); }
+    const pid = projects[0].id;
+    if (db.prepare("SELECT 1 FROM project_processes WHERE project_id = ?").get(pid)) { console.error("이미 상세 프로세스가 있는 프로젝트예요."); process.exit(1); }
+    const ok = (s) => s == null || s === "" || /^\d{4}-\d{2}-\d{2}$/.test(s);
+    db.exec("BEGIN");
+    try {
+      const add = db.prepare("INSERT INTO project_processes (project_id, section, phase, task, detail, output, label, start_date, due_date, status, note, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+      data.rows.forEach((r, i) => {
+        if (!String(r.task || "").trim() || !ok(r.start) || !ok(r.due)) throw new Error(`${i + 1}번째 줄을 확인해 주세요.`);
+        add.run(pid, r.section || "", r.phase || "", r.task, r.detail || "", r.output || "", r.label || "", r.start || null, r.due || null, r.status || "todo", r.note || "", i + 1);
+      });
+      const n = (st) => data.rows.filter((r) => (r.status || "todo") === st).length;
+      console.log(`${dry ? "[미리보기, 저장 안 함] " : ""}프로세스 ${data.rows.length}건 (완료 ${n("done")}, 예정 ${n("todo")})`);
       db.exec(dry ? "ROLLBACK" : "COMMIT");
     } catch (e) { db.exec("ROLLBACK"); console.error(e.message); process.exit(1); }
     break;

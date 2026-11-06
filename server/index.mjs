@@ -281,6 +281,11 @@ const q = {
   volStockMoves: db.prepare(`SELECT m.id, m.type, m.date, m.note, m.handler, m.created_at, u.name AS author, l.id AS ledger_id, l.name AS ledger_name, l.unit,
       (SELECT coalesce(sum(x.qty), 0) FROM stock_qty x WHERE x.move_id = m.id) AS total
     FROM stock_moves m JOIN users u ON u.id = m.created_by AND u.volunteer = 1 JOIN stock_ledgers l ON l.id = m.ledger_id ORDER BY m.id DESC LIMIT 100`),
+  processes: db.prepare("SELECT * FROM project_processes WHERE project_id = ? ORDER BY sort_order, id"),
+  process: db.prepare("SELECT * FROM project_processes WHERE id = ?"),
+  addProcess: db.prepare("INSERT INTO project_processes (project_id, section, phase, task, detail, output, label, start_date, due_date, status, note, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT coalesce(max(sort_order), 0) + 1 FROM project_processes WHERE project_id = ?))"),
+  setProcess: db.prepare("UPDATE project_processes SET section = ?, phase = ?, task = ?, detail = ?, output = ?, label = ?, start_date = ?, due_date = ?, status = ?, note = ?, updated_at = datetime('now') WHERE id = ?"),
+  delProcess: db.prepare("DELETE FROM project_processes WHERE id = ?"),
   ledgersAll: db.prepare(`SELECT l.*, i.project_id, i.name AS item_name,
       (SELECT count(*) FROM stock_options o WHERE o.ledger_id = l.id) AS option_count,
       (SELECT coalesce(sum(q.qty), 0) FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE m.ledger_id = l.id AND m.type = 'in') AS in_total,
@@ -1093,6 +1098,19 @@ function volTrainingFields(b) {
   if (link && !/^https?:\/\/\S+$/i.test(link)) throw bad("자료 링크는 http 또는 https 주소로 적어 주세요.");
   return [title, text(b.body, 5000, "내용"), date, st, text(b.place, 120, "장소"), link];
 }
+// 상세 프로세스 (빠진 값은 그대로 두기: 상태만 바꿀 때)
+const processOut = (r) => ({ id: r.id, section: r.section, phase: r.phase, task: r.task, detail: r.detail, output: r.output, label: r.label, startDate: r.start_date, dueDate: r.due_date, status: r.status, note: r.note });
+const processList = (projectId) => ({ processes: q.processes.all(projectId).map(processOut) });
+function processFields(b, cur) {
+  const pick = (k, col) => (has(b, k) ? b[k] : cur?.[col ?? k]);
+  const start = pick("startDate", "start_date") || null, due = pick("dueDate", "due_date") || null;
+  if (start && !isDate(start)) throw bad("시작일을 확인해 주세요.");
+  if (due && !isDate(due)) throw bad("예정일을 확인해 주세요.");
+  if (start && due && start > due) throw bad("시작일은 예정일보다 늦을 수 없어요.");
+  const status = pick("status") || "todo";
+  if (!["todo", "doing", "done", "hold"].includes(status)) throw bad("상태를 확인해 주세요.");
+  return [text(pick("section"), 60, "구분"), text(pick("phase"), 60, "단계"), text(pick("task"), 120, "세부 업무", true), text(pick("detail"), 500, "진행 상세"), text(pick("output"), 200, "산출물"), text(pick("label"), 40, "표시 이름"), start, due, status, text(pick("note"), 1000, "메모")];
+}
 // 입출고 현황
 function ledgerFields(b, cur) {
   const get = (k, curVal) => (has(b, k) ? b[k] : curVal);
@@ -1793,7 +1811,7 @@ async function api(req, res, path) {
     const id = Number(q.addProject.run(projectUnit(b.unitId, user), text(b.name, 80, "프로젝트 이름", true), text(b.note, 1000, "설명"), user.id).lastInsertRowid);
     return send(res, 201, projectDetail(q.project.get(id), user));
   }
-  const pjm = path.match(/^\/api\/projects\/(\d+)(\/items|\/import)?$/);
+  const pjm = path.match(/^\/api\/projects\/(\d+)(\/items|\/import|\/processes)?$/);
   if (pjm) {
     const p = q.project.get(Number(pjm[1]));
     if (!p || !projectAllowed(user, p)) throw notFound("프로젝트");
@@ -1808,6 +1826,14 @@ async function api(req, res, path) {
       if (q.ledgersOfProject.all(p.id).length) return send(res, 409, { error: "이 프로젝트에 입출고 현황이 있어요. 입출고 관리에서 먼저 지워 주세요." });
       q.delProject.run(p.id);
       return send(res, 204);
+    }
+    if (pjm[2] === "/processes") {
+      if (method === "GET") return send(res, 200, processList(p.id));
+      if (method === "POST") {
+        q.addProcess.run(p.id, ...processFields(await readJson(req), null), p.id);
+        return send(res, 201, processList(p.id));
+      }
+      return send(res, 405, { error: "Method not allowed" });
     }
     if (pjm[2] === "/items" && method === "POST") {
       const b = await readJson(req);
@@ -1853,6 +1879,22 @@ async function api(req, res, path) {
       if (q.ledgersUnderItem.get(i.id).n) return send(res, 409, { error: "이 묶음에 입출고 현황이 있어요. 입출고 관리에서 먼저 지워 주세요." });
       q.delProjectItem.run(i.id); // 묶음이면 안의 것도 함께
       return send(res, 200, projectDetail(p, user));
+    }
+    return send(res, 405, { error: "Method not allowed" });
+  }
+
+  const prm = path.match(/^\/api\/project-processes\/(\d+)$/);
+  if (prm) {
+    const r = q.process.get(Number(prm[1]));
+    const p = r && q.project.get(r.project_id);
+    if (!p || !projectAllowed(user, p)) throw notFound("프로세스");
+    if (method === "PATCH") {
+      q.setProcess.run(...processFields(await readJson(req), r), r.id);
+      return send(res, 200, processList(p.id));
+    }
+    if (method === "DELETE") {
+      q.delProcess.run(r.id);
+      return send(res, 200, processList(p.id));
     }
     return send(res, 405, { error: "Method not allowed" });
   }

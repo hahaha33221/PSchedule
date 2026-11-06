@@ -405,6 +405,25 @@ function addUnitColumns(db) {
       qty       INTEGER NOT NULL,
       PRIMARY KEY (move_id, option_id)
     );
+    -- 프로젝트 상세 프로세스: 구분 > 단계 > 세부 업무, 진행 상세·산출물, 시작일·예정일, 상태
+    CREATE TABLE IF NOT EXISTS project_processes (
+      id         INTEGER PRIMARY KEY,
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      section    TEXT NOT NULL DEFAULT '',
+      phase      TEXT NOT NULL DEFAULT '',
+      task       TEXT NOT NULL,
+      detail     TEXT NOT NULL DEFAULT '',
+      output     TEXT NOT NULL DEFAULT '',
+      label      TEXT NOT NULL DEFAULT '',
+      start_date TEXT,
+      due_date   TEXT,
+      status     TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'doing', 'done', 'hold')),
+      note       TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS project_processes_project ON project_processes (project_id, sort_order);
     -- 봉사자 일정(전체 또는 개인 지정)·기본 교육과 이수 기록. 등록·수정은 관리자만
     CREATE TABLE IF NOT EXISTS vol_schedules (
       id         INTEGER PRIMARY KEY,

@@ -1428,3 +1428,46 @@ button.mgroup__head:hover { color: var(--ink); }
   .vol-cal__chips, .vol-cal__more { display: none; }
   .vol-cal__dots { display: flex; }
 }
+
+/* 상세 프로세스 */
+.pj-tabs { align-self: flex-start; }
+.proc-sec { padding: 0; overflow: hidden; }
+.proc-sec__head { display: flex; align-items: center; gap: 8px; padding: 12px 14px; flex-wrap: wrap; }
+.proc-sec__add { margin-left: auto; }
+.proc-table td { vertical-align: top; font-size: 13.5px; }
+.proc-table th:nth-child(4), .proc-table td:nth-child(4) { min-width: 130px; }
+.proc-table td:nth-child(3) { min-width: 180px; }
+.proc-phase { font-weight: 700; white-space: nowrap; }
+.proc-task { min-width: 110px; }
+.proc-note { display: block; margin-top: 2px; }
+.proc-late { color: var(--danger); font-weight: 600; }
+.proc-table tr.is-done td:not(:last-child) { color: var(--muted); }
+.proc-next { white-space: nowrap; }
+.proc-st--doing { color: var(--primary); }
+.proc-st--done { color: var(--c1); }
+.proc-st--hold { color: var(--muted); }
+.gantt { padding: 0; overflow-x: auto; max-height: 72vh; overflow-y: auto; }
+.gantt__row { display: flex; width: max-content; min-width: 100%; border-top: 1px solid var(--line-2); }
+.gantt__row--head { position: sticky; top: 0; z-index: 3; border-top: 0; background: var(--surface-2); }
+.gantt__row--sec { background: var(--surface-2); }
+.gantt__name { position: sticky; left: 0; z-index: 2; flex: none; display: flex; flex-direction: column; justify-content: center; gap: 1px; width: 210px; min-height: 36px; padding: 4px 10px; border: 0; border-right: 1px solid var(--line); background: var(--surface); color: var(--ink); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
+.gantt__name span, .gantt__name small { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.gantt__name small { font-size: 11px; }
+button.gantt__name:hover { background: var(--surface-2); }
+.gantt__name--head, .gantt__name--sec { background: var(--surface-2); font-weight: 700; cursor: default; }
+.gantt__track { position: relative; flex: none; min-height: 36px; background-image: linear-gradient(to right, var(--line-2) 1px, transparent 1px); background-size: 24px 100%; }
+.gantt__month { position: absolute; top: 10px; padding-left: 4px; border-left: 1px solid var(--line); font-size: 11.5px; font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+.gantt__today { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); opacity: .55; z-index: 1; }
+.gantt__bar { position: absolute; top: 11px; height: 14px; padding: 0; border: 0; border-radius: 4px; cursor: pointer; }
+.gantt__label { position: absolute; top: 10px; font-size: 11px; color: var(--ink-2); white-space: nowrap; pointer-events: none; }
+.proc-bar--done { background: var(--c1); }
+.proc-bar--doing { background: var(--primary); }
+.proc-bar--todo { background: color-mix(in srgb, var(--primary) 35%, var(--surface)); }
+.proc-bar--hold { background: var(--muted); }
+.proc-bar--late { background: var(--danger); }
+.gantt__legend { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.gantt__legend span { display: inline-flex; align-items: center; gap: 5px; }
+.gantt__legend i { width: 14px; height: 8px; border-radius: 3px; }
+@media (max-width: 640px) {
+  .gantt__name { width: 130px; padding: 4px 8px; }
+}
