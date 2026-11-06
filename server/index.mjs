@@ -1065,7 +1065,10 @@ function volLedgerProject(l) {
 }
 const volItemOut = (i, shown) => ({ id: i.id, parentId: shown.has(i.parent_id) ? i.parent_id : null, kind: i.kind, name: i.name, status: i.status, dueDate: i.due_date, note: i.note });
 const volScheduleOut = (s) => ({ id: s.id, title: s.title, date: s.date, startTime: s.start_time, endTime: s.end_time, place: s.place, note: s.note });
-const volScheduleAdminOut = (s) => ({ ...volScheduleOut(s), audience: s.audience, userIds: q.volScheduleUsers.all(s.id).map((x) => x.user_id) });
+const volScheduleAdminOut = (s) => {
+  const by = s.created_by ? q.userById.get(s.created_by) : null;
+  return { ...volScheduleOut(s), audience: s.audience, userIds: q.volScheduleUsers.all(s.id).map((x) => x.user_id), enteredBy: by?.name || "", byVolunteer: !!by?.volunteer };
+};
 const volTrainingOut = (t) => ({ id: t.id, title: t.title, body: t.body, date: t.date, startTime: t.start_time, place: t.place, link: t.link });
 function volScheduleFields(b) {
   const title = text(b.title, 120, "제목", true);
@@ -1222,7 +1225,7 @@ async function api(req, res, path) {
     if (path === "/api/volunteer/home" && method === "GET") {
       const done = new Map(q.volDoneOfUser.all(user.id).map((d) => [d.training_id, d.done_at]));
       return send(res, 200, {
-        schedules: q.volSchedulesFor.all(user.id).map(volScheduleOut),
+        schedules: q.volSchedulesFor.all(user.id).map((s) => ({ ...volScheduleOut(s), mine: s.created_by === user.id, shared: s.audience === "all" })),
         trainings: q.volTrainings.all().map((t) => ({ ...volTrainingOut(t), done: done.has(t.id), doneAt: done.get(t.id) || null }))
       });
     }
@@ -1233,6 +1236,31 @@ async function api(req, res, path) {
       const shown = p && volItems(p);
       if (!shown?.items.length) throw notFound("프로젝트");
       return send(res, 200, { project: volProjectSummary(p), items: shown.items.map((i) => volItemOut(i, shown.shown)) });
+    }
+    // 일정: 봉사자가 직접 입력 (자기에게만 보임), 고치기·지우기는 자기가 입력한 일정만
+    if (path === "/api/volunteer/schedules" && method === "POST") {
+      const b = await readJson(req);
+      const { fields } = volScheduleFields({ ...b, audience: "some", userIds: [user.id] });
+      const id = inTx(() => {
+        const id = Number(q.addVolSchedule.run(...fields, user.id).lastInsertRowid);
+        q.addVolScheduleUser.run(id, user.id);
+        return id;
+      });
+      return send(res, 201, { schedule: volScheduleOut(q.volSchedule.get(id)) });
+    }
+    const vsem = path.match(/^\/api\/volunteer\/schedules\/(\d+)$/);
+    if (vsem) {
+      const s = q.volSchedule.get(Number(vsem[1]));
+      if (!s) throw notFound("일정");
+      if (s.created_by !== user.id) return send(res, 403, { error: "직접 입력한 일정만 고칠 수 있어요." });
+      if (method === "PATCH") {
+        // 대상은 그대로 (관리자가 전체로 바꿨으면 유지)
+        const { fields } = volScheduleFields({ ...(await readJson(req)), audience: s.audience, userIds: q.volScheduleUsers.all(s.id).map((x) => x.user_id) });
+        q.setVolSchedule.run(...fields, s.id);
+        return send(res, 200, { schedule: volScheduleOut(q.volSchedule.get(s.id)) });
+      }
+      if (method === "DELETE") { q.delVolSchedule.run(s.id); return send(res, 204); }
+      return send(res, 405, { error: "Method not allowed" });
     }
     // 입출고: 묵주 묶음 대장에 기록 입력. 대장·품목은 못 바꾸고, 고치기·지우기는 자기가 입력한 기록만
     if (path === "/api/volunteer/stock" && method === "GET") {

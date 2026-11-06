@@ -1349,6 +1349,8 @@ button.mgroup__head:hover { color: var(--ink); }
   --warn: #d9480f;
   --shadow: 0 1px 2px rgba(60, 50, 0, .06), 0 2px 10px rgba(60, 50, 0, .06);
   --shadow-lg: 0 12px 40px rgba(60, 50, 0, .18);
+  --c0: #2f4fc4; --c0-soft: #e7edff;
+  --c2: #a85f00; --c2-soft: #ffe7bf;
   --vol-accent: #7a5c00;
   --vol-bar-ink: #2b2400;
 }
@@ -1404,4 +1406,25 @@ button.mgroup__head:hover { color: var(--ink); }
 .shell--vol .side__account { margin-top: auto; }
 @media (max-width: 900px) {
   .vol__main { padding: 18px 16px 40px; }
+}
+
+/* 봉사자 일정 달력 */
+.vol-cal .cal-day { min-height: 92px; }
+.vol-chipline { display: block; padding: 1px 5px; border-radius: 5px; background: var(--c-soft); color: var(--c); font-size: 11.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.vol-cal__more { padding-left: 4px; font-size: 11px; }
+.vol-cal__dots { display: none; gap: 3px; justify-content: center; }
+.vol-cal__dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--c); }
+.vol-cal__legend { gap: 6px; }
+.vol-legend { padding: 1px 8px; border-radius: 999px; background: var(--c-soft); color: var(--c); font-size: 12px; font-weight: 600; }
+.vol-dayrow { display: flex; align-items: flex-start; gap: 10px; padding: 10px 6px; border-top: 1px solid var(--line-2); border-radius: 8px; }
+.vol-dayrow:first-child { border-top: 0; }
+.vol-dayrow.is-mine { cursor: pointer; }
+.vol-dayrow.is-mine:hover { background: var(--surface-2); }
+.vol-dayrow__mark { flex: none; width: 8px; height: 8px; margin-top: 6px; border-radius: 50%; background: var(--c); }
+.vol-dayrow .vol-sched__what { flex: 1; }
+.vol-dayrow__edit { flex: none; }
+@media (max-width: 640px) {
+  .vol-cal .cal-day { min-height: 56px; align-items: center; }
+  .vol-cal__chips, .vol-cal__more { display: none; }
+  .vol-cal__dots { display: flex; }
 }

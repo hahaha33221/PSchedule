@@ -4344,13 +4344,110 @@
       ])
     ];
   }
+  // 봉사자 일정: 달력 + 고른 날의 일정. 직접 입력한 일정만 고칠 수 있음
+  const volCal = { month: "", sel: "" };
+  function volScheduleDialog(s, date) {
+    const err = errorLine();
+    const title = h("input", { value: s?.title || "", maxlength: "120", autofocus: true, placeholder: "예: 포장 봉사" });
+    const day = h("input", { type: "date", value: s?.date || date || today() });
+    const start = h("input", { type: "time", value: s?.startTime || "" });
+    const end = h("input", { type: "time", value: s?.endTime || "" });
+    const place = h("input", { value: s?.place || "", maxlength: "120" });
+    const note = h("textarea", { rows: "3", maxlength: "1000" }, s?.note || "");
+    const ok = h("button", { class: "btn btn--primary", type: "submit", text: s ? "저장" : "추가" });
+    const form = h("form", { class: "stack", novalidate: true }, [
+      field("제목", title),
+      field("날짜", day),
+      h("div", { class: "row2" }, [field("시작 (선택)", start), field("끝 (선택)", end)]),
+      field("장소 (선택)", place), field("메모 (선택)", note),
+      s ? null : h("p", { class: "muted small", text: "내 일정으로 저장돼요. 다른 봉사자에게는 보이지 않고, 관리자는 볼 수 있어요." }),
+      err,
+      h("div", { class: "actions" }, [
+        s ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
+          if (!confirm(`'${s.title}' 일정을 지울까요?`)) return;
+          await act(() => api(`/volunteer/schedules/${s.id}`, { method: "DELETE" }));
+          closeDialog(); render();
+        } }) : null,
+        h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok
+      ])
+    ]);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      busy(ok, async () => {
+        try {
+          await api(s ? `/volunteer/schedules/${s.id}` : "/volunteer/schedules", { method: s ? "PATCH" : "POST", body: { title: title.value, date: day.value, startTime: start.value, endTime: end.value, place: place.value, note: note.value } });
+          volCal.sel = day.value; volCal.month = day.value.slice(0, 7);
+          closeDialog(); render();
+        } catch (ex) { showError(err, ex.message); }
+      });
+    });
+    openDialog(s ? "일정 고치기" : "일정 추가", form);
+  }
   function volSchedules(list) {
-    const up = list.filter((s) => s.date >= today());
-    const past = list.filter((s) => s.date < today()).reverse();
+    if (!volCal.sel) volCal.sel = today();
+    if (!volCal.month) volCal.month = volCal.sel.slice(0, 7);
+    const box = h("div", { class: "stack" });
+    const color = (s) => (s.mine ? "c2" : "c0");
+    const draw = () => {
+      const [y, m] = volCal.month.split("-").map(Number);
+      const shift = (n) => { const d = new Date(y, m - 1 + n, 1); volCal.month = ymd(d).slice(0, 7); draw(); };
+      const first = new Date(y, m - 1, 1);
+      const cur = new Date(y, m - 1, 1 - first.getDay());
+      const grid = h("div", { class: "cal-grid vol-cal", role: "grid" }, h("div", { class: "cal-row cal-row--head", role: "row" }, WEEKDAYS.map((w, i) => h("div", { class: "cal-wd" + (i === 0 ? " is-sun" : i === 6 ? " is-sat" : ""), role: "columnheader", text: w }))));
+      do {
+        const row = h("div", { class: "cal-row", role: "row" });
+        for (let i = 0; i < 7; i++) {
+          const key = ymd(cur);
+          const rows = list.filter((s) => s.date === key);
+          const pick = () => { volCal.sel = key; if (key.slice(0, 7) !== volCal.month) volCal.month = key.slice(0, 7); draw(); };
+          row.append(h("div", {
+            class: "cal-day" + (i === 0 ? " is-sun" : i === 6 ? " is-sat" : "") + (key.slice(0, 7) !== volCal.month ? " is-out" : "") + (key === today() ? " is-today" : "") + (key === volCal.sel ? " is-peeked" : ""),
+            role: "gridcell", tabindex: "0", "aria-label": `${volDay(key)}, 일정 ${rows.length}개`, "aria-selected": String(key === volCal.sel), onclick: pick, onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } }
+          }, [
+            h("span", { class: "cal-num", text: String(cur.getDate()) }),
+            h("div", { class: "cal-chips vol-cal__chips" }, rows.slice(0, 3).map((s) => h("span", { class: `vol-chipline ${color(s)}`, title: s.title, text: `${s.startTime ? `${s.startTime} ` : ""}${s.title}` }))),
+            rows.length > 3 ? h("span", { class: "muted vol-cal__more", text: `+${rows.length - 3}` }) : null,
+            rows.length ? h("span", { class: "vol-cal__dots", "aria-hidden": "true" }, rows.slice(0, 3).map((s) => h("i", { class: color(s) }))) : null
+          ]));
+          cur.setDate(cur.getDate() + 1);
+        }
+        grid.append(row);
+      } while (cur.getMonth() === m - 1 && cur.getFullYear() === y);
+      const dayRows = list.filter((s) => s.date === volCal.sel);
+      fill(box,
+        h("section", { class: "card cal-card" }, [
+          h("div", { class: "cal-head" }, [
+            h("div", { class: "cal-nav" }, [
+              h("button", { class: "icon-btn", type: "button", "aria-label": "이전 달", html: ICON.left, onclick: () => shift(-1) }),
+              h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "오늘", onclick: () => { volCal.sel = today(); volCal.month = volCal.sel.slice(0, 7); draw(); } }),
+              h("button", { class: "icon-btn", type: "button", "aria-label": "다음 달", html: ICON.right, onclick: () => shift(1) })
+            ]),
+            h("h2", { class: "cal-title", text: `${y}년 ${m}월` }),
+            h("div", { class: "cal-tools vol-cal__legend" }, [h("span", { class: "vol-legend c2", text: "내 일정" }), h("span", { class: "vol-legend c0", text: "안내받은 일정" })])
+          ]),
+          grid
+        ]),
+        h("section", { class: "card vol__card" }, [
+          h("div", { class: "card__head" }, [
+            h("h2", { class: "card__title", text: volDay(volCal.sel) }),
+            h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => volScheduleDialog(null, volCal.sel) }, [icon("plus"), "일정 추가"])
+          ]),
+          dayRows.length ? h("ul", { class: "vol-list" }, dayRows.map((s) => h("li", s.mine ? { class: "vol-dayrow is-mine", tabindex: "0", title: "눌러서 고치기", onclick: () => volScheduleDialog(s), onkeydown: (e) => { if (e.key === "Enter") volScheduleDialog(s); } } : { class: "vol-dayrow" }, [
+            h("i", { class: `vol-dayrow__mark ${color(s)}` }),
+            h("div", { class: "vol-sched__what" }, [
+              h("strong", { text: s.title }),
+              [volTime(s), s.place].some(Boolean) ? h("span", { class: "muted small", text: [volTime(s), s.place].filter(Boolean).join(" · ") }) : null,
+              s.note ? h("p", { class: "vol-pre small", text: s.note }) : null
+            ]),
+            s.mine ? h("span", { class: "muted small vol-dayrow__edit", text: "고치기" }) : null
+          ]))) : h("p", { class: "muted", text: "이 날은 일정이 없어요." })
+        ])
+      );
+    };
+    draw();
     return [
-      h("h1", { class: "vol__hello", text: "일정" }),
-      up.length ? h("ul", { class: "card vol__card vol-list" }, up.map(volSchedRow)) : h("div", { class: "card empty", text: "다가오는 일정이 없어요." }),
-      past.length ? h("details", { class: "vol-past" }, [h("summary", { text: `지난 일정 ${past.length}개` }), h("ul", { class: "card vol__card vol-list" }, past.map(volSchedRow))]) : null
+      h("div", { class: "page-head" }, [h("h1", { class: "vol__hello", text: "일정" })]),
+      box
     ];
   }
   function volTrainings(list) {
@@ -4485,10 +4582,11 @@
     const rowAttrs = (fn) => ({ class: "stock-row", tabindex: "0", onclick: fn, onkeydown: (e) => { if (e.key === "Enter") fn(); } });
     const draw = () => {
       const scheduleView = schedules.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
-        h("thead", {}, h("tr", {}, ["날짜", "시간", "제목", "장소", "대상"].map((x) => h("th", { text: x })))),
+        h("thead", {}, h("tr", {}, ["날짜", "시간", "제목", "장소", "대상", "입력자"].map((x) => h("th", { text: x })))),
         h("tbody", {}, schedules.map((s) => h("tr", rowAttrs(() => scheduleDialog(s)), [
           h("td", { class: "nowrap", text: volDay(s.date) }), h("td", { class: "nowrap", text: volTime(s) || "-" }), h("td", { text: s.title }), h("td", { text: s.place || "-" }),
-          h("td", { text: s.audience === "all" ? "전체" : s.userIds.map((id) => vols.find((u) => u.id === id)?.name).filter(Boolean).join(", ") || "지정 없음" })
+          h("td", { text: s.audience === "all" ? "전체" : s.userIds.map((id) => vols.find((u) => u.id === id)?.name).filter(Boolean).join(", ") || "지정 없음" }),
+          h("td", { class: "nowrap" }, s.byVolunteer ? [s.enteredBy, " ", h("span", { class: "stock-tag", text: "봉사자" })] : s.enteredBy || "-")
         ])))
       ])) : h("div", { class: "card empty", text: "아직 등록한 일정이 없어요." });
       const trainingView = trainings.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [

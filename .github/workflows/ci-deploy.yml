@@ -366,6 +366,22 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/admin/vol-stock-moves)" = 403
           curl -fs -H "$VH" -XDELETE $B/volunteer/stock-moves/$VM >/dev/null
           curl -fs -H "$H" -XDELETE $B/stock/$VL >/dev/null; curl -fs -H "$H" -XDELETE $B/stock/$HL >/dev/null
+          # 봉사자 일정 직접 입력: 본인에게만 보임, 대상은 못 고름, 자기 일정만 수정, 관리자는 입력자와 함께 봄
+          MS=$(curl -fs -H "$VH" -XPOST -d '{"title":"내가 넣은 일정","date":"2030-04-01","startTime":"10:00","audience":"all"}' $B/volunteer/schedules | node -pe 'JSON.parse(require("fs").readFileSync(0)).schedule.id')
+          curl -fs -H "$VH" $B/volunteer/home | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).schedules.find(x=>x.title==="내가 넣은 일정");if(!s||!s.mine||s.shared)process.exit(1)'
+          if curl -fs -H "$(bearer "$A9")" $B/volunteer/home | grep -q '내가 넣은 일정'; then echo "다른 봉사자의 일정이 보여요"; exit 1; fi
+          curl -fs -H "$H" $B/admin/vol-schedules | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).schedules.find(x=>x.title==="내가 넣은 일정");if(!s.byVolunteer||s.enteredBy!=="봉사자일"||s.audience!=="some")process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d '{"title":"x","date":"잘못"}' $B/volunteer/schedules)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d '{"title":"","date":"2030-04-01"}' $B/volunteer/schedules)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A9")" -XPATCH -d '{"title":"x","date":"2030-04-01"}' $B/volunteer/schedules/$MS)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A9")" -XDELETE $B/volunteer/schedules/$MS)" = 403
+          ALLS=$(curl -fs -H "$VH" $B/volunteer/home | node -pe 'const s=JSON.parse(require("fs").readFileSync(0)).schedules.find(x=>x.title==="전체 일정");if(s.mine||!s.shared)process.exit(1);s.id')
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPATCH -d '{"title":"x","date":"2030-04-01"}' $B/volunteer/schedules/$ALLS)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XDELETE $B/volunteer/schedules/$ALLS)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPOST -d '{"title":"x","date":"2030-04-01"}' $B/volunteer/schedules)" = 404
+          curl -fs -H "$VH" -XPATCH -d '{"title":"고친 일정","date":"2030-04-02","audience":"all"}' $B/volunteer/schedules/$MS | grep -q '고친 일정'
+          if curl -fs -H "$(bearer "$A9")" $B/volunteer/home | grep -q '고친 일정'; then echo "고치면서 전체 공개가 됐어요"; exit 1; fi
+          curl -fs -H "$VH" -XDELETE $B/volunteer/schedules/$MS >/dev/null
           # 개인 지정 봉사자를 지워도 일정이 전체 공개로 바뀌지 않음
           curl -fs -H "$H" -XDELETE $B/admin/users/$VB >/dev/null
           if curl -fs -H "$VH" $B/volunteer/home | grep -q '개인 일정'; then echo "지정 봉사자를 지우니 일정이 전체에 보여요"; exit 1; fi
