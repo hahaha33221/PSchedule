@@ -3689,7 +3689,13 @@
     let data;
     const closed = new Set();
     let statusFilter = "";
-    const tab = location.hash.split("/")[3] === "process" ? "process" : "items";
+    // 주소: #/projects/1 (구역이 있으면 구역 카드), #/projects/1/area/<구역>[/process], 구역이 없으면 #/projects/1[/process]
+    const parts = location.hash.split("/");
+    const COMMON = "-", COMMON_NAME = "프로젝트 공통";
+    const area = parts[3] === "area" ? (parts[4] === COMMON ? "" : decodeURIComponent(parts[4] || "")) : null;
+    const base = area === null ? `#/projects/${id}` : `#/projects/${id}/area/${parts[4]}`;
+    const tab = isAdmin() && (area === null ? parts[3] : parts[5]) === "process" ? "process" : "items"; // 상세 프로세스는 우선 관리자만
+    let procs = [];
     const apply = (r) => { data = r; draw(); };
     function itemDialog(item, defaults) {
       const v = item || defaults;
@@ -3700,10 +3706,15 @@
       const status = h("select", {}, PROJECT_STATUS.map(([k, label]) => h("option", { value: k, text: label })));
       status.value = item?.status || "none";
       const due = h("input", { type: "date", value: item?.dueDate || "" });
+      const isTop = item ? !item.parentId : !v.parentId;
+      const areaNames = [...new Set([...data.items.map((i) => i.area), ...procs.map((r) => r.area)].filter(Boolean))];
+      const areaInput = h("input", { value: item ? item.area || "" : area || "", maxlength: "60", list: "pj-areas", placeholder: "예: 리테일굿즈" });
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: item ? "저장" : "추가" });
       const form = h("form", { class: "stack", novalidate: true }, [
         field(isGroup ? "묶음 이름" : "항목 이름", name),
         isGroup ? null : h("div", { class: "row2" }, [field("상태", status), field("마감일", due)]),
+        isTop ? h("datalist", { id: "pj-areas" }, areaNames.map((x) => h("option", { value: x }))) : null,
+        isTop ? field("구역", areaInput, "프로젝트 첫 화면을 나누는 이름이에요. 비우면 공통") : null,
         field("메모", note), err,
         h("div", { class: "actions" }, [
           item ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
@@ -3718,7 +3729,7 @@
         e.preventDefault();
         busy(ok, async () => {
           try {
-            const body = { name: name.value, note: note.value, ...(isGroup ? {} : { status: status.value, dueDate: due.value || null }) };
+            const body = { name: name.value, note: note.value, ...(isGroup ? {} : { status: status.value, dueDate: due.value || null }), ...(isTop ? { area: areaInput.value } : {}) };
             const r = await api(item ? `/project-items/${item.id}` : `/projects/${id}/items`, { method: item ? "PATCH" : "POST", body: item ? body : { ...body, kind: v.kind, parentId: v.parentId || null } });
             closeDialog(); apply(r);
           } catch (ex) { showError(err, ex.message); }
@@ -3728,16 +3739,16 @@
     }
     function importDialog() {
       const err = errorLine();
-      const area = h("textarea", { rows: "12", autofocus: true, placeholder: "1. 순례자 키트\n* 티셔츠\n* 가방\n4-1. 묵주\n* 매듭 묵주\n※ 묶음에 붙일 메모" });
+      const paste = h("textarea", { rows: "12", autofocus: true, placeholder: "1. 순례자 키트\n* 티셔츠\n* 가방\n4-1. 묵주\n* 매듭 묵주\n※ 묶음에 붙일 메모" });
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: "넣기" });
       const form = h("form", { class: "stack", novalidate: true }, [
-        field("목록", area, "'1.' 은 묶음, '4-1.' 은 그 아래 묶음, '*' 는 항목, '※' 는 묶음 메모가 돼요. 이미 있는 항목은 그대로 두고 뒤에 더해요."), err,
+        field("목록", paste, "'1.' 은 묶음, '4-1.' 은 그 아래 묶음, '*' 는 항목, '※' 는 묶음 메모가 돼요. 이미 있는 항목은 그대로 두고 뒤에 더해요."), err,
         h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])
       ]);
       form.addEventListener("submit", (e) => {
         e.preventDefault();
         busy(ok, async () => {
-          try { const r = await api(`/projects/${id}/import`, { method: "POST", body: { text: area.value } }); closeDialog(); apply(r); }
+          try { const r = await api(`/projects/${id}/import`, { method: "POST", body: { text: paste.value, area: area || "" } }); closeDialog(); apply(r); }
           catch (ex) { showError(err, ex.message); }
         });
       });
@@ -3747,9 +3758,12 @@
     function draw() {
       const p = data.project;
       document.title = `${p.name} · ${TITLE}`;
-      const kids = (pid) => data.items.filter((i) => (i.parentId || null) === pid);
-      const inside = (g) => kids(g.id).flatMap((k) => (k.kind === "group" ? inside(k) : [k]));
+      const kids = (pid) => data.items.filter((i) => (i.parentId || null) === pid && (pid !== null || area === null || (i.area || "") === area));
+      const inside = (g) => data.items.filter((k) => k.parentId === g.id).flatMap((k) => (k.kind === "group" ? inside(k) : [k]));
       const shows = (i) => !statusFilter || i.status === statusFilter;
+      // 구역 카드: 구역이 하나라도 있으면 프로젝트 첫 화면
+      const named = [...new Set([...data.items.filter((i) => !i.parentId).map((i) => i.area), ...procs.map((r) => r.area)].filter(Boolean))];
+      if (named.length && area === null) return drawAreas(p, named, inside);
       const rows = [];
       const walk = (pid, depth) => {
         for (const i of kids(pid)) {
@@ -3785,11 +3799,11 @@
       const filter = h("select", { "aria-label": "상태로 거르기", onchange: (e) => { statusFilter = e.target.value; draw(); } }, [h("option", { value: "", text: "모든 상태" }), ...PROJECT_STATUS.map(([k, label]) => h("option", { value: k, text: label }))]);
       filter.value = statusFilter;
       setMain("projects", [
-        h("nav", { class: "muted small" }, h("a", { href: "#/projects", text: "프로젝트" })),
+        h("nav", { class: "muted small" }, area === null ? h("a", { href: "#/projects", text: "프로젝트" }) : [h("a", { href: "#/projects", text: "프로젝트" }), " › ", h("a", { href: `#/projects/${id}`, text: p.name })]),
         h("div", { class: "page-head page-head--wrap" }, [
-          h("h1", { text: p.name }),
+          h("h1", { text: area === null ? p.name : area || COMMON_NAME }),
           h("span", { class: "muted small", title: p.unitId ? unitLabel(p.unitId) : null, text: p.unitId && unitOf(p.unitId) ? unitShort(p.unitId) : "팀 없음" }),
-          h("span", { class: "page-head__end actions" }, [
+          area !== null ? null : h("span", { class: "page-head__end actions" }, [
             h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => projectDialog(p, apply) }),
             p.canDelete ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
               if (!confirm(`'${p.name}' 프로젝트와 그 안의 항목·상세 프로세스를 모두 지울까요?`)) return;
@@ -3798,9 +3812,9 @@
             } }) : null
           ])
         ]),
-        p.note ? h("p", { class: "muted pj-desc", text: p.note }) : null,
-        h("div", { class: "seg pj-tabs", role: "tablist" }, [["items", "항목"], ["process", "상세 프로세스"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "process" ? `#/projects/${id}/process` : `#/projects/${id}`) }))),
-        ...(tab === "process" ? [processPanel(id)] : [projectBar(p),
+        area === null && p.note ? h("p", { class: "muted pj-desc", text: p.note }) : null,
+        isAdmin() ? h("div", { class: "seg pj-tabs", role: "tablist" }, [["items", "항목"], ["process", "상세 프로세스"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), title: k === "process" ? "관리자만 볼 수 있어요" : null, onclick: () => go(k === "process" ? `${base}/process` : base) }, k === "process" ? [label, " ", adminBadge()] : label))) : null,
+        ...(tab === "process" ? [processPanel(id, area, () => (area === null ? p.name : `${p.name} ${area || COMMON_NAME}`))] : [area === null ? projectBar(p) : (() => { const its = kids(null).flatMap((k) => (k.kind === "group" ? inside(k) : [k])); return projectBar({ total: its.length, done: its.filter((x) => x.status === "done").length }); })(),
         h("div", { class: "filters" }, [
           filter,
           h("span", { class: "filters__end actions" }, [
@@ -3816,14 +3830,90 @@
         ])
       ]);
     }
-    page = { name: "projects", reload: async () => apply(await api(`/projects/${id}`)) };
+    // 구역 카드: 구역마다 항목·프로세스 현황
+    function drawAreas(p, named, inside) {
+      const card = (key, name) => {
+        const tops = data.items.filter((i) => !i.parentId && (i.area || "") === key);
+        const its = tops.flatMap((k) => (k.kind === "group" ? inside(k) : [k]));
+        const pr = procs.filter((r) => (r.area || "") === key);
+        const prDone = pr.filter((r) => r.status === "done").length;
+        const late = pr.filter((r) => r.dueDate && r.dueDate < today() && r.status !== "done" && r.status !== "hold").length;
+        const next = pr.filter((r) => r.dueDate && r.dueDate >= today() && r.status !== "done" && r.status !== "hold").sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0];
+        const enc = key ? encodeURIComponent(key) : COMMON;
+        return h("a", { class: "card pj-card pj-area", href: `#/projects/${id}/area/${enc}${!tops.length && pr.length ? "/process" : ""}` }, [
+          h("strong", { class: "pj-area__name", text: name }),
+          tops.length ? h("span", { class: "muted small pj-area__groups", text: tops.map((t) => t.name.split(" (")[0]).join(" · ") }) : null,
+          tops.length ? projectBar({ total: its.length, done: its.filter((x) => x.status === "done").length }) : null,
+          pr.length ? h("span", { class: "small", text: `상세 프로세스 ${prDone}/${pr.length} 완료` }) : null,
+          late ? h("span", { class: "small proc-late", text: `일정 지남 ${late}건` }) : null,
+          next ? h("span", { class: "muted small", text: `다음 ${shortDate(next.dueDate)} · ${next.label || next.task}` }) : null
+        ]);
+      };
+      const common = data.items.some((i) => !i.parentId && !i.area) || procs.some((r) => !r.area);
+      setMain("projects", [
+        h("nav", { class: "muted small" }, h("a", { href: "#/projects", text: "프로젝트" })),
+        h("div", { class: "page-head page-head--wrap" }, [
+          h("h1", { text: p.name }),
+          h("span", { class: "muted small", title: p.unitId ? unitLabel(p.unitId) : null, text: p.unitId && unitOf(p.unitId) ? unitShort(p.unitId) : "팀 없음" }),
+          h("span", { class: "page-head__end actions" }, [
+            h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "+ 묶음", onclick: () => itemDialog(null, { kind: "group" }) }),
+            h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => projectDialog(p, apply) }),
+            p.canDelete ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
+              if (!confirm(`'${p.name}' 프로젝트와 그 안의 항목·상세 프로세스를 모두 지울까요?`)) return;
+              await act(() => api(`/projects/${p.id}`, { method: "DELETE" }));
+              go("#/projects");
+            } }) : null
+          ])
+        ]),
+        p.note ? h("p", { class: "muted pj-desc", text: p.note }) : null,
+        h("div", { class: "pj-areas" }, [...named.map((n) => card(n, n)), common ? card("", COMMON_NAME) : null])
+      ]);
+    }
+    page = { name: "projects", reload: async () => { const [d, r] = await Promise.all([api(`/projects/${id}`), isAdmin() ? api(`/projects/${id}/processes`) : { processes: [] }]); procs = r.processes; apply(d); } };
     try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("projects", failed(e)); }
   }
 
   /* ---------- 상세 프로세스: 구분 > 단계 > 세부 업무, 목록과 일정표 ---------- */
   const PROC_STATUS = [["todo", "예정"], ["doing", "진행"], ["done", "완료"], ["hold", "보류"]];
   const procFilter = { section: "", status: "" };
-  function processPanel(projectId) {
+  // 받은 JPEG 페이지(캔버스)를 PDF 파일로 묶기
+  function jpegPagesToPdf(canvases, w, h) {
+    const enc = new TextEncoder();
+    const parts = [];
+    let size = 0;
+    const offsets = [];
+    const write = (x) => { const b = typeof x === "string" ? enc.encode(x) : x; parts.push(b); size += b.length; };
+    const n = canvases.length;
+    const obj = (id, fn) => { offsets[id] = size; write(`${id} 0 obj\n`); fn(); write("\nendobj\n"); };
+    write("%PDF-1.4\n");
+    obj(1, () => write("<< /Type /Catalog /Pages 2 0 R >>"));
+    obj(2, () => write(`<< /Type /Pages /Count ${n} /Kids [${canvases.map((_, i) => `${3 + i * 3} 0 R`).join(" ")}] >>`));
+    canvases.forEach((c, i) => {
+      const base = 3 + i * 3;
+      const raw = atob(c.toDataURL("image/jpeg", 0.9).split(",")[1]);
+      const img = new Uint8Array(raw.length);
+      for (let k = 0; k < raw.length; k++) img[k] = raw.charCodeAt(k);
+      const draw = `q ${w} 0 0 ${h} 0 0 cm /Im0 Do Q`;
+      obj(base, () => write(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${w} ${h}] /Resources << /XObject << /Im0 ${base + 1} 0 R >> >> /Contents ${base + 2} 0 R >>`));
+      obj(base + 1, () => { write(`<< /Type /XObject /Subtype /Image /Width ${c.width} /Height ${c.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${img.length} >>\nstream\n`); write(img); write("\nendstream"); });
+      obj(base + 2, () => write(`<< /Length ${draw.length} >>\nstream\n${draw}\nendstream`));
+    });
+    const count = 3 + n * 3;
+    const xref = size;
+    write(`xref\n0 ${count}\n0000000000 65535 f \n`);
+    for (let id = 1; id < count; id++) write(`${String(offsets[id]).padStart(10, "0")} 00000 n \n`);
+    write(`trailer\n<< /Size ${count} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+    return new Blob(parts, { type: "application/pdf" });
+  }
+  function saveBlob(blob, name) {
+    const url = URL.createObjectURL(blob);
+    const a = h("a", { href: url, download: name });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+  function processPanel(projectId, area, pdfTitle) {
     const box = h("div", { class: "stack" }, loading());
     let list = [];
     const closed = new Set();
@@ -3835,6 +3925,7 @@
     function dialog(r, preset) {
       const err = errorLine();
       const v = r || preset || {};
+      const areaInput = h("input", { value: r ? r.area || "" : area || "", maxlength: "60", list: "proc-areas" });
       const options = (id, vals) => h("datalist", { id }, vals.map((x) => h("option", { value: x })));
       const section = h("input", { value: v.section || "", maxlength: "60", list: "proc-sections", placeholder: "예: 순례자 키트" });
       const phase = h("input", { value: v.phase || "", maxlength: "60", list: "proc-phases", placeholder: "예: 디자인/기획" });
@@ -3849,11 +3940,12 @@
       const note = h("textarea", { rows: "2", maxlength: "1000" }, v.note || "");
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: r ? "저장" : "추가" });
       const form = h("form", { class: "stack", novalidate: true }, [
-        options("proc-sections", uniq(list.map((x) => x.section))), options("proc-phases", uniq(list.map((x) => x.phase))), options("proc-tasks", uniq(list.map((x) => x.task))),
+        options("proc-sections", uniq(list.map((x) => x.section))), options("proc-phases", uniq(list.map((x) => x.phase))), options("proc-tasks", uniq(list.map((x) => x.task))), options("proc-areas", uniq(list.map((x) => x.area))),
         h("div", { class: "row2" }, [field("구분", section), field("단계", phase)]),
         field("세부 업무", task), field("진행 상세", detail), field("산출물 · 과업", output),
         h("div", { class: "row2" }, [field("시작일", start), field("예정일", due)]),
         h("div", { class: "row2" }, [field("상태", status), field("일정표 표시 이름", label, "비우면 세부 업무로 보여요")]),
+        field("구역", areaInput, "비우면 프로젝트 공통이에요"),
         field("메모", note), err,
         h("div", { class: "actions" }, [
           r ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
@@ -3868,7 +3960,7 @@
         e.preventDefault();
         busy(ok, async () => {
           try {
-            const body = { section: section.value, phase: phase.value, task: task.value, detail: detail.value, output: output.value, label: label.value, startDate: start.value || null, dueDate: due.value || null, status: status.value, note: note.value };
+            const body = { section: section.value, phase: phase.value, task: task.value, detail: detail.value, output: output.value, label: label.value, startDate: start.value || null, dueDate: due.value || null, status: status.value, note: note.value, area: areaInput.value };
             list = (await api(r ? `/project-processes/${r.id}` : `/projects/${projectId}/processes`, { method: r ? "PATCH" : "POST", body })).processes;
             closeDialog(); draw();
           } catch (ex) { showError(err, ex.message); }
@@ -3911,11 +4003,36 @@
         ])) : null
       ]);
     }));
+    // WBS: 구분 > 단계 > 세부 업무 > 진행 상세, 번호와 진척률 (완료 100, 진행 50, 나머지 0 의 평균)
+    const rollup = (rows) => {
+      const dates = rows.flatMap((r) => [r.startDate, r.dueDate]).filter(Boolean).sort();
+      const score = rows.reduce((n, r) => n + (r.status === "done" ? 100 : r.status === "doing" ? 50 : 0), 0);
+      return { start: dates[0] || null, end: dates[dates.length - 1] || null, pct: rows.length ? Math.round(score / rows.length) : 0, done: rows.filter((r) => r.status === "done").length, total: rows.length, late: rows.filter(late).length };
+    };
+    const wbsTree = (groups) => groups.map((g, gi) => {
+      const code = String(gi + 1);
+      return { code, level: 0, name: g.section, rows: g.rows, ...rollup(g.rows), kids: g.phases.map((ph, pi) => {
+        const pc = `${code}.${pi + 1}`;
+        const tasks = [...new Set(ph.rows.map((r) => r.task))];
+        return { code: pc, level: 1, name: ph.phase || "단계 없음", rows: ph.rows, ...rollup(ph.rows), kids: tasks.map((t, ti) => {
+          const tc = `${pc}.${ti + 1}`;
+          const rows = ph.rows.filter((r) => r.task === t);
+          if (rows.length === 1) return { code: tc, level: 2, name: rows[0].detail || t, sub: rows[0].detail ? t : "", leaf: rows[0], rows, ...rollup(rows), kids: [] };
+          return { code: tc, level: 2, name: t, rows, ...rollup(rows), kids: rows.map((r, ri) => {
+            const repeat = r.detail && r.output && rows.filter((x) => x.detail === r.detail).length > 1; // 같은 진행 상세가 여러 줄이면 산출물까지 이름에
+            return { code: `${tc}.${ri + 1}`, level: 3, name: repeat ? `${r.detail} · ${r.output}` : r.detail || r.output || t, sub: !repeat && r.detail && r.output ? r.output : "", leaf: r, rows: [r], ...rollup([r]), kids: [] };
+          }) };
+        }) };
+      }) };
+    });
+    const flatten = (nodes, respectClosed) => nodes.flatMap((n) => [n, ...(respectClosed && closed.has(`w${n.code}`) ? [] : flatten(n.kids, respectClosed))]);
+    const barKind = (n) => (n.leaf ? (late(n.leaf) ? "late" : n.leaf.status) : n.late ? "late" : n.pct === 100 ? "done" : "doing");
     const DAY = 86400000, WEEK_W = 24;
-    const chartView = (groups) => {
-      const dated = list.filter((r) => r.startDate || r.dueDate);
-      if (!dated.length) return h("div", { class: "card empty", text: "날짜가 있는 프로세스가 아직 없어요." });
-      const dates = dated.flatMap((r) => [r.startDate, r.dueDate]).filter(Boolean).sort();
+    const wbsView = (groups) => {
+      const tree = wbsTree(groups);
+      const all = flatten(tree, false);
+      const dates = all.flatMap((n) => [n.start, n.end]).filter(Boolean).sort();
+      if (!dates.length) return h("div", { class: "card empty", text: "날짜가 있는 프로세스가 아직 없어요." });
       const mondayOf = (s) => { const d = parseYmd(s); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; };
       const from = mondayOf(dates[0]);
       const to = mondayOf(dates[dates.length - 1]); to.setDate(to.getDate() + 7);
@@ -3923,30 +4040,35 @@
       const width = (Math.round((to - from) / DAY) / 7) * WEEK_W;
       const months = [];
       for (const d = new Date(from.getFullYear(), from.getMonth(), 1); d < to; d.setMonth(d.getMonth() + 1)) {
-        const left = Math.max(0, dayX(ymd(d)));
-        months.push(h("span", { class: "gantt__month", style: `left:${left}px`, text: d.getMonth() === 0 || !months.length ? `${String(d.getFullYear()).slice(2)}년 ${d.getMonth() + 1}월` : `${d.getMonth() + 1}월` }));
+        months.push(h("span", { class: "gantt__month", style: `left:${Math.max(0, dayX(ymd(d)))}px`, text: d.getMonth() === 0 || !months.length ? `${String(d.getFullYear()).slice(2)}년 ${d.getMonth() + 1}월` : `${d.getMonth() + 1}월` }));
       }
       const t = today();
       const todayLine = () => (t >= ymd(from) && t < ymd(to) ? h("i", { class: "gantt__today", style: `left:${dayX(t)}px` }) : null);
-      const row = (r) => {
-        const s = r.startDate || r.dueDate, e = r.dueDate || r.startDate;
-        const left = s ? dayX(s) : 0;
-        const w = s ? Math.max(8, dayX(e) - left + WEEK_W / 7) : 0;
-        return h("div", { class: "gantt__row", role: "row" }, [
-          h("button", { class: "gantt__name", type: "button", title: [r.task, r.detail, whenFull(r)].filter(Boolean).join(" · "), onclick: () => dialog(r) }, [h("span", { text: r.detail || r.task }), h("small", { class: "muted", text: r.task })]),
+      const period = (n) => (n.start ? (n.start === n.end ? shortDate(n.start) : `${shortDate(n.start)}~${shortDate(n.end)}`) : "-");
+      const row = (n) => {
+        const open = !closed.has(`w${n.code}`);
+        const left = n.start ? dayX(n.start) : 0;
+        const w = n.start ? Math.max(8, dayX(n.end) - left + WEEK_W / 7) : 0;
+        const click = n.leaf ? () => dialog(n.leaf) : () => { if (open) closed.add(`w${n.code}`); else closed.delete(`w${n.code}`); draw(); };
+        return h("div", { class: `gantt__row wbs-row wbs-row--${n.level}`, role: "row" }, [
+          h("button", { class: "gantt__name wbs__name", type: "button", style: `padding-left:${8 + n.level * 12}px`, title: [n.name, n.sub, period(n)].filter(Boolean).join(" · "), "aria-expanded": n.leaf ? null : String(open), onclick: click }, [
+            n.leaf ? h("span", { class: "wbs__chev" }) : h("span", { class: "wbs__chev" + (open ? " is-open" : ""), html: ICON.right }),
+            h("span", { class: "wbs__code", text: n.code }),
+            h("span", { class: "wbs__label" }, [h("span", { text: n.name }), n.sub ? h("small", { class: "muted", text: n.sub }) : null]),
+            h("span", { class: "wbs__pct" + (n.late ? " proc-late" : ""), text: `${n.pct}%` })
+          ]),
           h("div", { class: "gantt__track", style: `width:${width}px` }, [
             todayLine(),
-            s ? h("button", { class: `gantt__bar proc-bar--${late(r) ? "late" : r.status}`, type: "button", style: `left:${left}px;width:${w}px`, title: `${r.detail || r.task} (${whenFull(r)})`, "aria-label": `${r.detail || r.task} ${whenFull(r)}`, onclick: () => dialog(r) }) : null,
-            s ? h("span", { class: "gantt__label", style: `left:${left + w + 4}px`, text: r.label || r.task }) : null
+            n.start ? (n.leaf
+              ? h("button", { class: `gantt__bar proc-bar--${barKind(n)}`, type: "button", style: `left:${left}px;width:${w}px`, "aria-label": `${n.name} ${period(n)}`, title: `${n.name} (${period(n)})`, onclick: click })
+              : h("div", { class: "wbs__sum", style: `left:${left}px;width:${w}px`, title: `${n.name} ${n.done}/${n.total} 완료 (${n.pct}%)` }, h("i", { class: `proc-bar--${barKind(n)}`, style: `width:${n.pct}%` }))) : null,
+            n.start && n.leaf ? h("span", { class: "gantt__label", style: `left:${left + w + 4}px`, text: n.leaf.label || period(n) }) : null
           ])
         ]);
       };
       const scroller = h("div", { class: "card gantt", role: "table" }, [
-        h("div", { class: "gantt__row gantt__row--head" }, [h("div", { class: "gantt__name gantt__name--head", text: "프로세스" }), h("div", { class: "gantt__track", style: `width:${width}px` }, [...months, todayLine()])]),
-        ...groups.flatMap((g) => [
-          h("div", { class: "gantt__row gantt__row--sec" }, [h("div", { class: "gantt__name gantt__name--sec", text: g.section }), h("div", { class: "gantt__track", style: `width:${width}px` }, todayLine())]),
-          ...g.rows.map(row)
-        ])
+        h("div", { class: "gantt__row gantt__row--head" }, [h("div", { class: "gantt__name gantt__name--head wbs__name" }, [h("span", { class: "wbs__chev" }), h("span", { class: "wbs__code", text: "WBS" }), h("span", { class: "wbs__label", text: "작업" }), h("span", { class: "wbs__pct", text: "진척" })]), h("div", { class: "gantt__track", style: `width:${width}px` }, [...months, todayLine()])]),
+        ...flatten(tree, true).map(row)
       ]);
       requestAnimationFrame(() => { if (t >= ymd(from) && t < ymd(to)) scroller.scrollLeft = Math.max(0, dayX(t) - 120); });
       return h("div", { class: "stack stack--sm" }, [
@@ -3954,30 +4076,115 @@
         h("div", { class: "gantt__legend muted small" }, [["done", "완료"], ["doing", "진행"], ["todo", "예정"], ["hold", "보류"], ["late", "일정 지남"]].map(([k, t2]) => h("span", {}, [h("i", { class: `proc-bar--${k}` }), t2])))
       ]);
     };
+    // 현재 시점 PDF: 라이브러리 없이 캔버스로 그려 JPEG 페이지로 묶음 (한글 글꼴 포함 걱정 없음, 글자 선택은 안 됨)
+    async function downloadPdf(btn, rows) {
+      await busy(btn, async () => {
+        try {
+          if (document.fonts?.ready) await document.fonts.ready;
+          const tree = wbsTree(grouped(rows));
+          const lines = flatten(tree, false);
+          const now = new Date();
+          const stamp = `${ymd(now)} ${pad(now.getHours())}:${pad(now.getMinutes())}`;
+          const sum = rollup(rows);
+          const title = `${pdfTitle()} 상세 프로세스 (WBS)`;
+          const W = 842, H = 595, SCALE = 2.4, M = 24, ROW = 15, TOP = 86, BOTTOM = 26;
+          const X = { code: M, name: M + 48, period: M + 258, pct: M + 338, st: M + 374, time: M + 412 };
+          const timeW = W - M - X.time;
+          const dates = lines.flatMap((n) => [n.start, n.end]).filter(Boolean).sort();
+          const t0 = parseYmd(dates[0] || today()); t0.setDate(1);
+          const t1 = parseYmd(dates[dates.length - 1] || today()); t1.setMonth(t1.getMonth() + 1, 1);
+          const px = (s) => X.time + ((parseYmd(s) - t0) / (t1 - t0)) * timeW;
+          const FONT = '"Pretendard Variable", Pretendard, -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif';
+          const COLOR = { done: "#2f9e44", doing: "#3b63f3", todo: "#b4c3f8", hold: "#8a90a2", late: "#e03131" };
+          const perPage = Math.floor((H - TOP - BOTTOM) / ROW);
+          const pageN = Math.max(1, Math.ceil(lines.length / perPage));
+          const statusName = (n) => (n.leaf ? PROC_STATUS.find(([k]) => k === n.leaf.status)?.[1] || "" : `${n.done}/${n.total}`);
+          const pages = [];
+          for (let p = 0; p < pageN; p++) {
+            const c = document.createElement("canvas");
+            c.width = W * SCALE; c.height = H * SCALE;
+            const g = c.getContext("2d");
+            g.scale(SCALE, SCALE);
+            g.fillStyle = "#fff"; g.fillRect(0, 0, W, H);
+            const text = (s, x, y, size, weight, color, maxW, align) => {
+              g.font = `${weight || 400} ${size}px ${FONT}`; g.fillStyle = color || "#171a23"; g.textAlign = align || "left"; g.textBaseline = "middle";
+              let v = String(s);
+              if (maxW && g.measureText(v).width > maxW) { while (v.length > 1 && g.measureText(`${v}…`).width > maxW) v = v.slice(0, -1); v += "…"; }
+              g.fillText(v, x, y);
+            };
+            text(title, M, 30, 15, 700);
+            text(`기준 시점 ${stamp}`, W - M, 26, 9.5, 600, "#4a5061", 0, "right");
+            text(`진척 ${sum.pct}% · 완료 ${sum.done}/${sum.total} · 일정 지남 ${sum.late}건`, W - M, 39, 9.5, 400, sum.late ? "#e03131" : "#4a5061", 0, "right");
+            const hy = TOP - 16;
+            g.fillStyle = "#f1f3f8"; g.fillRect(M, hy, W - 2 * M, 16);
+            [["WBS", X.code + 3], ["작업", X.name], ["기간", X.period], ["진척", X.pct], ["상태", X.st]].forEach(([s, x]) => text(s, x, hy + 8, 8, 700, "#4a5061"));
+            // 달 눈금
+            const body = TOP + ROW * Math.min(perPage, lines.length - p * perPage);
+            for (const d = new Date(t0); d < t1; d.setMonth(d.getMonth() + 1)) {
+              const x = px(ymd(d));
+              g.strokeStyle = "#e3e6ee"; g.lineWidth = 0.5; g.beginPath(); g.moveTo(x, hy); g.lineTo(x, body); g.stroke();
+              if ((t1 - t0) / DAY < 500 || d.getMonth() % 2 === 0) text(d.getMonth() === 0 ? `${String(d.getFullYear()).slice(2)}.1` : `${d.getMonth() + 1}`, x + 2, hy + 8, 7, 600, "#4a5061");
+            }
+            lines.slice(p * perPage, (p + 1) * perPage).forEach((n, i) => {
+              const y = TOP + i * ROW, mid = y + ROW / 2;
+              if (n.level === 0) { g.fillStyle = "#e8ebf2"; g.fillRect(M, y, X.time - M, ROW); }
+              else if (n.level === 1) { g.fillStyle = "#f1f3f8"; g.fillRect(M, y, X.time - M, ROW); }
+              const weight = n.level < 2 ? 700 : n.leaf ? 400 : 600;
+              text(n.code, X.code + 3, mid, 7.5, weight, "#4a5061");
+              text(n.name, X.name + n.level * 7, mid, 8, weight, "#171a23", X.period - X.name - n.level * 7 - 4);
+              text(n.start ? (n.start === n.end ? shortDate(n.start) : `${shortDate(n.start)}~${shortDate(n.end)}`) : "-", X.period, mid, 7.5, 400, n.leaf && late(n.leaf) ? "#e03131" : "#4a5061");
+              text(`${n.pct}%`, X.pct, mid, 7.5, 600, n.late ? "#e03131" : "#171a23");
+              text(statusName(n), X.st, mid, 7.5, 400, n.leaf && late(n.leaf) ? "#e03131" : "#4a5061");
+              g.strokeStyle = "#eef0f5"; g.lineWidth = 0.4; g.beginPath(); g.moveTo(M, y + ROW); g.lineTo(W - M, y + ROW); g.stroke();
+              if (n.start) {
+                const a = px(n.start), b = Math.max(a + 2, px(ymd(new Date(parseYmd(n.end).getTime() + DAY))));
+                const kind = barKind(n);
+                if (n.leaf) { g.fillStyle = COLOR[kind]; g.fillRect(a, y + 4, b - a, ROW - 8); }
+                else { g.fillStyle = "#d6dbe6"; g.fillRect(a, y + 5.5, b - a, ROW - 11); g.fillStyle = COLOR[kind]; g.fillRect(a, y + 5.5, (b - a) * (n.pct / 100), ROW - 11); }
+              }
+            });
+            const today0 = today();
+            if (dates.length && today0 >= ymd(t0) && today0 < ymd(t1)) { const x = px(today0); g.strokeStyle = "#e03131"; g.lineWidth = 0.9; g.beginPath(); g.moveTo(x, hy); g.lineTo(x, body); g.stroke(); }
+            // 범례·쪽 번호
+            let lx = M;
+            [["done", "완료"], ["doing", "진행"], ["todo", "예정"], ["hold", "보류"], ["late", "일정 지남"]].forEach(([k, s]) => { g.fillStyle = COLOR[k]; g.fillRect(lx, H - 15, 10, 5); text(s, lx + 13, H - 12.5, 7, 400, "#4a5061"); lx += 48; });
+            text("진척: 완료 100, 진행 50, 그 외 0 의 평균", lx + 4, H - 12.5, 7, 400, "#8a90a2");
+            text(`${TITLE} · ${p + 1} / ${pageN}`, W - M, H - 12.5, 7.5, 400, "#8a90a2", 0, "right");
+            pages.push(c);
+          }
+          saveBlob(jpegPagesToPdf(pages, W, H), `${`${pdfTitle()}_상세프로세스_${ymd(now).replaceAll("-", "")}`.replace(/[\\/:*?"<>|\s&]+/g, "_")}.pdf`);
+          toast(`기준 시점 ${stamp} PDF를 만들었어요.`);
+        } catch (ex) { toast(`PDF를 만들지 못했어요: ${ex.message}`); }
+      });
+    }
     function draw() {
-      const view = store.get("ps.procView", "list") === "chart" ? "chart" : "list";
-      const sections = uniq(list.map((r) => r.section));
+      const view = store.get("ps.procView", "wbs") === "list" ? "list" : "wbs";
+      const all = area === undefined || area === null ? list : list.filter((r) => (r.area || "") === area);
+      const sections = uniq(all.map((r) => r.section));
       if (procFilter.section && !sections.includes(procFilter.section)) procFilter.section = "";
-      const shown = list.filter((r) => (!procFilter.section || r.section === procFilter.section) && (!procFilter.status || (procFilter.status === "late" ? late(r) : r.status === procFilter.status)));
-      const counts = (k) => list.filter((r) => r.status === k).length;
-      const lateN = list.filter(late).length;
-      const next = list.filter((r) => r.dueDate && r.dueDate >= today() && r.status !== "done" && r.status !== "hold").sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0];
+      const shown = all.filter((r) => (!procFilter.section || r.section === procFilter.section) && (!procFilter.status || (procFilter.status === "late" ? late(r) : r.status === procFilter.status)));
+      const counts = (k) => all.filter((r) => r.status === k).length;
+      const lateN = all.filter(late).length;
+      const next = all.filter((r) => r.dueDate && r.dueDate >= today() && r.status !== "done" && r.status !== "hold").sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0];
       const secSel = h("select", { "aria-label": "구분으로 거르기", onchange: (e) => { procFilter.section = e.target.value; draw(); } }, [h("option", { value: "", text: "모든 구분" }), ...sections.map((x) => h("option", { value: x, text: x }))]);
       secSel.value = procFilter.section;
       const stSel = h("select", { "aria-label": "상태로 거르기", onchange: (e) => { procFilter.status = e.target.value; draw(); } }, [h("option", { value: "", text: "모든 상태" }), ...PROC_STATUS.map(([k, t]) => h("option", { value: k, text: t })), h("option", { value: "late", text: "일정 지남" })]);
       stSel.value = procFilter.status;
-      const seg = h("div", { class: "seg seg--sm" }, [["list", "목록"], ["chart", "일정표"]].map(([k, t]) => h("button", { type: "button", "aria-selected": String(k === view), text: t, onclick: () => { store.set("ps.procView", k); draw(); } })));
+      const seg = h("div", { class: "seg seg--sm" }, [["wbs", "WBS"], ["list", "목록"]].map(([k, t]) => h("button", { type: "button", "aria-selected": String(k === view), text: t, onclick: () => { store.set("ps.procView", k); draw(); } })));
       fill(box,
-        list.length ? h("div", { class: "unit-stats" }, [
-          h("div", { class: "card unit-stat" }, [h("strong", { text: `${counts("done")}/${list.length}` }), h("span", { text: "완료" })]),
+        all.length ? h("div", { class: "unit-stats" }, [
+          h("div", { class: "card unit-stat" }, [h("strong", { text: `${rollup(all).pct}%` }), h("span", { text: `진척 (완료 ${counts("done")}/${all.length})` })]),
           h("div", { class: "card unit-stat" }, [h("strong", { text: String(counts("doing")) }), h("span", { text: "진행" })]),
           h("div", { class: "card unit-stat" + (lateN ? " is-warn" : "") }, [h("strong", { text: String(lateN) }), h("span", { text: "일정 지남" })]),
           h("div", { class: "card unit-stat" }, [h("strong", { class: "proc-next", title: next ? next.detail || next.task : null, text: next ? shortDate(next.dueDate) : "-" }), h("span", { text: next ? `다음: ${next.label || next.task}` : "다음 일정" })])
         ]) : null,
-        h("div", { class: "filters" }, [secSel, stSel, seg, h("span", { class: "filters__end actions" }, h("button", { class: "btn btn--primary btn--sm", type: "button", text: "+ 프로세스", onclick: () => dialog() }))]),
-        !list.length ? h("div", { class: "card empty", text: "아직 상세 프로세스가 없어요. '+ 프로세스'로 단계별 일정을 넣어 주세요." })
+        h("div", { class: "filters" }, [secSel, stSel, seg, h("span", { class: "filters__end actions" }, [
+          all.length ? (() => { const b = h("button", { class: "btn btn--ghost btn--sm", type: "button", title: "지금 보이는 조건 그대로, 현재 시점 기준으로 내려받아요", text: "PDF 다운로드", onclick: () => downloadPdf(b, shown) }); return b; })() : null,
+          h("button", { class: "btn btn--primary btn--sm", type: "button", text: "+ 프로세스", onclick: () => dialog() })
+        ])]),
+        !all.length ? h("div", { class: "card empty", text: "아직 상세 프로세스가 없어요. '+ 프로세스'로 단계별 일정을 넣어 주세요." })
           : !shown.length ? h("div", { class: "card empty", text: "조건에 맞는 프로세스가 없어요." })
-            : view === "chart" ? chartView(grouped(shown)) : listView(grouped(shown))
+            : view === "wbs" ? wbsView(grouped(shown)) : listView(grouped(shown))
       );
     }
     api(`/projects/${projectId}/processes`).then((r) => { list = r.processes; draw(); }).catch((e) => { if (e.status !== 401) fill(box, failed(e)); });

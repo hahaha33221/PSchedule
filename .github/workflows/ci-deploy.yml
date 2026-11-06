@@ -268,8 +268,14 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"task":""}' $B/projects/$PJ/processes)" = 400
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"task":"x","startDate":"2030-02-02","dueDate":"2030-01-01"}' $B/projects/$PJ/processes)" = 400
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPATCH -d '{"status":"잘못"}' $B/project-processes/$PR)" = 400
-          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/projects/$PJ/processes)" = 404
-          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XDELETE $B/project-processes/$PR)" = 404
+          # 우선 관리자만: 같은 팀 멤버도 프로젝트는 보지만 프로세스는 못 봄
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A2")" $B/projects/$PJ)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A2")" $B/projects/$PJ/processes)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A2")" -XPOST -d '{"task":"x"}' $B/projects/$PJ/processes)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A2")" -XPATCH -d '{"status":"todo"}' $B/project-processes/$PR)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A2")" -XDELETE $B/project-processes/$PR)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/projects/$PJ/processes)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XDELETE $B/project-processes/$PR)" = 403
           printf '{"project":"숙박 품목","rows":[{"task":"가"}]}' > /tmp/ps/proc.json
           if ADM process-import < /tmp/ps/proc.json 2>/dev/null; then echo "프로세스가 있는 프로젝트에 또 들어가요"; exit 1; fi
           curl -fs -H "$H" -XDELETE $B/project-processes/$PR | grep -q '"processes":\[\]'
@@ -278,6 +284,15 @@ jobs:
           curl -fs -H "$H" $B/projects/$PJ/processes | grep -q '"processes":\[\]'
           ADM process-import < /tmp/ps/proc.json | grep -q '프로세스 2건'
           curl -fs -H "$H" $B/projects/$PJ/processes | node -e 'const p=JSON.parse(require("fs").readFileSync(0)).processes;if(p.length!==2||p[0].task!=="가"||p[1].task!=="나")process.exit(1)'
+          # 구역: 맨 위 줄에만 저장, 고치기·붙여넣기·프로세스에도, 상태만 바꿔도 유지
+          curl -fs -H "$H" -XPOST -d '{"kind":"group","name":"구역 묶음","area":"구역가"}' $B/projects/$PJ/items | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.items.find(i=>i.name==="구역 묶음").area!=="구역가")process.exit(1)'
+          AG=$(curl -fs -H "$H" $B/projects/$PJ | node -pe 'JSON.parse(require("fs").readFileSync(0)).items.find(i=>i.name==="구역 묶음").id')
+          J="{\"kind\":\"item\",\"name\":\"구역 아래\",\"parentId\":$AG,\"area\":\"무시\"}"; curl -fs -H "$H" -XPOST -d "$J" $B/projects/$PJ/items | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.items.find(i=>i.name==="구역 아래").area!=="")process.exit(1)'
+          curl -fs -H "$H" -XPATCH -d '{"note":"메모만"}' $B/project-items/$AG | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.items.find(i=>i.name==="구역 묶음").area!=="구역가")process.exit(1)'
+          curl -fs -H "$H" -XPATCH -d '{"area":"구역나"}' $B/project-items/$AG | grep -q '"area":"구역나"'
+          curl -fs -H "$H" -XPOST -d '{"text":"1. 붙인 묶음\n* 붙인 항목","area":"구역나"}' $B/projects/$PJ/import | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.items.find(i=>i.name==="붙인 묶음").area!=="구역나"||d.items.find(i=>i.name==="붙인 항목").area!=="")process.exit(1)'
+          APR=$(curl -fs -H "$H" -XPOST -d '{"task":"구역 일","area":"구역나"}' $B/projects/$PJ/processes | node -pe 'const p=JSON.parse(require("fs").readFileSync(0)).processes.find(x=>x.task==="구역 일");if(p.area!=="구역나")process.exit(1);p.id')
+          curl -fs -H "$H" -XPATCH -d '{"status":"done"}' $B/project-processes/$APR | node -e 'const p=JSON.parse(require("fs").readFileSync(0)).processes.find(x=>x.task==="구역 일");if(p.area!=="구역나"||p.status!=="done")process.exit(1)'
           # 입출고 관리 목록: 볼 수 있는 프로젝트의 것만, 현황이 있는 묶음·프로젝트는 먼저 못 지움
           curl -fs -H "$H" $B/stock | node -e 'const l=JSON.parse(require("fs").readFileSync(0)).ledgers;const a=l.find(x=>x.name==="실 대장");if(!a||a.inTotal!==30||a.outTotal!==12||a.options!==2||a.itemName!=="묵주"||a.hasAfter)process.exit(1)'
           if curl -fs -H "$(bearer "$A1")" $B/stock | grep -q '실 대장'; then echo "다른 팀 입출고가 보여요"; exit 1; fi

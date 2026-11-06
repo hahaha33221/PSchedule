@@ -184,10 +184,10 @@ switch (cmd) {
     const ok = (s) => s == null || s === "" || /^\d{4}-\d{2}-\d{2}$/.test(s);
     db.exec("BEGIN");
     try {
-      const add = db.prepare("INSERT INTO project_processes (project_id, section, phase, task, detail, output, label, start_date, due_date, status, note, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+      const add = db.prepare("INSERT INTO project_processes (project_id, section, phase, task, detail, output, label, start_date, due_date, status, note, area, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
       data.rows.forEach((r, i) => {
         if (!String(r.task || "").trim() || !ok(r.start) || !ok(r.due)) throw new Error(`${i + 1}번째 줄을 확인해 주세요.`);
-        add.run(pid, r.section || "", r.phase || "", r.task, r.detail || "", r.output || "", r.label || "", r.start || null, r.due || null, r.status || "todo", r.note || "", i + 1);
+        add.run(pid, r.section || "", r.phase || "", r.task, r.detail || "", r.output || "", r.label || "", r.start || null, r.due || null, r.status || "todo", r.note || "", r.area || "", i + 1);
       });
       const n = (st) => data.rows.filter((r) => (r.status || "todo") === st).length;
       console.log(`${dry ? "[미리보기, 저장 안 함] " : ""}프로세스 ${data.rows.length}건 (완료 ${n("done")}, 예정 ${n("todo")})`);

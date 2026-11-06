@@ -247,6 +247,9 @@ const q = {
   allProjectItems: db.prepare("SELECT project_id, kind, status, due_date FROM project_items"),
   projectItem: db.prepare("SELECT * FROM project_items WHERE id = ?"),
   addProjectItem: db.prepare("INSERT INTO project_items (project_id, parent_id, kind, name, status, assignee_id, due_date, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
+  setProjectItemArea: db.prepare("UPDATE project_items SET area = ? WHERE id = ?"),
+  setImportedArea: db.prepare("UPDATE project_items SET area = ? WHERE project_id = ? AND parent_id IS NULL AND id > ?"),
+  maxItemId: db.prepare("SELECT coalesce(max(id), 0) AS n FROM project_items"),
   setProjectItem: db.prepare("UPDATE project_items SET name = ?, status = ?, assignee_id = ?, due_date = ?, note = ?, updated_at = datetime('now') WHERE id = ?"),
   delProjectItem: db.prepare("DELETE FROM project_items WHERE id = ?"),
   // 입출고 현황
@@ -283,8 +286,8 @@ const q = {
     FROM stock_moves m JOIN users u ON u.id = m.created_by AND u.volunteer = 1 JOIN stock_ledgers l ON l.id = m.ledger_id ORDER BY m.id DESC LIMIT 100`),
   processes: db.prepare("SELECT * FROM project_processes WHERE project_id = ? ORDER BY sort_order, id"),
   process: db.prepare("SELECT * FROM project_processes WHERE id = ?"),
-  addProcess: db.prepare("INSERT INTO project_processes (project_id, section, phase, task, detail, output, label, start_date, due_date, status, note, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT coalesce(max(sort_order), 0) + 1 FROM project_processes WHERE project_id = ?))"),
-  setProcess: db.prepare("UPDATE project_processes SET section = ?, phase = ?, task = ?, detail = ?, output = ?, label = ?, start_date = ?, due_date = ?, status = ?, note = ?, updated_at = datetime('now') WHERE id = ?"),
+  addProcess: db.prepare("INSERT INTO project_processes (project_id, section, phase, task, detail, output, label, start_date, due_date, status, note, area, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT coalesce(max(sort_order), 0) + 1 FROM project_processes WHERE project_id = ?))"),
+  setProcess: db.prepare("UPDATE project_processes SET section = ?, phase = ?, task = ?, detail = ?, output = ?, label = ?, start_date = ?, due_date = ?, status = ?, note = ?, area = ?, updated_at = datetime('now') WHERE id = ?"),
   delProcess: db.prepare("DELETE FROM project_processes WHERE id = ?"),
   ledgersAll: db.prepare(`SELECT l.*, i.project_id, i.name AS item_name,
       (SELECT count(*) FROM stock_options o WHERE o.ledger_id = l.id) AS option_count,
@@ -1038,7 +1041,7 @@ const projectOut = (p, items, user) => {
   const dues = list.filter((i) => i.due_date && i.status !== "done").map((i) => i.due_date).sort();
   return { id: p.id, unitId: p.unit_id, name: p.name, note: p.note, createdBy: p.created_by, updatedAt: p.updated_at, total: list.length, done: counts.done || 0, counts, nextDue: dues[0] || null, canDelete: user.role === "admin" || p.created_by === user.id };
 };
-const projectItemOut = (i) => ({ id: i.id, parentId: i.parent_id, kind: i.kind, name: i.name, status: i.status, assigneeId: i.assignee_id, dueDate: i.due_date, note: i.note });
+const projectItemOut = (i) => ({ id: i.id, parentId: i.parent_id, kind: i.kind, name: i.name, status: i.status, assigneeId: i.assignee_id, dueDate: i.due_date, note: i.note, area: i.area });
 const projectDetail = (p, user) => {
   const items = q.projectItems.all(p.id);
   return {
@@ -1099,7 +1102,7 @@ function volTrainingFields(b) {
   return [title, text(b.body, 5000, "내용"), date, st, text(b.place, 120, "장소"), link];
 }
 // 상세 프로세스 (빠진 값은 그대로 두기: 상태만 바꿀 때)
-const processOut = (r) => ({ id: r.id, section: r.section, phase: r.phase, task: r.task, detail: r.detail, output: r.output, label: r.label, startDate: r.start_date, dueDate: r.due_date, status: r.status, note: r.note });
+const processOut = (r) => ({ id: r.id, section: r.section, phase: r.phase, task: r.task, detail: r.detail, output: r.output, label: r.label, startDate: r.start_date, dueDate: r.due_date, status: r.status, note: r.note, area: r.area });
 const processList = (projectId) => ({ processes: q.processes.all(projectId).map(processOut) });
 function processFields(b, cur) {
   const pick = (k, col) => (has(b, k) ? b[k] : cur?.[col ?? k]);
@@ -1109,7 +1112,7 @@ function processFields(b, cur) {
   if (start && due && start > due) throw bad("시작일은 예정일보다 늦을 수 없어요.");
   const status = pick("status") || "todo";
   if (!["todo", "doing", "done", "hold"].includes(status)) throw bad("상태를 확인해 주세요.");
-  return [text(pick("section"), 60, "구분"), text(pick("phase"), 60, "단계"), text(pick("task"), 120, "세부 업무", true), text(pick("detail"), 500, "진행 상세"), text(pick("output"), 200, "산출물"), text(pick("label"), 40, "표시 이름"), start, due, status, text(pick("note"), 1000, "메모")];
+  return [text(pick("section"), 60, "구분"), text(pick("phase"), 60, "단계"), text(pick("task"), 120, "세부 업무", true), text(pick("detail"), 500, "진행 상세"), text(pick("output"), 200, "산출물"), text(pick("label"), 40, "표시 이름"), start, due, status, text(pick("note"), 1000, "메모"), text(pick("area"), 60, "구역")];
 }
 // 입출고 현황
 function ledgerFields(b, cur) {
@@ -1813,6 +1816,7 @@ async function api(req, res, path) {
   }
   const pjm = path.match(/^\/api\/projects\/(\d+)(\/items|\/import|\/processes)?$/);
   if (pjm) {
+    if (pjm[2] === "/processes" && !isAdmin) return send(res, 403, { error: "상세 프로세스는 관리자만 볼 수 있어요." }); // 우선 관리자만
     const p = q.project.get(Number(pjm[1]));
     if (!p || !projectAllowed(user, p)) throw notFound("프로젝트");
     if (!pjm[2] && method === "GET") return send(res, 200, projectDetail(p, user));
@@ -1841,7 +1845,11 @@ async function api(req, res, path) {
       const parent = idOrNull(b.parentId);
       const up = parent && q.projectItem.get(parent);
       if (parent && (!up || up.project_id !== p.id || up.kind !== "group")) throw bad("넣을 묶음을 찾을 수 없어요.");
-      q.addProjectItem.run(p.id, parent, kind, ...projectItemFields(b, null));
+      const area = parent ? "" : text(b.area, 60, "구역"); // 구역은 맨 위 줄에만
+      inTx(() => {
+        const nid = Number(q.addProjectItem.run(p.id, parent, kind, ...projectItemFields(b, null)).lastInsertRowid);
+        if (area) q.setProjectItemArea.run(area, nid);
+      });
       return send(res, 201, projectDetail(p, user));
     }
     if (pjm[2] === "/import" && method === "POST") {
@@ -1850,7 +1858,12 @@ async function api(req, res, path) {
       if (source.length > 20000) throw bad("한 번에 20,000자까지 넣을 수 있어요.");
       const { rows } = parseOutline(source);
       if (!rows.length) throw bad("넣을 항목이 없어요.");
-      inTx(() => importOutline(db, p.id, rows));
+      const area = text(b.area, 60, "구역");
+      inTx(() => {
+        const before = q.maxItemId.get().n;
+        importOutline(db, p.id, rows);
+        if (area) q.setImportedArea.run(area, p.id, before);
+      });
       return send(res, 200, projectDetail(p, user));
     }
     return send(res, 405, { error: "Method not allowed" });
@@ -1872,7 +1885,13 @@ async function api(req, res, path) {
       return send(res, 201, ledgerOut(q.ledger.get(id), p, user));
     }
     if (method === "PATCH") {
-      q.setProjectItem.run(...projectItemFields(await readJson(req), i), i.id);
+      const b = await readJson(req);
+      const fields = projectItemFields(b, i);
+      const area = has(b, "area") && !i.parent_id ? text(b.area, 60, "구역") : null;
+      inTx(() => {
+        q.setProjectItem.run(...fields, i.id);
+        if (area !== null) q.setProjectItemArea.run(area, i.id);
+      });
       return send(res, 200, projectDetail(p, user));
     }
     if (method === "DELETE") {
@@ -1885,6 +1904,7 @@ async function api(req, res, path) {
 
   const prm = path.match(/^\/api\/project-processes\/(\d+)$/);
   if (prm) {
+    if (!isAdmin) return send(res, 403, { error: "상세 프로세스는 관리자만 볼 수 있어요." });
     const r = q.process.get(Number(prm[1]));
     const p = r && q.project.get(r.project_id);
     if (!p || !projectAllowed(user, p)) throw notFound("프로세스");

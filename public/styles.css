@@ -1471,3 +1471,29 @@ button.gantt__name:hover { background: var(--surface-2); }
 @media (max-width: 640px) {
   .gantt__name { width: 130px; padding: 4px 8px; }
 }
+
+/* 프로젝트 구역 카드 */
+.pj-areas { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; }
+.pj-area { padding: 20px; gap: 10px; }
+.pj-area__name { font-size: 18px; }
+.pj-area .pj-progress { margin: 0; }
+
+/* WBS */
+.wbs__name { flex-direction: row; align-items: center; justify-content: flex-start; gap: 5px; width: 340px; }
+.wbs__chev { flex: none; display: inline-grid; place-items: center; width: 14px; height: 14px; }
+.wbs__chev svg { width: 11px; height: 11px; fill: none; stroke: currentColor; stroke-width: 2.6; transition: transform .15s; }
+.wbs__chev.is-open svg { transform: rotate(90deg); }
+.wbs__code { flex: none; min-width: 42px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.wbs__label { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.wbs__pct { flex: none; width: 36px; text-align: right; font-size: 11.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.wbs-row--0 .wbs__name, .wbs-row--0 .gantt__track { background-color: var(--surface-3); }
+.wbs-row--0 .wbs__label { font-weight: 700; font-size: 13px; }
+.wbs-row--1 .wbs__name, .wbs-row--1 .gantt__track { background-color: var(--surface-2); }
+.wbs-row--1 .wbs__label { font-weight: 700; }
+.wbs-row--2 .wbs__label > span:first-child { font-weight: 500; }
+.wbs__sum { position: absolute; top: 14px; height: 8px; border-radius: 3px; background: var(--line); overflow: hidden; z-index: 1; }
+.wbs__sum i { display: block; height: 100%; }
+@media (max-width: 640px) {
+  .wbs__name { width: 210px; padding-right: 6px; }
+  .wbs__code { display: none; }
+}
