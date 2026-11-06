@@ -1316,6 +1316,8 @@ button.mgroup__head:hover { color: var(--ink); }
 .stock-how li { display: flex; gap: 10px; }
 .stock-how strong { display: block; font-size: 14px; }
 .stock-how .stock-step__num { margin-top: 1px; }
+.stock-group__name { margin: 0; font-size: 17px; }
+.stock-group__add { margin-left: auto; font-size: 13px; }
 .stock-card__nums { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; }
 .stock-card__next { color: var(--primary); font-size: 12.5px; font-weight: 600; }
 .stock-dots { display: flex; gap: 4px; }
@@ -1330,3 +1332,33 @@ button.mgroup__head:hover { color: var(--ink); }
   .stock-step__label { word-break: keep-all; }
   .stock-info { grid-template-columns: 84px minmax(0, 1fr); }
 }
+
+/* 봉사자 테마: 기기가 다크 모드여도 늘 노란색 바탕 (버튼 글자는 어둡게) */
+.theme-volunteer {
+  color-scheme: light;
+  --bg: #fff3b0;
+  --surface: #fffdf2;
+  --surface-2: #fff6c9;
+  --surface-3: #ffec99;
+  --line: #efdc8c;
+  --line-2: #f7ebb5;
+  --ink: #171a23;
+  --ink-2: #4f4a2c;
+  --muted: #6b6440;
+  --primary: #ffd43b;
+  --primary-ink: #2b2400;
+  --primary-soft: #fff0b3;
+  --dark: #171a23;
+  --dark-ink: #ffffff;
+  --danger: #c92a2a;
+  --warn: #d9480f;
+  --shadow: 0 1px 2px rgba(60, 50, 0, .06), 0 2px 10px rgba(60, 50, 0, .06);
+  --shadow-lg: 0 12px 40px rgba(60, 50, 0, .18);
+  --vol-accent: #7a5c00;
+  --vol-bar-ink: #2b2400;
+}
+.theme-volunteer .link-btn { color: var(--vol-accent); }
+.theme-volunteer .vol__bar { background: var(--primary); border-bottom-color: transparent; color: var(--vol-bar-ink); }
+.theme-volunteer .vol__bar .brand, .theme-volunteer .vol__account { color: var(--vol-bar-ink); }
+.theme-volunteer .vol__account:hover { background: rgba(0, 0, 0, .08); }
+.theme-volunteer .vol__tag { background: var(--vol-bar-ink); color: var(--primary); }

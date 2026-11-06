@@ -591,12 +591,21 @@
     staff: { title: "직원 로그인", pick: "직원", desc: "조직위 직원 · 관리자", icon: "user" },
     volunteer: { title: "봉사자 로그인", pick: "봉사자", desc: "봉사자 전용 화면", icon: "people" }
   };
+  // 봉사자 화면·봉사자 로그인은 노란색 바탕 (색은 styles.css 의 .theme-volunteer)
+  function volunteerTheme(on) {
+    document.documentElement.classList.toggle("theme-volunteer", on);
+    document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
+      m.dataset.base ??= m.content;
+      m.content = on ? "#ffd43b" : m.dataset.base;
+    });
+  }
   const authBrand = () => h("div", { class: "brand brand--lg" }, [h("img", { src: "favicon.svg", alt: "" }), h("span", { text: TITLE })]);
   function renderLogin(message, as, keepId) {
     document.title = TITLE;
     const mode = LOGIN_AS[as] ? as : store.get("ps.loginAs", "");
     if (!LOGIN_AS[mode]) return renderLoginChoice(message);
     const info = LOGIN_AS[mode];
+    volunteerTheme(mode === "volunteer");
     const err = errorLine();
     const login = h("input", { name: "login", autocomplete: "username", autocapitalize: "none", spellcheck: "false", required: true, value: keepId || "" });
     const pw = h("input", { name: "password", type: "password", autocomplete: "current-password", required: true });
@@ -633,6 +642,7 @@
     (keepId ? pw : login).focus();
   }
   function renderLoginChoice(message) {
+    volunteerTheme(false);
     const pick = (as) => h("button", { class: "auth__pick", type: "button", onclick: () => { store.set("ps.loginAs", as); renderLogin(message, as); } }, [
       icon(LOGIN_AS[as].icon),
       h("span", { class: "auth__pick-text" }, [h("strong", { text: LOGIN_AS[as].pick }), h("span", { class: "muted small", text: LOGIN_AS[as].desc })]),
@@ -3889,7 +3899,7 @@
     openDialog("입출고 현황 고치기", form);
   }
   // 새로 만들기: 한 단계씩
-  async function ledgerWizard() {
+  async function ledgerWizard(preset) {
     const { projects } = await act(() => api("/projects"));
     if (!projects.length) {
       openDialog("새 입출고 현황", h("div", { class: "stack" }, [
@@ -3902,7 +3912,7 @@
     const err = errorLine();
     const mine = projects.find((p) => p.unitId === myUnit()) || projects[0];
     const projSel = h("select", { "aria-label": "프로젝트" }, projects.map((p) => h("option", { value: String(p.id), text: p.name })));
-    projSel.value = String(mine.id);
+    projSel.value = String(preset?.projectId ?? mine.id);
     const groupSel = h("select", { "aria-label": "묶음" });
     const groupHelp = h("p", { class: "muted small", hidden: true, text: "이 프로젝트에는 묶음이 없어요. 프로젝트 화면에서 묶음을 먼저 만들어 주세요." });
     const loadGroups = async () => {
@@ -3913,6 +3923,7 @@
     };
     projSel.addEventListener("change", loadGroups);
     await loadGroups();
+    if (preset) groupSel.value = String(preset.itemId);
     const need = (cond, msg) => { if (!cond) showError(err, msg); return cond; };
     const steps = [
       { label: "위치", title: "어디에 둘까요?", hint: "대장이 속할 프로젝트와 묶음을 골라요.", body: [h("div", { class: "row2" }, [field("프로젝트", projSel), field("묶음", groupSel)]), groupHelp], check: () => need(!!groupSel.value, "묶음을 골라 주세요.") },
@@ -3949,8 +3960,9 @@
         } catch (ex) { showError(err, ex.message); }
       });
     });
-    show(0);
+    show(preset ? 1 : 0);
     openDialog("새 입출고 현황", form);
+    panels[cur].querySelector("input, select")?.focus();
   }
   // 입출고 관리 목록
   async function pageStocks() {
@@ -3965,17 +3977,25 @@
         const next = STOCK_STEPS.slice(0, 3).find((s) => !done[s.id]);
         return h("a", { class: "card pj-card", href: `#/stock/${l.id}` }, [
           h("strong", { text: l.name }),
-          h("span", { class: "muted small", text: `${l.projectName} › ${l.itemName}` }),
           h("div", { class: "stock-card__nums" }, [`입고 ${fmtN(l.inTotal)}`, h("span", { text: `출고 ${fmtN(l.outTotal)}` }), h("strong", { class: l.inTotal - l.outTotal < 0 ? "stock-minus" : null, text: `재고 ${fmtN(l.inTotal - l.outTotal)} ${l.unit}` })]),
           h("div", { class: "stock-dots", "aria-hidden": "true" }, STOCK_STEPS.map((s) => h("i", { class: done[s.id] ? "is-done" : null, title: s.label }))),
           h("span", { class: next ? "stock-card__next" : "muted small", text: next ? `다음 단계: ${next.label}` : "기록 단계 완료" })
         ]);
       };
-      const teams = [...new Set(list.map((l) => l.unitId))];
-      const sections = teams.map((u) => h("section", { class: "pj-team" }, [
-        h("div", { class: "pj-team__head" }, [h("h2", { class: "card__title", text: u && unitOf(u) ? unitPath(u).map((x) => x.short || x.name).slice(-2).join(" › ") : "팀 없음" }), h("span", { class: "muted small", text: `대장 ${list.filter((l) => l.unitId === u).length}개` })]),
-        h("div", { class: "pj-cards" }, list.filter((l) => l.unitId === u).map(card))
-      ]));
+      // 묶음(예: 묵주)마다 제목을 두고 그 아래에 대장
+      const groups = [...new Set(list.map((l) => l.itemId))].map((itemId) => list.filter((l) => l.itemId === itemId));
+      const sections = groups.map((rows) => {
+        const { itemId, itemName, projectId, projectName, unitId } = rows[0];
+        const team = unitId && unitOf(unitId) ? unitShort(unitId) : "";
+        return h("section", { class: "pj-team stock-group" }, [
+          h("div", { class: "pj-team__head" }, [
+            h("h2", { class: "stock-group__name", text: itemName }),
+            h("span", { class: "muted small", text: [team, projectName, `대장 ${rows.length}개`].filter(Boolean).join(" · ") }),
+            h("button", { class: "link-btn stock-group__add", type: "button", text: "+ 대장", "aria-label": `${itemName}에 입출고 대장 추가`, onclick: () => ledgerWizard({ projectId, itemId }) })
+          ]),
+          h("div", { class: "pj-cards" }, rows.map(card))
+        ]);
+      });
       setMain("stock", [
         h("div", { class: "page-head" }, [h("h1", { text: "입출고 관리" }), newBtn("page-head__end")]),
         list.length ? h("div", { class: "stack" }, sections) : h("div", { class: "card stock-guide stack" }, [
@@ -4123,7 +4143,7 @@
       const panel = { setup: setupPanel, in: () => table("in"), out: () => table("out"), left: leftPanel, after: afterPanel }[step]();
       const cur = STOCK_STEPS[at], prev = STOCK_STEPS[at - 1], next = STOCK_STEPS[at + 1];
       setMain("stock", [
-        h("nav", { class: "muted small" }, [h("a", { href: "#/stock", text: "입출고 관리" }), ` › ${l.name}`]),
+        h("nav", { class: "muted small" }, [h("a", { href: "#/stock", text: "입출고 관리" }), ` › ${data.itemName} › ${l.name}`]),
         h("div", { class: "page-head page-head--wrap" }, [
           h("h1", { text: l.name }),
           l.canDelete ? h("span", { class: "page-head__end actions" }, h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
@@ -4175,6 +4195,7 @@
   /* ---------- 시작 ---------- */
   function render() {
     if (!state.user) return;
+    volunteerTheme(state.user.role === "volunteer");
     if (state.user.mustChangePassword) { layout.main = null; return renderForcedPassword(); }
     if (state.user.role === "volunteer") { closeDialog(); closePop(); return renderVolunteer(); }
     if (!layout.main || !app.contains(layout.main)) buildLayout();
