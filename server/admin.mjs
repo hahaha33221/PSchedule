@@ -201,10 +201,13 @@ switch (cmd) {
     const body = readFileSync(0, "utf8").replace(/\r\n?/g, "\n").trim();
     if (!title || title.length > 80) { console.error("제목을 80자 안으로 적어 주세요."); process.exit(1); }
     if (!body || body.length > 5000) { console.error("본문(표준 입력)을 5000자 안으로 넣어 주세요."); process.exit(1); }
+    // notice-add <제목> [pin|-] [all|staff|lead|admin] < 본문 (공개 범위 기본은 직원)
+    const audience = args[2] || "staff";
+    if (!["all", "staff", "lead", "admin"].includes(audience)) { console.error("공개 범위는 all, staff, lead, admin 중에서 골라 주세요."); process.exit(1); }
     const admin = db.prepare("SELECT id, login FROM users WHERE role = 'admin' ORDER BY login = 'admin' DESC, id LIMIT 1").get();
-    const id = Number(db.prepare("INSERT INTO notices (title, body, pinned, created_by) VALUES (?, ?, ?, ?)").run(title, body, args[1] === "pin" ? 1 : 0, admin?.id ?? null).lastInsertRowid);
+    const id = Number(db.prepare("INSERT INTO notices (title, body, pinned, audience, created_by) VALUES (?, ?, ?, ?, ?)").run(title, body, args[1] === "pin" ? 1 : 0, audience, admin?.id ?? null).lastInsertRowid);
     if (admin) db.prepare("INSERT OR IGNORE INTO notice_reads (user_id, notice_id) VALUES (?, ?)").run(admin.id, id); // 쓴 사람은 읽은 것으로
-    console.log(`공지 #${id} 를 올렸어요 (작성자 ${admin?.login ?? "-"}${args[1] === "pin" ? ", 맨 위 고정" : ""}).`);
+    console.log(`공지 #${id} 를 올렸어요 (작성자 ${admin?.login ?? "-"}, 공개 ${audience}${args[1] === "pin" ? ", 맨 위 고정" : ""}).`);
     break;
   }
 

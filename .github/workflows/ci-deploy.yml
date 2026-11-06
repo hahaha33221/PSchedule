@@ -305,7 +305,7 @@ jobs:
           VP=$(curl -fs -H "$H" -XPOST -d '{"login":"vola","name":"봉사자일","role":"volunteer","unitId":'$OPS'}' $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).password')
           A8=$(tok vola "$VP"); VU=$(USR vola)
           curl -fs -H "$(bearer "$A8")" $B/me | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.user.role!=="volunteer"||d.user.unitId!==null||d.units.length||d.team.length||d.categories.length)process.exit(1)'
-          for u in projects projects/1/processes stock stock/1 tasks "events?from=2026-02-01&to=2026-02-28" contacts org team memos notices notices/unread "search?q=WYD" admin/users people/1 meetings/choices; do test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" "$B/$u")" = 403; done
+          for u in projects projects/1/processes stock stock/1 tasks "events?from=2026-02-01&to=2026-02-28" contacts org team memos "search?q=WYD" admin/users people/1 meetings/choices; do test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" "$B/$u")" = 403; done
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" -XPOST -d '{"title":"x"}' $B/tasks)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" -XPUT -d '{"mobile":"1"}' $B/contacts/u$VU)" = 403
           if curl -fs -H "$(bearer "$A1")" $B/me | grep -q '봉사자일'; then echo "직원 명단에 봉사자가 나와요"; exit 1; fi
@@ -324,6 +324,29 @@ jobs:
           test "$(lc '{"login":"vola","password":"volunteer-pass-1","as":"volunteer"}')" = 200
           test "$(lc '{"login":"master","password":"ci-pass-1","as":"staff"}')" = 200
           test "$(lc '{"login":"vola","password":"volunteer-pass-1"}')" = 200
+          # 공지 공개 범위: 권한마다 목록·안 읽음 수·본문이 다르고, 봉사자는 읽기만
+          VH0="$(bearer "$A8")"
+          NA=$(curl -fs -H "$H" -XPOST -d '{"title":"전체공지","body":"가","audience":"all"}' $B/notices | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+          NL=$(curl -fs -H "$H" -XPOST -d '{"title":"본부장공지","body":"나","audience":"lead"}' $B/notices | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+          NM=$(curl -fs -H "$H" -XPOST -d '{"title":"관리자공지","body":"다","audience":"admin"}' $B/notices | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+          NS=$(curl -fs -H "$H" -XPOST -d '{"title":"직원공지","body":"라"}' $B/notices | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"title":"x","body":"y","audience":"잘못"}' $B/notices)" = 400
+          curl -fs -H "$H" $B/notices | node -e 'const t=JSON.parse(require("fs").readFileSync(0)).notices.map(n=>n.title);for(const x of ["전체공지","본부장공지","관리자공지","직원공지"])if(!t.includes(x))process.exit(1)'
+          curl -fs -H "$(bearer "$A1")" $B/notices | node -e 'const t=JSON.parse(require("fs").readFileSync(0)).notices.map(n=>n.title);if(!t.includes("전체공지")||!t.includes("직원공지")||t.includes("본부장공지")||t.includes("관리자공지"))process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/notices/$NM)" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/notices/$NL)" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPOST -d '{"body":"x"}' $B/notices/$NM/comments)" = 404
+          curl -fs -H "$VH0" $B/notices | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const t=d.notices.map(n=>n.title);if(t.join()!=="전체공지"||d.unreadNotices!==1||/author|comments/.test(JSON.stringify(d.notices)))process.exit(1)'
+          curl -fs -H "$VH0" $B/me | grep -q '"unreadNotices":1'
+          curl -fs -H "$VH0" $B/notices/$NA | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.notice.title!=="전체공지"||d.unreadNotices!==0||"comments" in d||"author" in d.notice)process.exit(1)'
+          for N in $NS $NL $NM; do test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH0" $B/notices/$N)" = 404; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH0" -XPOST -d '{"body":"x"}' $B/notices/$NA/comments)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH0" -XPOST -d '{"title":"x","body":"y"}' $B/notices)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH0" -XDELETE $B/notices/$NA)" = 403
+          printf '본문' | ADM notice-add '일괄공지' - all | grep -q '공개 all'
+          if printf '본문' | ADM notice-add 'x' - 잘못 2>/dev/null; then echo "잘못된 공개 범위가 들어가요"; exit 1; fi
+          curl -fs -H "$VH0" $B/notices | grep -q '일괄공지'
+          for N in $NA $NL $NM $NS; do curl -fs -H "$H" -XDELETE $B/notices/$N >/dev/null; done
           # 봉사자 전용: 기념품팀 프로젝트만 읽기(담당자·입출고 없음), 일정은 전체·개인 지정, 교육 이수, 등록은 관리자만
           VH="$(bearer "$A8")"
           VP2=$(curl -fs -H "$H" -XPOST -d '{"login":"volb","name":"봉사자이","role":"volunteer"}' $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).password')

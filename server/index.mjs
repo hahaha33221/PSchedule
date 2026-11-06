@@ -328,16 +328,16 @@ const q = {
 
   // 공지
   notices: db.prepare(`
-    SELECT n.id, n.title, substr(n.body, 1, 200) AS preview, n.pinned, n.created_at, n.updated_at, u.name AS author,
+    SELECT n.id, n.title, substr(n.body, 1, 200) AS preview, n.pinned, n.audience, n.created_at, n.updated_at, u.name AS author,
       (SELECT count(*) FROM comments c WHERE c.target_type = 'notice' AND c.target_id = n.id) AS comments,
       NOT EXISTS (SELECT 1 FROM notice_reads r WHERE r.notice_id = n.id AND r.user_id = ?) AS unread
     FROM notices n LEFT JOIN users u ON u.id = n.created_by
     ORDER BY n.pinned DESC, n.created_at DESC, n.id DESC`),
   notice: db.prepare("SELECT n.*, u.name AS author FROM notices n LEFT JOIN users u ON u.id = n.created_by WHERE n.id = ?"),
-  unreadNotices: db.prepare("SELECT count(*) AS n FROM notices n WHERE NOT EXISTS (SELECT 1 FROM notice_reads r WHERE r.notice_id = n.id AND r.user_id = ?)"),
+  unreadNotices: db.prepare("SELECT count(*) AS n FROM notices n WHERE n.audience IN (SELECT value FROM json_each(?)) AND NOT EXISTS (SELECT 1 FROM notice_reads r WHERE r.notice_id = n.id AND r.user_id = ?)"),
   readNotice: db.prepare("INSERT OR IGNORE INTO notice_reads (user_id, notice_id) VALUES (?, ?)"),
-  addNotice: db.prepare("INSERT INTO notices (title, body, pinned, created_by) VALUES (?, ?, ?, ?)"),
-  setNotice: db.prepare("UPDATE notices SET title = ?, body = ?, pinned = ?, updated_at = datetime('now') WHERE id = ?"),
+  addNotice: db.prepare("INSERT INTO notices (title, body, pinned, audience, created_by) VALUES (?, ?, ?, ?, ?)"),
+  setNotice: db.prepare("UPDATE notices SET title = ?, body = ?, pinned = ?, audience = ?, updated_at = datetime('now') WHERE id = ?"),
   delNotice: db.prepare("DELETE FROM notices WHERE id = ?"),
 
   // 댓글
@@ -1156,6 +1156,11 @@ function ledgerOut(l, p, user) {
     ...(user.volunteer ? {} : { history: q.stockHistory.all(l.id).map((h) => ({ id: h.id, action: h.action, summary: h.summary, by: h.user_name, at: h.created_at })) }) // 수정 기록: 직원 화면만
   };
 }
+// 공지 공개 범위: 권한마다 볼 수 있는 값
+const NOTICE_AUDIENCES = ["all", "staff", "lead", "admin"];
+const noticeAudiences = (u) => (u.volunteer ? ["all"] : u.role === "admin" ? NOTICE_AUDIENCES : u.director ? ["all", "staff", "lead"] : ["all", "staff"]);
+const noticeVisible = (u, n) => noticeAudiences(u).includes(n.audience);
+const unreadOf = (u) => q.unreadNotices.get(JSON.stringify(noticeAudiences(u)), u.id).n;
 // 수정 기록: 사람이 읽는 한 줄로 남김
 const logStock = (ledgerId, action, summary, user) => q.addStockHistory.run(ledgerId, action, String(summary).slice(0, 500), user.id, user.name);
 const moveKind = (m) => (m.type === "in" ? "입고" : "출고");
@@ -1345,7 +1350,19 @@ async function api(req, res, path) {
       if (b.done === false) q.clearVolDone.run(t.id, user.id); else q.setVolDone.run(t.id, user.id);
       return send(res, 200, { done: b.done !== false });
     }
-    if (path === "/api/me" && method === "GET") return send(res, 200, { user: publicUser(user), team: [], units: [], tags: [], categories: [], calendars: [], unreadNotices: 0 });
+    if (path === "/api/me" && method === "GET") return send(res, 200, { user: publicUser(user), team: [], units: [], tags: [], categories: [], calendars: [], unreadNotices: unreadOf(user) });
+    // 공지: 봉사자에게 공개된 것만 읽기 (댓글·작성자 이름 없음)
+    if (path === "/api/notices" && method === "GET") {
+      return send(res, 200, { notices: q.notices.all(user.id).filter((n) => noticeVisible(user, n)).map((n) => ({ id: n.id, title: n.title, preview: n.preview, pinned: !!n.pinned, createdAt: n.created_at, unread: !!n.unread })), unreadNotices: unreadOf(user) });
+    }
+    if (path === "/api/notices/unread" && method === "GET") return send(res, 200, { unreadNotices: unreadOf(user) });
+    const vnm = path.match(/^\/api\/notices\/(\d+)$/);
+    if (vnm && method === "GET") {
+      const n = q.notice.get(Number(vnm[1]));
+      if (!n || !noticeVisible(user, n)) throw notFound("공지");
+      q.readNotice.run(user.id, n.id);
+      return send(res, 200, { notice: { id: n.id, title: n.title, body: n.body, pinned: !!n.pinned, createdAt: n.created_at }, unreadNotices: unreadOf(user) });
+    }
     if (!((path === "/api/logout" || path === "/api/password") && method === "POST")) return send(res, 403, { error: "봉사자 계정으로는 볼 수 없어요." });
   }
   const isAdmin = user.role === "admin";
@@ -1359,7 +1376,7 @@ async function api(req, res, path) {
 
   // 화면을 그리는 데 늘 필요한 것: 나, 팀원, 태그, 분류
   if (path === "/api/me" && method === "GET") {
-    return send(res, 200, { user: publicUser(user), team: teamOut(), units: unitsOut(), tags: q.tags.all(), categories: categoriesOut(), calendars: calendarsPublic(), unreadNotices: q.unreadNotices.get(user.id).n });
+    return send(res, 200, { user: publicUser(user), team: teamOut(), units: unitsOut(), tags: q.tags.all(), categories: categoriesOut(), calendars: calendarsPublic(), unreadNotices: unreadOf(user) });
   }
 
   // 비밀번호 변경 (본인)
@@ -1772,16 +1789,20 @@ async function api(req, res, path) {
   /* ----- 공지 ----- */
   if (path === "/api/notices" && method === "GET") {
     return send(res, 200, {
-      notices: q.notices.all(user.id).map((n) => ({
-        id: n.id, title: n.title, preview: n.preview, pinned: !!n.pinned, author: n.author,
+      notices: q.notices.all(user.id).filter((n) => noticeVisible(user, n)).map((n) => ({
+        id: n.id, title: n.title, preview: n.preview, pinned: !!n.pinned, author: n.author, audience: n.audience,
         comments: n.comments, createdAt: n.created_at, updatedAt: n.updated_at, unread: !!n.unread
       })),
-      unreadNotices: q.unreadNotices.get(user.id).n
+      unreadNotices: unreadOf(user)
     });
   }
   // 사이드바 '공지' 옆 숫자 (안 읽은 공지 수)
-  if (path === "/api/notices/unread" && method === "GET") return send(res, 200, { unreadNotices: q.unreadNotices.get(user.id).n });
-  const noticeInput = (b) => [text(b.title, LIMITS.title, "제목", true), text(b.body, LIMITS.notice, "내용", true), b.pinned ? 1 : 0];
+  if (path === "/api/notices/unread" && method === "GET") return send(res, 200, { unreadNotices: unreadOf(user) });
+  const noticeInput = (b, cur) => {
+    const audience = has(b, "audience") ? b.audience : cur?.audience ?? "staff";
+    if (!NOTICE_AUDIENCES.includes(audience)) throw bad("공개 범위를 확인해 주세요.");
+    return [text(b.title, LIMITS.title, "제목", true), text(b.body, LIMITS.notice, "내용", true), b.pinned ? 1 : 0, audience];
+  };
   if (path === "/api/notices" && method === "POST") {
     if (!isAdmin) return send(res, 403, { error: "공지는 관리자만 쓸 수 있어요." });
     const r = q.addNotice.run(...noticeInput(await readJson(req)), user.id);
@@ -1791,6 +1812,7 @@ async function api(req, res, path) {
   const nm = path.match(/^\/api\/notices\/(\d+)(\/comments)?$/);
   if (nm) {
     const n = q.notice.get(Number(nm[1]));
+    if (n && !noticeVisible(user, n)) throw notFound("공지");
     if (!n) return send(res, 404, { error: "공지를 찾을 수 없어요. 지워졌을 수 있어요." });
     if (nm[2]) {
       if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
@@ -1801,14 +1823,14 @@ async function api(req, res, path) {
     if (method === "GET") {
       q.readNotice.run(user.id, n.id); // 열어 보면 읽은 것으로 → 사이드바 숫자가 줄어듦
       return send(res, 200, {
-        notice: { id: n.id, title: n.title, body: n.body, pinned: !!n.pinned, author: n.author, createdAt: n.created_at, updatedAt: n.updated_at, canEdit: isAdmin },
+        notice: { id: n.id, title: n.title, body: n.body, pinned: !!n.pinned, author: n.author, audience: n.audience, createdAt: n.created_at, updatedAt: n.updated_at, canEdit: isAdmin },
         comments: q.comments.all("notice", n.id).map((c) => commentOut(c, user)),
-        unreadNotices: q.unreadNotices.get(user.id).n
+        unreadNotices: unreadOf(user)
       });
     }
     if (!isAdmin) return send(res, 403, { error: "공지는 관리자만 고칠 수 있어요." });
     if (method === "PUT") {
-      q.setNotice.run(...noticeInput(await readJson(req)), n.id);
+      q.setNotice.run(...noticeInput(await readJson(req), n), n.id);
       return send(res, 200, { ok: true });
     }
     if (method === "DELETE") {

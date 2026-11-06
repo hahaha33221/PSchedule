@@ -471,6 +471,8 @@ function addUnitColumns(db) {
       PRIMARY KEY (training_id, user_id)
     );
   `);
+  // 공지 공개 범위: all(봉사자 포함 전체) / staff(직원) / lead(본부장·관리자) / admin(관리자)
+  if (!has("notices", "audience")) db.exec("ALTER TABLE notices ADD COLUMN audience TEXT NOT NULL DEFAULT 'staff'");
   // 프로젝트 구역: 맨 위 묶음·프로세스를 나누는 이름 (비면 공통). 구역이 있으면 프로젝트 첫 화면이 구역 카드가 됨
   if (!has("project_items", "area")) db.exec("ALTER TABLE project_items ADD COLUMN area TEXT NOT NULL DEFAULT ''");
   if (!has("project_processes", "area")) db.exec("ALTER TABLE project_processes ADD COLUMN area TEXT NOT NULL DEFAULT ''");

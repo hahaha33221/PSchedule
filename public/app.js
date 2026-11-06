@@ -2515,6 +2515,8 @@
   }
 
   /* ---------- 공지 ---------- */
+  const NOTICE_AUD = [["staff", "직원 전체"], ["all", "모든 권한 (봉사자 포함)"], ["lead", "본부장·관리자"], ["admin", "관리자만"]];
+  const audTag = (k) => (k && k !== "staff" ? h("span", { class: "stock-tag", text: NOTICE_AUD.find(([x]) => x === k)?.[1] || k }) : null);
   async function pageNotices() {
     document.title = `공지 · ${TITLE}`;
     drawMini(null);
@@ -2526,7 +2528,7 @@
       setMain("notices", h("div", { class: "narrow stack" }, [
         h("div", { class: "page-head" }, [h("h1", { text: "공지" }), isAdmin ? h("button", { class: "btn btn--admin", type: "button", title: "관리자 전용", onclick: () => editNotice(null) }, [icon("lock"), "공지 쓰기"]) : null]),
         r.notices.length ? h("ul", { class: "notice-list" }, r.notices.map((n) => h("li", {}, h("a", { class: "card notice-item" + (n.pinned ? " is-pinned" : ""), href: `#/notices/${n.id}` }, [
-          h("div", { class: "notice-item__title" }, [n.pinned ? icon("pin", "pin") : null, h("strong", { text: n.title }), n.unread ? h("span", { class: "new-badge", text: "새 글" }) : null]),
+          h("div", { class: "notice-item__title" }, [n.pinned ? icon("pin", "pin") : null, h("strong", { text: n.title }), audTag(n.audience), n.unread ? h("span", { class: "new-badge", text: "새 글" }) : null]),
           h("p", { class: "notice-item__preview", text: n.preview }),
           h("div", { class: "notice-item__meta muted" }, [h("span", { text: n.author || "관리자" }), h("span", { text: ago(n.createdAt) }), n.comments ? h("span", { class: "with-icon" }, [icon("chat"), String(n.comments)]) : null])
         ])))) : h("div", { class: "card empty", text: isAdmin ? "아직 공지가 없어요. 첫 공지를 써 보세요." : "아직 공지가 없어요." })
@@ -2548,6 +2550,7 @@
         h("a", { class: "back-link", href: "#/notices" }, [icon("left"), "공지 목록"]),
         h("article", { class: "card notice-view stack" }, [
           h("h1", {}, [n.pinned ? icon("pin", "pin") : null, n.title]),
+          audTag(n.audience),
           h("div", { class: "muted notice-item__meta" }, [h("span", { text: n.author || "관리자" }), h("span", { text: ago(n.createdAt) }), n.updatedAt !== n.createdAt ? h("span", { text: "수정됨" }) : null]),
           h("div", { class: "prose", text: n.body }),
           n.canEdit ? h("div", { class: "actions actions--start" }, [
@@ -2574,9 +2577,11 @@
     const body = h("textarea", { rows: "10", maxlength: "5000" });
     body.value = n ? n.body : "";
     const pinned = h("input", { type: "checkbox", checked: n ? n.pinned : false });
+    const audience = h("select", {}, NOTICE_AUD.map(([k, t]) => h("option", { value: k, text: t })));
+    audience.value = n?.audience || "staff";
     const submit = h("button", { class: "btn btn--primary", type: "submit", text: isNew ? "올리기" : "저장" });
     const form = h("form", { class: "stack", novalidate: true }, [
-      field("제목", title), field("내용", body),
+      field("제목", title), field("내용", body), field("공개 범위", audience, "고른 권한에게만 목록과 내용이 보여요"),
       h("label", { class: "check" }, [pinned, h("span", { text: "목록 맨 위에 고정" })]),
       err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), submit])
@@ -2585,7 +2590,7 @@
       e.preventDefault();
       busy(submit, async () => {
         try {
-          const payload = { title: title.value, body: body.value, pinned: pinned.checked };
+          const payload = { title: title.value, body: body.value, pinned: pinned.checked, audience: audience.value };
           const r = await api(isNew ? "/notices" : `/notices/${n.id}`, { method: isNew ? "POST" : "PUT", body: payload });
           closeDialog();
           toast(isNew ? "공지를 올렸어요." : "공지를 고쳤어요.");
@@ -4582,17 +4587,17 @@
     layout.main = null;
     const seq = ++volSeq;
     const { name, id } = route();
-    const tab = ["vschedule", "vtraining", "vstock", "vprojects"].includes(name) ? name : "vhome";
+    const tab = ["vschedule", "vtraining", "vstock", "vprojects", "vnotices"].includes(name) ? name : "vhome";
     document.title = `봉사자 · ${TITLE}`;
     // 왼쪽 메뉴: 직원 화면과 같은 틀 (묵주 아래에 입출고를 접고 펴기)
     layout.tags = null;
     const main = h("main", { class: "vol__main", id: "main" }, loading());
     const navBox = h("nav", { class: "side__nav", "aria-label": "봉사자 메뉴" });
     const drawVolNav = () => {
-      const link = (id, label, ic, sub, onclick) => h("a", {
-        class: "side__link" + (sub ? " side__link--sub" : "") + (id === tab ? " is-active" : ""), href: `#/${id}`, "aria-current": id === tab ? "page" : null, title: label,
+      const link = (id, label, ic, sub, onclick, badge) => h("a", {
+        class: "side__link" + (sub ? " side__link--sub" : "") + (id === tab ? " is-active" : ""), href: `#/${id}`, "aria-current": id === tab ? "page" : null, title: badge ? `${label} · 새 글 ${badge}개` : label,
         onclick: () => { if (onclick) onclick(); toggleNav(false); }
-      }, [icon(ic), h("span", { class: "side__text", text: label })]);
+      }, [icon(ic), h("span", { class: "side__text", text: label }), badge ? h("span", { class: "nav-badge", "aria-label": `안 읽은 공지 ${badge}개`, text: badge > 99 ? "99+" : String(badge) }) : null]);
       const setOpen = (open) => { state.navRosaryOpen = open; store.set("ps.navRosary", open ? "1" : "0"); };
       if (tab === "vstock") setOpen(true);
       const open = state.navRosaryOpen;
@@ -4606,7 +4611,8 @@
             h("button", { class: "side__toggle" + (open ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(open), "aria-label": `묵주 아래 메뉴 ${open ? "접기" : "펼치기"}`, onclick: () => { setOpen(!state.navRosaryOpen); drawVolNav(); } })
           ]),
           h("div", { class: "side__kids", hidden: !open }, link("vstock", "입출고", "db", true))
-        ])
+        ]),
+        link("vnotices", "공지", "bell", false, null, state.unreadNotices)
       );
     };
     drawVolNav();
@@ -4643,6 +4649,28 @@
     applySide();
     const show = (...kids) => { if (seq === volSeq) fill(main, ...kids); };
     const load = async () => {
+      if (tab === "vnotices") {
+        const setBadge = (r) => { if (seq === volSeq) { state.unreadNotices = r.unreadNotices; drawVolNav(); } };
+        if (id) {
+          const r = await api(`/notices/${Number(id)}`);
+          setBadge(r);
+          document.title = `${r.notice.title} · ${TITLE}`;
+          return show([
+            h("a", { class: "back-link", href: "#/vnotices" }, [icon("left"), "공지 목록"]),
+            h("article", { class: "card notice-view stack" }, [h("h1", { text: r.notice.title }), h("div", { class: "muted notice-item__meta" }, h("span", { text: ago(r.notice.createdAt) })), h("div", { class: "prose", text: r.notice.body })])
+          ]);
+        }
+        const r = await api("/notices");
+        setBadge(r);
+        return show([
+          h("h1", { class: "vol__hello", text: "공지" }),
+          r.notices.length ? h("ul", { class: "notice-list" }, r.notices.map((n) => h("li", {}, h("a", { class: "card notice-item" + (n.pinned ? " is-pinned" : ""), href: `#/vnotices/${n.id}` }, [
+            h("div", { class: "notice-item__title" }, [h("strong", { text: n.title }), n.unread ? h("span", { class: "new-badge", text: "새 글" }) : null]),
+            h("p", { class: "notice-item__preview", text: n.preview }),
+            h("div", { class: "notice-item__meta muted" }, h("span", { text: ago(n.createdAt) }))
+          ])))) : h("div", { class: "card empty", text: "아직 공지가 없어요." })
+        ]);
+      }
       if (tab === "vstock") {
         if (id) {
           const open = location.hash.split("/")[3];
