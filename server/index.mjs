@@ -255,6 +255,13 @@ const q = {
       (SELECT coalesce(sum(q.qty), 0) FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE m.ledger_id = l.id AND m.type = 'in') AS in_total,
       (SELECT coalesce(sum(q.qty), 0) FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE m.ledger_id = l.id AND m.type = 'out') AS out_total
     FROM stock_ledgers l JOIN project_items i ON i.id = l.item_id WHERE i.project_id = ? ORDER BY l.id`),
+  ledgersAll: db.prepare(`SELECT l.*, i.project_id, i.name AS item_name,
+      (SELECT count(*) FROM stock_options o WHERE o.ledger_id = l.id) AS option_count,
+      (SELECT coalesce(sum(q.qty), 0) FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE m.ledger_id = l.id AND m.type = 'in') AS in_total,
+      (SELECT coalesce(sum(q.qty), 0) FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE m.ledger_id = l.id AND m.type = 'out') AS out_total
+    FROM stock_ledgers l JOIN project_items i ON i.id = l.item_id ORDER BY i.project_id, l.id`),
+  ledgersUnderItem: db.prepare(`WITH RECURSIVE t(id) AS (SELECT ? UNION ALL SELECT pi.id FROM project_items pi JOIN t ON pi.parent_id = t.id)
+    SELECT count(*) AS n FROM stock_ledgers WHERE item_id IN (SELECT id FROM t)`),
   addLedger: db.prepare("INSERT INTO stock_ledgers (item_id, name, unit, in_label, out_label, contract, after) VALUES (?, ?, ?, ?, ?, ?, ?)"),
   setLedger: db.prepare("UPDATE stock_ledgers SET name = ?, unit = ?, in_label = ?, out_label = ?, contract = ?, after = ? WHERE id = ?"),
   delLedger: db.prepare("DELETE FROM stock_ledgers WHERE id = ?"),
@@ -1607,6 +1614,7 @@ async function api(req, res, path) {
     }
     if (!pjm[2] && method === "DELETE") {
       if (!isAdmin && p.created_by !== user.id) return send(res, 403, { error: "직접 만든 프로젝트만 지울 수 있어요." });
+      if (q.ledgersOfProject.all(p.id).length) return send(res, 409, { error: "이 프로젝트에 입출고 현황이 있어요. 입출고 관리에서 먼저 지워 주세요." });
       q.delProject.run(p.id);
       return send(res, 204);
     }
@@ -1651,6 +1659,7 @@ async function api(req, res, path) {
       return send(res, 200, projectDetail(p, user));
     }
     if (method === "DELETE") {
+      if (q.ledgersUnderItem.get(i.id).n) return send(res, 409, { error: "이 묶음에 입출고 현황이 있어요. 입출고 관리에서 먼저 지워 주세요." });
       q.delProjectItem.run(i.id); // 묶음이면 안의 것도 함께
       return send(res, 200, projectDetail(p, user));
     }
@@ -1658,6 +1667,19 @@ async function api(req, res, path) {
   }
 
   /* 입출고 현황: 볼 수 있는 프로젝트의 것 */
+  if (path === "/api/stock") {
+    if (method !== "GET") return send(res, 405, { error: "Method not allowed" });
+    const ledgers = [];
+    for (const l of q.ledgersAll.all()) {
+      const p = q.project.get(l.project_id);
+      if (!projectAllowed(user, p)) continue;
+      ledgers.push({
+        id: l.id, name: l.name, unit: l.unit, contract: l.contract, itemId: l.item_id, itemName: l.item_name, projectId: p.id, projectName: p.name, unitId: p.unit_id,
+        options: l.option_count, inTotal: l.in_total, outTotal: l.out_total, hasAfter: !!JSON.parse(l.after).label
+      });
+    }
+    return send(res, 200, { ledgers });
+  }
   const stm = path.match(/^\/api\/stock\/(\d+)(\/moves)?$/);
   if (stm) {
     const l = q.ledger.get(Number(stm[1]));

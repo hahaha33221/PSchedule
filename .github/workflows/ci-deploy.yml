@@ -262,12 +262,19 @@ jobs:
           ADM stock-import --dry < /tmp/ps/ledger.json | grep -q '미리보기.*입고 5, 출고 2, 재고 3'
           ADM stock-import < /tmp/ps/ledger.json | grep -q '일괄 대장: 기록 2건'
           if ADM stock-import < /tmp/ps/ledger.json 2>/dev/null; then echo "같은 대장이 두 번 들어가요"; exit 1; fi
+          # 입출고 관리 목록: 볼 수 있는 프로젝트의 것만, 현황이 있는 묶음·프로젝트는 먼저 못 지움
+          curl -fs -H "$H" $B/stock | node -e 'const l=JSON.parse(require("fs").readFileSync(0)).ledgers;const a=l.find(x=>x.name==="실 대장");if(!a||a.inTotal!==30||a.outTotal!==12||a.options!==2||a.itemName!=="묵주"||a.hasAfter)process.exit(1)'
+          if curl -fs -H "$(bearer "$A1")" $B/stock | grep -q '실 대장'; then echo "다른 팀 입출고가 보여요"; exit 1; fi
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{}' $B/stock)" = 405
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XDELETE $B/project-items/$GI)" = 409
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XDELETE $B/projects/$PJ)" = 409
+          for L in $(curl -fs -H "$H" $B/stock | node -pe 'JSON.parse(require("fs").readFileSync(0)).ledgers.filter(x=>x.projectId==='$PJ').map(x=>x.id).join(" ")'); do curl -fs -H "$H" -XDELETE $B/stock/$L >/dev/null; done
           curl -fs -H "$H" -XDELETE $B/projects/$PJ >/dev/null
           # 봉사자: 관리자가 발급, 직원 데이터는 서버에서 전부 막고 직원 명단에도 안 나옴
           VP=$(curl -fs -H "$H" -XPOST -d '{"login":"vola","name":"봉사자일","role":"volunteer","unitId":'$OPS'}' $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).password')
           A8=$(tok vola "$VP"); VU=$(USR vola)
           curl -fs -H "$(bearer "$A8")" $B/me | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.user.role!=="volunteer"||d.user.unitId!==null||d.units.length||d.team.length||d.categories.length)process.exit(1)'
-          for u in projects stock/1 tasks "events?from=2026-02-01&to=2026-02-28" contacts org team memos notices notices/unread "search?q=WYD" admin/users people/1 meetings/choices; do test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" "$B/$u")" = 403; done
+          for u in projects stock stock/1 tasks "events?from=2026-02-01&to=2026-02-28" contacts org team memos notices notices/unread "search?q=WYD" admin/users people/1 meetings/choices; do test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" "$B/$u")" = 403; done
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" -XPOST -d '{"title":"x"}' $B/tasks)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" -XPUT -d '{"mobile":"1"}' $B/contacts/u$VU)" = 403
           if curl -fs -H "$(bearer "$A1")" $B/me | grep -q '봉사자일'; then echo "직원 명단에 봉사자가 나와요"; exit 1; fi

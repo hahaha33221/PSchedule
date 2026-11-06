@@ -50,6 +50,7 @@
     view: store.get("ps.view", "month"),
     search: "",
     navDashOpen: store.get("ps.navDash", "") === "1",
+    navProjOpen: store.get("ps.navProj", "") !== "0", // 입출고 관리를 찾기 쉽게 처음에는 펼침
     show: JSON.parse(store.get("ps.show", "null") || "null") || { meeting: true, event: true, task: true },
     peek: null,       // 측면 패널 { type: 'event' | 'task' | 'day', id }
     navOpen: false,
@@ -780,28 +781,34 @@
         { id: "meetings", label: "회의", icon: "people" },
         { id: "memos", label: "메모", icon: "note" }
       ] },
-      { id: "projects", label: "프로젝트", icon: "folder" },
+      { id: "projects", label: "프로젝트", icon: "folder", kids: [
+        { id: "stock", label: "입출고 관리", icon: "db" }
+      ] },
       { id: "orgchart", label: "조직도", icon: "org" },
       { id: "contacts", label: "연락처", icon: "phone" },
       { id: "notices", label: "공지", icon: "bell", badge: state.unreadNotices } // 맨 아래, 안 읽은 공지 수
     ];
-    const setDashOpen = (open) => { state.navDashOpen = open; store.set("ps.navDash", open ? "1" : "0"); };
-    // 할 일·회의·메모 화면으로 가면 펼침 (접는 것은 사용자가)
-    if (active !== navActive && items[1].kids.some((k) => k.id === active)) setDashOpen(true);
+    const isOpen = (it) => (it.id === "projects" ? state.navProjOpen : state.navDashOpen);
+    const setOpen = (it, open) => {
+      if (it.id === "projects") { state.navProjOpen = open; store.set("ps.navProj", open ? "1" : "0"); }
+      else { state.navDashOpen = open; store.set("ps.navDash", open ? "1" : "0"); }
+    };
+    // 아래 메뉴 화면으로 가면 펼침 (접는 것은 사용자가)
+    if (active !== navActive) for (const it of items) if (it.kids && it.kids.some((k) => k.id === active)) setOpen(it, true);
     const link = (it, sub) => h("a", {
       class: "side__link" + (sub ? " side__link--sub" : "") + (it.id === active ? " is-active" : ""), href: "#/" + it.id, "aria-current": it.id === active ? "page" : null,
       title: it.badge ? `${it.label} · 새 글 ${it.badge}개` : it.label,
       onclick: () => {
-        if (it.kids) { const again = it.id === active; setDashOpen(again ? !state.navDashOpen : true); if (again) drawNav(active); }
+        if (it.kids) { const again = it.id === active; setOpen(it, again ? !isOpen(it) : true); if (again) drawNav(active); }
         toggleNav(false);
       }
     }, [icon(it.icon), h("span", { class: "side__text", text: it.label }), it.badge ? h("span", { class: "nav-badge", "aria-label": `안 읽은 공지 ${it.badge}개`, text: it.badge > 99 ? "99+" : String(it.badge) }) : null]);
     layout.nav.replaceChildren(...items.map((it) => (it.kids ? h("div", { class: "side__group" }, [
       h("div", { class: "side__row" }, [link(it), h("button", {
-        class: "side__toggle" + (state.navDashOpen ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(state.navDashOpen), "aria-label": `${it.label} 아래 메뉴 ${state.navDashOpen ? "접기" : "펼치기"}`,
-        onclick: () => { setDashOpen(!state.navDashOpen); drawNav(active); }
+        class: "side__toggle" + (isOpen(it) ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(isOpen(it)), "aria-label": `${it.label} 아래 메뉴 ${isOpen(it) ? "접기" : "펼치기"}`,
+        onclick: () => { setOpen(it, !isOpen(it)); drawNav(active); }
       })]),
-      h("div", { class: "side__kids", hidden: !state.navDashOpen }, it.kids.map((k) => link(k, true)))
+      h("div", { class: "side__kids", hidden: !isOpen(it) }, it.kids.map((k) => link(k, true)))
     ]) : link(it))));
     navActive = active;
     drawUnitNav(active);
@@ -3718,21 +3725,9 @@
                 h("span", { class: "muted small", text: `${under.filter((x) => x.status === "done").length}/${under.length}` }),
                 i.note ? h("span", { class: "muted small pj-note", text: i.note }) : null
               ])),
-              h("td", { class: "pj-actions" }, [
-                h("button", { class: "link-btn", type: "button", text: "+ 항목", onclick: () => itemDialog(null, { kind: "item", parentId: i.id }) }),
-                h("button", { class: "link-btn", type: "button", text: "+ 현황", title: "입출고 현황 만들기", onclick: () => ledgerDialog(null, async (body) => { const r = await api(`/project-items/${i.id}/ledgers`, { method: "POST", body }); closeDialog(); go(`#/stock/${r.ledger.id}`); }) })
-              ])
+              h("td", { class: "pj-actions" }, h("button", { class: "link-btn", type: "button", text: "+ 항목", onclick: () => itemDialog(null, { kind: "item", parentId: i.id }) }))
             ]));
-            if (open) {
-              walk(i.id, depth + 1);
-              // 묶음 맨 아래에 입출고 현황
-              for (const l of (data.ledgers || []).filter((x) => x.itemId === i.id)) rows.push(h("tr", { class: "pj-ledger" }, [
-                h("td", { colspan: "5", style: `padding-left:${14 + (depth + 1) * 20}px` }, h("a", { class: "pj-ledger__link", href: `#/stock/${l.id}` }, [
-                  icon("db"), h("strong", { text: l.name }),
-                  h("span", { class: "muted small", text: `입고 ${fmtN(l.inTotal)} · 출고 ${fmtN(l.outTotal)} · 재고 ${fmtN(l.inTotal - l.outTotal)} ${l.unit}` }), icon("arrow")
-                ]))
-              ]));
-            }
+            if (open) walk(i.id, depth + 1);
           } else if (shows(i)) {
             const st = h("select", { class: `pj-select pj-st--${i.status}`, "aria-label": `${i.name} 상태`, onchange: (e) => patchItem(i, { status: e.target.value }) }, PROJECT_STATUS.map(([k, label]) => h("option", { value: k, text: label })));
             st.value = i.status;
@@ -3785,10 +3780,18 @@
     try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("projects", failed(e)); }
   }
 
-  /* ---------- 입출고 현황: 입고·출고 표, 품목별 재고, 전달 후 현황 ---------- */
-  // 대장 만들기·고치기 (save 는 본문을 받아 저장)
-  function ledgerDialog(v, save) {
-    const err = errorLine();
+  /* ---------- 입출고 관리: 단계별로 안내 (기본 정보 → 입고 → 출고 → 재고 확인 → 전달 후) ---------- */
+  const STOCK_STEPS = [
+    { id: "setup", label: "기본 정보", title: "기본 정보 확인", hint: "단위, 계약 수량, 품목 열을 확인해요. 품목 열은 입고·출고 표의 칸이 돼요." },
+    { id: "in", label: "입고", title: "입고 기록", hint: "창고로 들어온 수량을 날짜별로 적어요. 표의 줄을 누르면 고칠 수 있어요." },
+    { id: "out", label: "출고", title: "출고 기록", hint: "창고에서 나간 수량과 전달자를 적어요. 표 맨 아래에 품목별 재고가 계산돼요." },
+    { id: "left", label: "재고 확인", title: "재고 확인", hint: "품목별 입고, 출고, 재고를 실제 창고 수량과 맞춰 봐요. 다르면 입고·출고 기록을 고쳐요." },
+    { id: "after", label: "전달 후 현황", title: "전달 후 현황", hint: "전달한 뒤의 수량과 차이를 봐요. 필요할 때만 쓰는 선택 단계예요." }
+  ];
+  const stockDone = (s) => ({ setup: s.options > 0, in: s.inTotal > 0, out: s.outTotal > 0, left: s.inTotal > 0 && s.outTotal > 0, after: s.hasAfter });
+  const stepNum = (i, done) => h("span", { class: "stock-step__num", html: done ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 13l4 4 10-10"/></svg>' : null, text: done ? null : String(i + 1) });
+  // 대장 입력칸 묶음 (만들기 안내와 고치기 대화상자가 함께 씀)
+  function ledgerParts(v) {
     const a = v?.ledger.after || {};
     const name = h("input", { value: v?.ledger.name || "", maxlength: "60", autofocus: true, placeholder: "예: 실타래 입출고" });
     const unit = h("input", { value: v?.ledger.unit || "개", maxlength: "10" });
@@ -3796,16 +3799,18 @@
     const outLabel = h("input", { value: v?.ledger.outLabel || "", maxlength: "80", placeholder: "예: 기념품팀 → 봉사자" });
     const contract = h("input", { type: "number", min: "0", value: v?.ledger.contract ?? "" });
     let options = (v?.options || []).map((o) => ({ ...o }));
+    let add = null;
     const optBox = h("div", { class: "stack stock-opts" });
-    const drawOpts = () => {
-      const add = h("input", { maxlength: "30", placeholder: "품목 이름 (색상·종류) 후 Enter", "aria-label": "품목 추가" });
-      const push = () => { if (add.value.trim()) { options.push({ name: add.value.trim() }); drawOpts(); optBox.querySelector("input:last-of-type")?.focus(); } };
-      add.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); push(); } });
-      add.addEventListener("blur", push);
+    const drawOpts = (focus) => {
+      add = h("input", { maxlength: "30", placeholder: "품목 이름 (색상·종류) 후 Enter", "aria-label": "품목 추가" });
+      const push = (again) => { if (add.value.trim()) { options.push({ name: add.value.trim() }); drawOpts(again); } };
+      add.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); push(true); } });
+      add.addEventListener("blur", () => push(false));
       optBox.replaceChildren(...options.map((o) => {
         const input = h("input", { value: o.name, maxlength: "30", "aria-label": "품목 이름", oninput: (e) => { o.name = e.target.value; } });
         return h("div", { class: "contact-cat" }, [input, h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": `${o.name} 빼기`, html: ICON.close, onclick: () => { options = options.filter((x) => x !== o); drawOpts(); } })]);
       }), add);
+      if (focus) add.focus();
     };
     drawOpts();
     const afterLabel = h("input", { value: a.label || "", maxlength: "40", placeholder: "예: 수녀원 전달" });
@@ -3813,46 +3818,152 @@
     const afterQty = h("input", { type: "number", min: "0", value: a.qty || "" });
     const perLength = h("input", { type: "number", min: "0", value: a.perLength || "" });
     const lengths = h("input", { value: (a.lengths || []).join(", "), placeholder: "예: 9144, 9000, 8800" });
-    const ok = h("button", { class: "btn btn--primary", type: "submit", text: v ? "저장" : "만들기" });
+    return {
+      name,
+      basics: [h("div", { class: "row2" }, [field("이름", name), field("단위", unit)]), field("계약 수량 (선택)", contract, "적으면 미입고 수량을 함께 보여 줘요")],
+      routes: h("div", { class: "row2" }, [field("입고 경로 (선택)", inLabel), field("출고 경로 (선택)", outLabel)]),
+      opts: h("div", { class: "field" }, [h("span", { class: "field__label", text: "품목 열" }), optBox]),
+      after: [
+        h("div", { class: "row2" }, [field("전달 이름", afterLabel), field("전달 단위", afterUnit)]),
+        field("전달 수량", afterQty),
+        h("div", { class: "row2" }, [field("1개당 필요한 길이", perLength, "단위와 길이가 같은 값으로"), field("1단위 길이 후보", lengths, "쉼표로 나눠 적으면 후보별로 계산해요")])
+      ],
+      flush: () => { if (add.value.trim()) { options.push({ name: add.value.trim() }); drawOpts(); } },
+      optionCount: () => options.filter((o) => o.name.trim()).length,
+      body: () => ({
+        name: name.value, unit: unit.value, inLabel: inLabel.value, outLabel: outLabel.value, contract: contract.value,
+        after: { label: afterLabel.value, unit: afterUnit.value, qty: Number(afterQty.value) || 0, perLength: Number(perLength.value) || 0, lengths: lengths.value.split(",").map((x) => Number(x.trim())).filter((x) => x > 0) },
+        options: v ? options.filter((o) => o.name.trim()) : options.map((o) => o.name).filter((x) => x.trim())
+      })
+    };
+  }
+  // 고치기: 한 화면에 전부 (opts.openAfter 면 전달 후 현황을 펼쳐서)
+  function ledgerDialog(v, save, opts) {
+    const err = errorLine();
+    const parts = ledgerParts(v);
+    const ok = h("button", { class: "btn btn--primary", type: "submit", text: "저장" });
     const form = h("form", { class: "stack", novalidate: true }, [
-      h("div", { class: "row2" }, [field("이름", name), field("단위", unit)]),
-      h("div", { class: "row2" }, [field("입고 경로", inLabel), field("출고 경로", outLabel)]),
-      field("계약 수량", contract, "적으면 미입고 수량을 함께 보여 줘요"),
-      h("div", { class: "field" }, [h("span", { class: "field__label", text: "품목 열" }), optBox]),
-      h("details", { class: "stock-after", open: !!a.label }, [
-        h("summary", { text: "전달 후 현황 (선택)" }),
-        h("div", { class: "stack" }, [
-          h("div", { class: "row2" }, [field("전달 이름", afterLabel), field("전달 단위", afterUnit)]),
-          field("전달 수량", afterQty),
-          h("div", { class: "row2" }, [field("1개당 필요한 길이", perLength, "단위와 길이가 같은 값으로"), field("1단위 길이 후보", lengths, "쉼표로 나눠 적으면 후보별로 계산해요")])
-        ])
-      ]),
+      ...parts.basics, parts.routes, parts.opts,
+      h("details", { class: "stock-after", open: !!v.ledger.after?.label || !!opts?.openAfter }, [h("summary", { text: "전달 후 현황 (선택)" }), h("div", { class: "stack" }, parts.after)]),
       err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])
     ]);
     form.addEventListener("submit", (e) => {
       e.preventDefault();
+      parts.flush();
+      busy(ok, async () => { try { await save(parts.body()); } catch (ex) { showError(err, ex.message); } });
+    });
+    openDialog("입출고 현황 고치기", form);
+  }
+  // 새로 만들기: 한 단계씩
+  async function ledgerWizard() {
+    const { projects } = await act(() => api("/projects"));
+    if (!projects.length) {
+      openDialog("새 입출고 현황", h("div", { class: "stack" }, [
+        h("p", { class: "muted", text: "입출고 현황은 프로젝트의 묶음에 속해요. 먼저 프로젝트를 만들어 주세요." }),
+        h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "닫기", "data-close": true }), h("a", { class: "btn btn--primary", href: "#/projects", text: "프로젝트로 가기", onclick: () => closeDialog() })])
+      ]));
+      return;
+    }
+    const parts = ledgerParts(null);
+    const err = errorLine();
+    const mine = projects.find((p) => p.unitId === myUnit()) || projects[0];
+    const projSel = h("select", { "aria-label": "프로젝트" }, projects.map((p) => h("option", { value: String(p.id), text: p.name })));
+    projSel.value = String(mine.id);
+    const groupSel = h("select", { "aria-label": "묶음" });
+    const groupHelp = h("p", { class: "muted small", hidden: true, text: "이 프로젝트에는 묶음이 없어요. 프로젝트 화면에서 묶음을 먼저 만들어 주세요." });
+    const loadGroups = async () => {
+      const groups = (await act(() => api(`/projects/${projSel.value}`))).items.filter((i) => i.kind === "group");
+      groupSel.replaceChildren(...groups.map((g) => h("option", { value: String(g.id), text: g.name })));
+      groupSel.disabled = !groups.length;
+      groupHelp.hidden = groups.length > 0;
+    };
+    projSel.addEventListener("change", loadGroups);
+    await loadGroups();
+    const need = (cond, msg) => { if (!cond) showError(err, msg); return cond; };
+    const steps = [
+      { label: "위치", title: "어디에 둘까요?", hint: "대장이 속할 프로젝트와 묶음을 골라요.", body: [h("div", { class: "row2" }, [field("프로젝트", projSel), field("묶음", groupSel)]), groupHelp], check: () => need(!!groupSel.value, "묶음을 골라 주세요.") },
+      { label: "이름", title: "무엇을 관리하나요?", hint: "대장 이름과 단위를 적어요. 나머지는 나중에 적어도 돼요.", body: [...parts.basics, parts.routes], check: () => need(parts.name.value.trim(), "이름을 적어 주세요.") },
+      { label: "품목", title: "품목을 나눠 볼까요?", hint: "색상이나 종류마다 하나씩 적어요. 입고·출고 표의 칸이 돼요.", body: [parts.opts], check: () => { parts.flush(); return need(parts.optionCount() > 0, "품목을 하나 이상 적어 주세요."); } },
+      { label: "전달 후", title: "전달 후 현황도 볼까요?", hint: "필요 없으면 비워 두고 만들어도 돼요. 나중에 추가할 수 있어요.", body: parts.after, check: () => true }
+    ];
+    let cur = 0;
+    const stepper = h("ol", { class: "stock-steps stock-steps--sm", style: `--steps:${steps.length}` });
+    const panels = steps.map((s) => h("div", { class: "stack wiz-panel" }, [h("div", {}, [h("h3", { text: s.title }), h("p", { class: "wiz-panel__hint", text: s.hint })]), ...s.body]));
+    const ok = h("button", { class: "btn btn--primary", type: "submit" });
+    const back = h("button", { class: "btn btn--ghost", type: "button", text: "이전", onclick: () => show(cur - 1) });
+    const cancel = h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true });
+    function show(i) {
+      cur = i;
+      stepper.replaceChildren(...steps.map((s, k) => h("li", {}, h("div", { class: "stock-step" + (k === i ? " is-active" : k < i ? " is-done" : ""), "aria-current": k === i ? "step" : null }, [stepNum(k, k < i), h("span", { class: "stock-step__label", text: s.label })]))));
+      panels.forEach((p, k) => { p.hidden = k !== i; });
+      back.hidden = i === 0;
+      ok.textContent = i === steps.length - 1 ? "만들기" : "다음";
+      showError(err, "");
+      const first = panels[i].querySelector("input, select");
+      if (first && dialog.open) first.focus();
+    }
+    const form = h("form", { class: "stack", novalidate: true }, [stepper, ...panels, err, h("div", { class: "actions" }, [cancel, back, ok])]);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      if (!steps[cur].check()) return;
+      if (cur < steps.length - 1) { show(cur + 1); return; }
       busy(ok, async () => {
         try {
-          const body = {
-            name: name.value, unit: unit.value, inLabel: inLabel.value, outLabel: outLabel.value, contract: contract.value,
-            after: { label: afterLabel.value, unit: afterUnit.value, qty: Number(afterQty.value) || 0, perLength: Number(perLength.value) || 0, lengths: lengths.value.split(",").map((x) => Number(x.trim())).filter((x) => x > 0) },
-            options: v ? options.filter((o) => o.name.trim()) : options.map((o) => o.name).filter((x) => x.trim())
-          };
-          await save(body);
+          const r = await api(`/project-items/${groupSel.value}/ledgers`, { method: "POST", body: parts.body() });
+          closeDialog();
+          go(`#/stock/${r.ledger.id}`);
         } catch (ex) { showError(err, ex.message); }
       });
     });
-    openDialog(v ? "입출고 현황 고치기" : "입출고 현황 만들기", form);
+    show(0);
+    openDialog("새 입출고 현황", form);
+  }
+  // 입출고 관리 목록
+  async function pageStocks() {
+    drawMini(null);
+    setMain("stock", loading());
+    document.title = `입출고 관리 · ${TITLE}`;
+    let list = [];
+    const draw = () => {
+      const newBtn = (cls) => h("button", { class: `btn btn--primary ${cls}`, type: "button", onclick: () => ledgerWizard() }, [icon("plus"), "새 입출고 현황"]);
+      const card = (l) => {
+        const done = stockDone(l);
+        const next = STOCK_STEPS.slice(0, 3).find((s) => !done[s.id]);
+        return h("a", { class: "card pj-card", href: `#/stock/${l.id}` }, [
+          h("strong", { text: l.name }),
+          h("span", { class: "muted small", text: `${l.projectName} › ${l.itemName}` }),
+          h("div", { class: "stock-card__nums" }, [`입고 ${fmtN(l.inTotal)}`, h("span", { text: `출고 ${fmtN(l.outTotal)}` }), h("strong", { class: l.inTotal - l.outTotal < 0 ? "stock-minus" : null, text: `재고 ${fmtN(l.inTotal - l.outTotal)} ${l.unit}` })]),
+          h("div", { class: "stock-dots", "aria-hidden": "true" }, STOCK_STEPS.map((s) => h("i", { class: done[s.id] ? "is-done" : null, title: s.label }))),
+          h("span", { class: next ? "stock-card__next" : "muted small", text: next ? `다음 단계: ${next.label}` : "기록 단계 완료" })
+        ]);
+      };
+      const teams = [...new Set(list.map((l) => l.unitId))];
+      const sections = teams.map((u) => h("section", { class: "pj-team" }, [
+        h("div", { class: "pj-team__head" }, [h("h2", { class: "card__title", text: u && unitOf(u) ? unitPath(u).map((x) => x.short || x.name).slice(-2).join(" › ") : "팀 없음" }), h("span", { class: "muted small", text: `대장 ${list.filter((l) => l.unitId === u).length}개` })]),
+        h("div", { class: "pj-cards" }, list.filter((l) => l.unitId === u).map(card))
+      ]));
+      setMain("stock", [
+        h("div", { class: "page-head" }, [h("h1", { text: "입출고 관리" }), newBtn("page-head__end")]),
+        list.length ? h("div", { class: "stack" }, sections) : h("div", { class: "card stock-guide stack" }, [
+          h("h2", { text: "이런 순서로 관리해요" }),
+          h("ol", { class: "stock-how" }, STOCK_STEPS.map((s, i) => h("li", {}, [stepNum(i), h("div", {}, [h("strong", { text: s.label }), h("span", { class: "muted small", text: s.hint })])]))),
+          h("div", {}, newBtn(""))
+        ])
+      ]);
+    };
+    page = { name: "stock", reload: async () => { list = (await api("/stock")).ledgers; draw(); } };
+    try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("stock", failed(e)); }
   }
   async function pageStock(id) {
     drawMini(null);
-    setMain("projects", loading());
-    let data;
+    setMain("stock", loading());
+    let data, step = store.get(`ps.stockStep.${id}`, "");
+    const edit = (opts) => ledgerDialog(data, async (body) => { const r = await api(`/stock/${id}`, { method: "PATCH", body }); closeDialog(); apply(r); }, opts);
     const apply = (r) => { data = r; draw(); };
     function moveDialog(type, m) {
       const err = errorLine();
-      const date = h("input", { value: m?.date || today(), maxlength: "20", autofocus: true, placeholder: "2026-11-06" });
+      const date = h("input", { value: m?.date || today(), maxlength: "20", autofocus: true, placeholder: today() });
       const handler = h("input", { value: m?.handler || "", maxlength: "40" });
       const note = h("textarea", { rows: "2", maxlength: "500" }, m?.note || "");
       const sum = h("strong");
@@ -3862,7 +3973,7 @@
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: m ? "저장" : "추가" });
       const form = h("form", { class: "stack", novalidate: true }, [
         h("div", { class: "row2" }, [field(type === "in" ? "입고일" : "출고일", date), type === "out" ? field("전달자", handler) : null]),
-        inputs.length ? h("div", { class: "stock-grid" }, inputs.map((x) => h("label", { class: "stock-grid__cell" }, [h("span", { class: "small", text: x.o.name }), x.el]))) : h("p", { class: "muted small", text: "먼저 '고치기'에서 품목 열을 추가해 주세요." }),
+        inputs.length ? h("div", { class: "stock-grid" }, inputs.map((x) => h("label", { class: "stock-grid__cell" }, [h("span", { class: "small", text: x.o.name }), x.el]))) : h("p", { class: "muted small", text: "먼저 1단계 기본 정보에서 품목 열을 추가해 주세요." }),
         sum, field("비고", note), err,
         h("div", { class: "actions" }, [
           m ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
@@ -3911,7 +4022,7 @@
         return h("section", { class: "stock-sec" }, [
           h("div", { class: "card__head" }, [
             h("h2", { class: "card__title" }, [isOut ? "출고 현황 " : "입고 현황 ", h("span", { class: "muted small", text: isOut ? l.outLabel : l.inLabel })]),
-            h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => moveDialog(type) }, [icon("plus"), isOut ? "출고 추가" : "입고 추가"])
+            h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => moveDialog(type) }, [icon("plus"), isOut ? "출고 추가" : "입고 추가"])
           ]),
           h("div", { class: "card table-wrap" }, h("table", { class: "table stock-table" }, [
             h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "순번" }), h("th", { text: isOut ? "출고일" : "입고일" }), ...options.map((o) => h("th", { class: "num", text: o.name })), h("th", { class: "num", text: "일계" }), h("th", { class: "num", text: "누계" }), isOut ? h("th", { text: "전달자" }) : null, h("th", { text: "비고" })])),
@@ -3933,7 +4044,7 @@
         const line = (label, cells, cls) => h("tr", { class: cls || null }, [h("th", { text: label }), ...cells.map((c) => h("td", { class: "num", text: fmtN(c) }))]);
         const each = lens.map((x) => Math.floor(x / a.perLength));
         after = h("section", { class: "stock-sec" }, [
-          h("div", { class: "card__head" }, h("h2", { class: "card__title" }, ["전달 후 현황 ", h("span", { class: "muted small", text: a.label })])),
+          h("div", { class: "card__head" }, [h("h2", { class: "card__title" }, ["전달 후 현황 ", h("span", { class: "muted small", text: a.label })]), h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => edit({ openAfter: true }) })]),
           h("div", { class: "card table-wrap" }, h("table", { class: "table stock-table stock-after-table" }, lens.length ? [
             h("thead", {}, h("tr", {}, [h("th", { text: `1${l.unit} 길이` }), ...lens.map((x) => h("th", { class: "num", text: fmtN(x) }))])),
             h("tbody", {}, [
@@ -3947,27 +4058,61 @@
           ] : h("tbody", {}, [line(`출고 합계 (${l.unit})`, [outAll]), line(`${a.label} ${unitName}`, [a.qty]), line("차이", [outAll - a.qty], "stock-left")])))
         ]);
       }
-      setMain("projects", [
-        h("nav", { class: "muted small" }, [h("a", { href: "#/projects", text: "프로젝트" }), " › ", h("a", { href: `#/projects/${data.project.id}`, text: data.project.name }), ` › ${data.itemName}`]),
+      const summary = { options: options.length, inTotal: inAll, outTotal: outAll, hasAfter: !!a.label };
+      const done = stockDone(summary);
+      // 저장해 둔 단계가 없으면 아직 안 한 첫 단계부터, 다 했으면 재고 확인
+      if (!STOCK_STEPS.some((s) => s.id === step)) step = STOCK_STEPS.slice(0, 3).find((s) => !done[s.id])?.id || "left";
+      const at = STOCK_STEPS.findIndex((s) => s.id === step);
+      const pick = (sid) => { step = sid; store.set(`ps.stockStep.${id}`, sid); draw(); window.scrollTo(0, 0); };
+      const setupPanel = () => h("div", { class: "stock-sec" }, [
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "대장 정보" }), h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => edit() })]),
+        h("dl", { class: "card stock-info" }, [
+          h("dt", { text: "위치" }), h("dd", {}, [h("a", { href: `#/projects/${data.project.id}`, text: data.project.name }), ` › ${data.itemName}`]),
+          h("dt", { text: "단위" }), h("dd", { text: l.unit }),
+          h("dt", { text: "계약 수량" }), h("dd", { text: l.contract ? `${fmtN(l.contract)} ${l.unit}` : "정하지 않음" }),
+          h("dt", { text: "입고 경로" }), h("dd", { text: l.inLabel || "-" }),
+          h("dt", { text: "출고 경로" }), h("dd", { text: l.outLabel || "-" }),
+          h("dt", { text: `품목 ${options.length}개` }), h("dd", {}, options.length ? h("div", { class: "stock-chips" }, options.map((o) => h("span", { text: o.name }))) : "아직 없어요. '고치기'에서 추가해 주세요.")
+        ])
+      ]);
+      const leftPanel = () => h("div", { class: "stock-sec" }, h("div", { class: "card table-wrap" }, h("table", { class: "table stock-table" }, [
+        h("thead", {}, h("tr", {}, [h("th", { text: "품목" }), h("th", { class: "num", text: "입고" }), h("th", { class: "num", text: "출고" }), h("th", { class: "num", text: "재고" }), h("th", { class: "num", text: "입고 대비 출고" })])),
+        h("tbody", {}, options.map((o) => {
+          const i = sumOf("in", o.id), u = sumOf("out", o.id);
+          return h("tr", {}, [h("td", { text: o.name }), num(i), num(u), num(i - u, i - u < 0 ? "stock-minus stock-strong" : "stock-strong"), h("td", { class: "num muted", text: i ? `${((u / i) * 100).toFixed(1)}%` : "-" })]);
+        })),
+        h("tfoot", {}, h("tr", {}, [h("th", { text: "합계" }), num(inAll), num(outAll), num(stock, stock < 0 ? "stock-minus" : ""), h("td", { class: "num", text: pct(outAll) })]))
+      ])));
+      const afterPanel = () => after || h("div", { class: "card stock-empty stock-sec" }, [
+        h("p", { text: "아직 전달 후 현황을 적지 않았어요. 필요 없으면 건너뛰어도 돼요." }),
+        h("button", { class: "btn btn--primary btn--sm", type: "button", text: "전달 후 현황 적기", onclick: () => edit({ openAfter: true }) })
+      ]);
+      const panel = { setup: setupPanel, in: () => table("in"), out: () => table("out"), left: leftPanel, after: afterPanel }[step]();
+      const cur = STOCK_STEPS[at], prev = STOCK_STEPS[at - 1], next = STOCK_STEPS[at + 1];
+      setMain("stock", [
+        h("nav", { class: "muted small" }, [h("a", { href: "#/stock", text: "입출고 관리" }), ` › ${l.name}`]),
         h("div", { class: "page-head page-head--wrap" }, [
           h("h1", { text: l.name }),
-          h("span", { class: "page-head__end actions" }, [
-            h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => ledgerDialog(data, async (body) => { const r = await api(`/stock/${id}`, { method: "PATCH", body }); closeDialog(); apply(r); }) }),
-            l.canDelete ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
-              if (!confirm(`'${l.name}' 입출고 현황과 모든 기록을 지울까요?`)) return;
-              const r = await act(() => api(`/stock/${id}`, { method: "DELETE" }));
-              go(`#/projects/${r.projectId}`);
-            } }) : null
-          ])
+          l.canDelete ? h("span", { class: "page-head__end actions" }, h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
+            if (!confirm(`'${l.name}' 입출고 현황과 모든 기록을 지울까요?`)) return;
+            await act(() => api(`/stock/${id}`, { method: "DELETE" }));
+            go("#/stock");
+          } })) : null
         ]),
         h("div", { class: "unit-stats" }, [
           l.contract ? stat("계약", l.contract) : null, stat("입고", inAll), l.contract ? stat("미입고", l.contract - inAll) : null, stat("출고", outAll), stat("창고 재고", stock, stock < 0)
         ]),
-        table("in"), table("out"), after
+        h("ol", { class: "stock-steps", "aria-label": "진행 단계" }, STOCK_STEPS.map((s, i) => h("li", {}, h("button", { class: "stock-step" + (s.id === step ? " is-active" : "") + (done[s.id] ? " is-done" : ""), type: "button", "aria-current": s.id === step ? "step" : null, onclick: () => pick(s.id) }, [stepNum(i, done[s.id]), h("span", { class: "stock-step__label", text: s.label })])))),
+        h("div", { class: "card stock-guide" }, [h("span", { class: "stock-guide__count", text: `${at + 1} / ${STOCK_STEPS.length}단계` }), h("h2", { text: cur.title }), h("p", { text: cur.hint })]),
+        panel,
+        h("div", { class: "stock-nav" }, [
+          prev ? h("button", { class: "btn btn--ghost", type: "button", text: `이전: ${prev.label}`, onclick: () => pick(prev.id) }) : null,
+          next ? h("button", { class: "btn btn--primary", type: "button", text: `다음: ${next.label}`, onclick: () => pick(next.id) }) : h("a", { class: "btn btn--primary", href: "#/stock", text: "목록으로" })
+        ])
       ]);
     }
-    page = { name: "projects", reload: async () => apply(await api(`/stock/${id}`)) };
-    try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("projects", failed(e)); }
+    page = { name: "stock", reload: async () => apply(await api(`/stock/${id}`)) };
+    try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("stock", failed(e)); }
   }
 
   /* ---------- 봉사자 화면: 직원 화면과 따로 (메뉴는 나중에 이 머리줄 아래로) ---------- */
@@ -4016,6 +4161,7 @@
     if (name === "members") return pageMembers();
     if (name === "org") return pageOrg();
     if (name === "stock" && id) return pageStock(Number(id));
+    if (name === "stock") return pageStocks();
     if (name === "projects" && id) return pageProject(Number(id));
     if (name === "projects") return pageProjects();
     if (name === "orgchart") return pageOrgChart();

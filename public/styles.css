@@ -1243,11 +1243,6 @@ button.mgroup__head:hover { color: var(--ink); }
 }
 
 /* 입출고 현황 */
-.pj-ledger td { background: var(--surface); }
-.pj-ledger__link { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--primary); text-decoration: none; }
-.pj-ledger__link .muted { color: var(--muted); }
-.pj-ledger__link .ic svg { width: 16px; height: 16px; }
-.pj-actions .link-btn + .link-btn { margin-left: 8px; }
 .pj-actions { width: 118px; }
 .stock-sec { margin-top: 16px; }
 .stock-sec .card__head { margin-bottom: 8px; }
@@ -1284,3 +1279,49 @@ button.mgroup__head:hover { color: var(--ink); }
 .vol__cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; }
 .vol__card { padding: 18px 20px; }
 .vol__card p { margin: 8px 0 0; }
+
+/* 입출고 관리: 단계 안내 */
+.stock-steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; margin: 16px 0 0; padding: 0; list-style: none; }
+.stock-steps--sm { grid-template-columns: repeat(var(--steps, 4), minmax(0, 1fr)); margin: 0; }
+.stock-step { position: relative; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 100%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink-2); font: inherit; font-size: 13px; font-weight: 600; text-align: left; cursor: pointer; }
+.stock-step:hover { border-color: var(--primary); }
+.stock-step__num { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--surface-3); color: var(--ink-2); font-size: 12px; font-weight: 700; }
+.stock-step__num svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 3; }
+.stock-step__label { min-width: 0; overflow-wrap: anywhere; }
+.stock-step.is-done .stock-step__num { background: var(--primary-soft); color: var(--primary); }
+.stock-step.is-active { border-color: var(--primary); background: var(--primary-soft); color: var(--primary); }
+.stock-step.is-active .stock-step__num { background: var(--primary); color: var(--primary-ink); }
+.stock-steps--sm .stock-step { padding: 6px 8px; font-size: 12.5px; cursor: default; }
+.stock-steps--sm .stock-step:hover { border-color: var(--line); }
+.stock-steps--sm .stock-step.is-active:hover { border-color: var(--primary); }
+.stock-guide { margin-top: 12px; padding: 14px 16px; }
+.stock-guide__count { color: var(--primary); font-size: 12.5px; font-weight: 700; }
+.stock-guide h2 { margin: 2px 0 4px; font-size: 16px; }
+.stock-guide p { margin: 0; color: var(--ink-2); font-size: 13.5px; }
+.stock-nav { display: flex; justify-content: space-between; gap: 8px; margin-top: 16px; }
+.stock-nav .btn:only-child { margin-left: auto; }
+.stock-info { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px 12px; margin: 0; padding: 14px 16px; font-size: 13.5px; }
+.stock-info dt { color: var(--muted); }
+.stock-info dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.stock-chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.stock-chips span { padding: 2px 8px; border-radius: 999px; background: var(--surface-2); font-size: 12.5px; }
+.stock-empty { padding: 24px 16px; text-align: center; }
+.stock-empty p { margin: 0 0 12px; color: var(--ink-2); font-size: 13.5px; }
+.stock-how { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+.stock-how li { display: flex; gap: 10px; }
+.stock-how strong { display: block; font-size: 14px; }
+.stock-how .stock-step__num { margin-top: 1px; }
+.stock-card__nums { display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 13px; }
+.stock-card__next { color: var(--primary); font-size: 12.5px; font-weight: 600; }
+.stock-dots { display: flex; gap: 4px; }
+.stock-dots i { flex: 1; height: 5px; border-radius: 3px; background: var(--surface-3); }
+.stock-dots i.is-done { background: var(--primary); }
+.wiz-panel[hidden] { display: none; }
+.wiz-panel h3 { margin: 0 0 2px; font-size: 15px; }
+.wiz-panel__hint { margin: 0; color: var(--ink-2); font-size: 13px; }
+@media (max-width: 640px) {
+  .stock-step { flex-direction: column; justify-content: center; gap: 4px; padding: 7px 2px; font-size: 11px; text-align: center; }
+  .stock-steps--sm .stock-step { padding: 6px 2px; font-size: 11px; }
+  .stock-step__label { word-break: keep-all; }
+  .stock-info { grid-template-columns: 84px minmax(0, 1fr); }
+}
