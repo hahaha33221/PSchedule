@@ -255,6 +255,28 @@ const q = {
       (SELECT coalesce(sum(q.qty), 0) FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE m.ledger_id = l.id AND m.type = 'in') AS in_total,
       (SELECT coalesce(sum(q.qty), 0) FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE m.ledger_id = l.id AND m.type = 'out') AS out_total
     FROM stock_ledgers l JOIN project_items i ON i.id = l.item_id WHERE i.project_id = ? ORDER BY l.id`),
+  // 봉사자: 기념품팀 프로젝트(읽기), 일정, 기본 교육
+  volProjects: db.prepare("SELECT p.* FROM projects p JOIN org_units u ON u.id = p.unit_id WHERE u.name = ? ORDER BY p.id"),
+  volProject: db.prepare("SELECT p.* FROM projects p JOIN org_units u ON u.id = p.unit_id WHERE u.name = ? AND p.id = ?"),
+  volSchedulesFor: db.prepare(`SELECT s.* FROM vol_schedules s WHERE s.audience = 'all' OR EXISTS (SELECT 1 FROM vol_schedule_users x WHERE x.schedule_id = s.id AND x.user_id = ?) ORDER BY s.date, s.start_time, s.id`),
+  volSchedulesAll: db.prepare("SELECT * FROM vol_schedules ORDER BY date DESC, start_time, id"),
+  volSchedule: db.prepare("SELECT * FROM vol_schedules WHERE id = ?"),
+  addVolSchedule: db.prepare("INSERT INTO vol_schedules (title, date, start_time, end_time, place, note, audience, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
+  setVolSchedule: db.prepare("UPDATE vol_schedules SET title = ?, date = ?, start_time = ?, end_time = ?, place = ?, note = ?, audience = ? WHERE id = ?"),
+  delVolSchedule: db.prepare("DELETE FROM vol_schedules WHERE id = ?"),
+  volScheduleUsers: db.prepare("SELECT x.user_id FROM vol_schedule_users x JOIN users u ON u.id = x.user_id AND u.volunteer = 1 WHERE x.schedule_id = ?"),
+  clearVolScheduleUsers: db.prepare("DELETE FROM vol_schedule_users WHERE schedule_id = ?"),
+  addVolScheduleUser: db.prepare("INSERT OR IGNORE INTO vol_schedule_users (schedule_id, user_id) VALUES (?, ?)"),
+  isVolunteer: db.prepare("SELECT 1 FROM users WHERE id = ? AND volunteer = 1"),
+  volTrainings: db.prepare("SELECT * FROM vol_trainings ORDER BY date = '', date, start_time, id"),
+  volTraining: db.prepare("SELECT * FROM vol_trainings WHERE id = ?"),
+  addVolTraining: db.prepare("INSERT INTO vol_trainings (title, body, date, start_time, place, link, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)"),
+  setVolTraining: db.prepare("UPDATE vol_trainings SET title = ?, body = ?, date = ?, start_time = ?, place = ?, link = ? WHERE id = ?"),
+  delVolTraining: db.prepare("DELETE FROM vol_trainings WHERE id = ?"),
+  volDoneOfUser: db.prepare("SELECT training_id, done_at FROM vol_training_done WHERE user_id = ?"),
+  volDoneOfTraining: db.prepare("SELECT d.user_id, u.name, d.done_at FROM vol_training_done d JOIN users u ON u.id = d.user_id AND u.volunteer = 1 WHERE d.training_id = ? ORDER BY d.done_at"),
+  setVolDone: db.prepare("INSERT OR IGNORE INTO vol_training_done (training_id, user_id) VALUES (?, ?)"),
+  clearVolDone: db.prepare("DELETE FROM vol_training_done WHERE training_id = ? AND user_id = ?"),
   ledgersAll: db.prepare(`SELECT l.*, i.project_id, i.name AS item_name,
       (SELECT count(*) FROM stock_options o WHERE o.ledger_id = l.id) AS option_count,
       (SELECT coalesce(sum(q.qty), 0) FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE m.ledger_id = l.id AND m.type = 'in') AS in_total,
@@ -1015,6 +1037,39 @@ const projectDetail = (p, user) => {
     ledgers: q.ledgersOfProject.all(p.id).map((l) => ({ id: l.id, itemId: l.item_id, name: l.name, unit: l.unit, contract: l.contract, inTotal: l.in_total, outTotal: l.out_total }))
   };
 };
+// 봉사자에게 보여 줄 프로젝트: 기념품팀 것만, 읽기 전용, 만든 사람·담당 직원은 빼고 (입출고도 빼고)
+const VOLUNTEER_PROJECT_TEAM = "기념품팀";
+const volProjectSummary = (p) => {
+  const list = q.projectItems.all(p.id).filter((i) => i.kind === "item");
+  return { id: p.id, name: p.name, note: p.note, total: list.length, done: list.filter((i) => i.status === "done").length };
+};
+const volItemOut = (i) => ({ id: i.id, parentId: i.parent_id, kind: i.kind, name: i.name, status: i.status, dueDate: i.due_date, note: i.note });
+const volScheduleOut = (s) => ({ id: s.id, title: s.title, date: s.date, startTime: s.start_time, endTime: s.end_time, place: s.place, note: s.note });
+const volScheduleAdminOut = (s) => ({ ...volScheduleOut(s), audience: s.audience, userIds: q.volScheduleUsers.all(s.id).map((x) => x.user_id) });
+const volTrainingOut = (t) => ({ id: t.id, title: t.title, body: t.body, date: t.date, startTime: t.start_time, place: t.place, link: t.link });
+function volScheduleFields(b) {
+  const title = text(b.title, 120, "제목", true);
+  if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
+  const st = String(b.startTime || ""), et = String(b.endTime || "");
+  if (st && !isTime(st)) throw bad("시작 시간을 확인해 주세요.");
+  if (et && !isTime(et)) throw bad("끝나는 시간을 확인해 주세요.");
+  if (et && !st) throw bad("시작 시간도 적어 주세요.");
+  if (et && et <= st) throw bad("끝나는 시간은 시작 시간보다 늦어야 해요.");
+  const audience = b.audience === "some" ? "some" : "all";
+  const users = audience === "some" ? [...new Set(Array.isArray(b.userIds) ? b.userIds : [])] : [];
+  if (audience === "some" && !users.length) throw bad("봉사자를 한 명 이상 골라 주세요.");
+  for (const id of users) if (!Number.isInteger(id) || !q.isVolunteer.get(id)) throw bad("봉사자를 다시 골라 주세요.");
+  return { fields: [title, b.date, st, et, text(b.place, 120, "장소"), text(b.note, 1000, "메모"), audience], users };
+}
+function volTrainingFields(b) {
+  const title = text(b.title, 120, "제목", true);
+  const date = String(b.date || ""), st = String(b.startTime || "");
+  if (date && !isDate(date)) throw bad("날짜를 확인해 주세요.");
+  if (st && !isTime(st)) throw bad("시작 시간을 확인해 주세요.");
+  const link = text(b.link, 500, "자료 링크");
+  if (link && !/^https?:\/\/\S+$/i.test(link)) throw bad("자료 링크는 http 또는 https 주소로 적어 주세요.");
+  return [title, text(b.body, 5000, "내용"), date, st, text(b.place, 120, "장소"), link];
+}
 // 입출고 현황
 function ledgerFields(b, cur) {
   const get = (k, curVal) => (has(b, k) ? b[k] : curVal);
@@ -1110,8 +1165,30 @@ async function api(req, res, path) {
 
   const user = auth(req);
   if (!user) return send(res, 401, { error: "로그인이 필요해요." });
-  // 봉사자: 내 계정 정보·비밀번호·로그아웃만. 직원 데이터(조직도·연락처·일정 등)는 입구에서 막음
+  // 봉사자: 내 계정 정보·비밀번호·로그아웃과 봉사자 전용 API 만. 직원 데이터(조직도·연락처·일정 등)는 입구에서 막음
   if (user.volunteer) {
+    if (path === "/api/volunteer/home" && method === "GET") {
+      const done = new Map(q.volDoneOfUser.all(user.id).map((d) => [d.training_id, d.done_at]));
+      return send(res, 200, {
+        schedules: q.volSchedulesFor.all(user.id).map(volScheduleOut),
+        trainings: q.volTrainings.all().map((t) => ({ ...volTrainingOut(t), done: done.has(t.id), doneAt: done.get(t.id) || null }))
+      });
+    }
+    if (path === "/api/volunteer/projects" && method === "GET") return send(res, 200, { projects: q.volProjects.all(VOLUNTEER_PROJECT_TEAM).map(volProjectSummary) });
+    const vpm = path.match(/^\/api\/volunteer\/projects\/(\d+)$/);
+    if (vpm && method === "GET") {
+      const p = q.volProject.get(VOLUNTEER_PROJECT_TEAM, Number(vpm[1]));
+      if (!p) throw notFound("프로젝트");
+      return send(res, 200, { project: volProjectSummary(p), items: q.projectItems.all(p.id).map(volItemOut) });
+    }
+    const vtm = path.match(/^\/api\/volunteer\/trainings\/(\d+)\/done$/);
+    if (vtm && method === "POST") {
+      const t = q.volTraining.get(Number(vtm[1]));
+      if (!t) throw notFound("교육");
+      const b = await readJson(req);
+      if (b.done === false) q.clearVolDone.run(t.id, user.id); else q.setVolDone.run(t.id, user.id);
+      return send(res, 200, { done: b.done !== false });
+    }
     if (path === "/api/me" && method === "GET") return send(res, 200, { user: publicUser(user), team: [], units: [], tags: [], categories: [], calendars: [], unreadNotices: 0 });
     if (!((path === "/api/logout" || path === "/api/password") && method === "POST")) return send(res, 403, { error: "봉사자 계정으로는 볼 수 없어요." });
   }
@@ -1740,6 +1817,61 @@ async function api(req, res, path) {
 
   if (path.startsWith("/api/admin/")) {
     if (!isAdmin) return send(res, 403, { error: "관리자만 볼 수 있어요." });
+
+    /* 봉사자 일정·기본 교육 */
+    if (path === "/api/admin/vol-schedules" && method === "GET") return send(res, 200, { schedules: q.volSchedulesAll.all().map(volScheduleAdminOut) });
+    if (path === "/api/admin/vol-schedules" && method === "POST") {
+      const { fields, users } = volScheduleFields(await readJson(req));
+      const id = inTx(() => {
+        const id = Number(q.addVolSchedule.run(...fields, user.id).lastInsertRowid);
+        for (const u of users) q.addVolScheduleUser.run(id, u);
+        return id;
+      });
+      console.log(`[admin] ${user.login} → 봉사 일정 #${id} 등록`);
+      return send(res, 201, { schedule: volScheduleAdminOut(q.volSchedule.get(id)) });
+    }
+    const vsm = path.match(/^\/api\/admin\/vol-schedules\/(\d+)$/);
+    if (vsm) {
+      const s = q.volSchedule.get(Number(vsm[1]));
+      if (!s) throw notFound("일정");
+      if (method === "PATCH") {
+        const { fields, users } = volScheduleFields(await readJson(req));
+        inTx(() => {
+          q.setVolSchedule.run(...fields, s.id);
+          q.clearVolScheduleUsers.run(s.id);
+          for (const u of users) q.addVolScheduleUser.run(s.id, u);
+        });
+        return send(res, 200, { schedule: volScheduleAdminOut(q.volSchedule.get(s.id)) });
+      }
+      if (method === "DELETE") {
+        q.delVolSchedule.run(s.id);
+        console.log(`[admin] ${user.login} → 봉사 일정 #${s.id} 삭제`);
+        return send(res, 204);
+      }
+      return send(res, 405, { error: "Method not allowed" });
+    }
+    const volTrainingAdminOut = (t) => ({ ...volTrainingOut(t), doneBy: q.volDoneOfTraining.all(t.id).map((d) => ({ id: d.user_id, name: d.name, doneAt: d.done_at })) });
+    if (path === "/api/admin/vol-trainings" && method === "GET") return send(res, 200, { trainings: q.volTrainings.all().map(volTrainingAdminOut) });
+    if (path === "/api/admin/vol-trainings" && method === "POST") {
+      const id = Number(q.addVolTraining.run(...volTrainingFields(await readJson(req)), user.id).lastInsertRowid);
+      console.log(`[admin] ${user.login} → 기본 교육 #${id} 등록`);
+      return send(res, 201, { training: volTrainingAdminOut(q.volTraining.get(id)) });
+    }
+    const vtam = path.match(/^\/api\/admin\/vol-trainings\/(\d+)$/);
+    if (vtam) {
+      const t = q.volTraining.get(Number(vtam[1]));
+      if (!t) throw notFound("교육");
+      if (method === "PATCH") {
+        q.setVolTraining.run(...volTrainingFields(await readJson(req)), t.id);
+        return send(res, 200, { training: volTrainingAdminOut(q.volTraining.get(t.id)) });
+      }
+      if (method === "DELETE") {
+        q.delVolTraining.run(t.id);
+        console.log(`[admin] ${user.login} → 기본 교육 #${t.id} 삭제`);
+        return send(res, 204);
+      }
+      return send(res, 405, { error: "Method not allowed" });
+    }
 
     if (path === "/api/admin/users" && method === "GET") {
       return send(res, 200, {

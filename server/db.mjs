@@ -405,6 +405,41 @@ function addUnitColumns(db) {
       qty       INTEGER NOT NULL,
       PRIMARY KEY (move_id, option_id)
     );
+    -- 봉사자 일정(전체 또는 개인 지정)·기본 교육과 이수 기록. 등록·수정은 관리자만
+    CREATE TABLE IF NOT EXISTS vol_schedules (
+      id         INTEGER PRIMARY KEY,
+      title      TEXT NOT NULL,
+      date       TEXT NOT NULL,
+      start_time TEXT NOT NULL DEFAULT '',
+      end_time   TEXT NOT NULL DEFAULT '',
+      place      TEXT NOT NULL DEFAULT '',
+      note       TEXT NOT NULL DEFAULT '',
+      audience   TEXT NOT NULL DEFAULT 'all' CHECK (audience IN ('all', 'some')),
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS vol_schedule_users (
+      schedule_id INTEGER NOT NULL REFERENCES vol_schedules(id) ON DELETE CASCADE,
+      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      PRIMARY KEY (schedule_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS vol_trainings (
+      id         INTEGER PRIMARY KEY,
+      title      TEXT NOT NULL,
+      body       TEXT NOT NULL DEFAULT '',
+      date       TEXT NOT NULL DEFAULT '',
+      start_time TEXT NOT NULL DEFAULT '',
+      place      TEXT NOT NULL DEFAULT '',
+      link       TEXT NOT NULL DEFAULT '',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS vol_training_done (
+      training_id INTEGER NOT NULL REFERENCES vol_trainings(id) ON DELETE CASCADE,
+      user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      done_at     TEXT NOT NULL DEFAULT (datetime('now')),
+      PRIMARY KEY (training_id, user_id)
+    );
   `);
   // 봉사자 계정: 직원 화면·API 를 쓰지 않음 (role 은 member, 서버 입구에서 막음)
   if (!has("users", "volunteer")) db.exec("ALTER TABLE users ADD COLUMN volunteer INTEGER NOT NULL DEFAULT 0");

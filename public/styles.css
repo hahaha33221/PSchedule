@@ -1362,3 +1362,36 @@ button.mgroup__head:hover { color: var(--ink); }
 .theme-volunteer .vol__bar .brand, .theme-volunteer .vol__account { color: var(--vol-bar-ink); }
 .theme-volunteer .vol__account:hover { background: rgba(0, 0, 0, .08); }
 .theme-volunteer .vol__tag { background: var(--vol-bar-ink); color: var(--primary); }
+.theme-volunteer .pj-st--doing, .theme-volunteer .pj-st--fixed { color: var(--vol-accent); }
+
+/* 봉사자 메뉴·일정·교육·프로젝트 */
+.vol__nav { display: flex; gap: 4px; padding: 6px 12px; overflow-x: auto; background: var(--surface); border-bottom: 1px solid var(--line); }
+.vol__tab { flex: none; padding: 7px 12px; border-radius: 9px; color: var(--ink-2); font-size: 14px; font-weight: 600; text-decoration: none; }
+.vol__tab:hover { background: var(--surface-2); }
+.vol__tab.is-active { background: var(--primary); color: var(--primary-ink); }
+.vol__card .card__head { margin-bottom: 6px; }
+.vol-list { margin: 0; padding: 0; list-style: none; }
+.vol-sched { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 4px 12px; padding: 10px 0; border-top: 1px solid var(--line-2); }
+.vol-sched:first-child { border-top: 0; }
+.vol-sched__when, .vol-sched__what { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 13.5px; }
+.vol-pre { margin: 6px 0 0; white-space: pre-line; overflow-wrap: anywhere; }
+.vol-past { margin-top: 16px; }
+.vol-past summary { cursor: pointer; margin-bottom: 8px; font-size: 13.5px; font-weight: 600; }
+.vol-todo { margin: 8px 0 0; padding-left: 18px; font-size: 13.5px; }
+.vol-done { padding: 1px 8px; border-radius: 999px; background: var(--primary); color: var(--primary-ink); font-size: 12px; font-weight: 700; }
+.vol-actions { display: flex; justify-content: flex-end; margin-top: 10px; }
+.vol-group { margin-top: 14px; }
+.vol-group:first-child { margin-top: 0; }
+.vol-group .vol-group { padding-left: 12px; border-left: 2px solid var(--line); }
+.vol-group__name { margin: 0 0 4px; font-size: 15px; }
+.vol-items { margin: 0; padding: 0; list-style: none; }
+.vol-item { padding: 7px 0; border-top: 1px solid var(--line-2); font-size: 13.5px; }
+.vol-item__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.vol-pick { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 4px 8px; margin-top: 8px; max-height: 180px; overflow-y: auto; }
+.vol-pick[hidden] { display: none; }
+.vol-pick__row { display: flex; align-items: center; gap: 6px; font-size: 13.5px; }
+.vol-chip { padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 12.5px; }
+.vol-chip.is-done { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
+@media (max-width: 640px) {
+  .vol-sched { grid-template-columns: minmax(0, 1fr); }
+}
