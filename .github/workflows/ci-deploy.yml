@@ -324,6 +324,15 @@ jobs:
           test "$(lc '{"login":"vola","password":"volunteer-pass-1","as":"volunteer"}')" = 200
           test "$(lc '{"login":"master","password":"ci-pass-1","as":"staff"}')" = 200
           test "$(lc '{"login":"vola","password":"volunteer-pass-1"}')" = 200
+          # 로그인 제한: 접속 IP 헤더를 바꿔도 아이디 전체 30회에서 막히고, 다른 IP의 실패 10회로는 그 아이디가 잠기지 않음
+          curl -fs -H "$H" -XPOST -d '{"login":"locku","name":"잠금시험"}' $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).password' > /tmp/ps/lock.pw
+          LP=$(cat /tmp/ps/lock.pw)
+          for i in $(seq 1 10); do curl -s -o /dev/null -H 'content-type: application/json' -H "x-vercel-forwarded-for: 10.0.0.1" -H "x-real-ip: 192.0.2.1" -XPOST -d '{"login":"locku","password":"wrong-pass"}' $B/login; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "x-vercel-forwarded-for: 10.0.0.1" -H "x-real-ip: 192.0.2.1" -XPOST -d '{"login":"locku","password":"wrong-pass"}' $B/login)" = 429
+          J="{\"login\":\"locku\",\"password\":\"$LP\"}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "x-vercel-forwarded-for: 10.0.0.2" -H "x-real-ip: 192.0.2.1" -XPOST -d "$J" $B/login)" = 200
+          for i in $(seq 1 20); do curl -s -o /dev/null -H 'content-type: application/json' -H "x-vercel-forwarded-for: 10.1.0.$i" -H "x-real-ip: 192.0.2.2" -XPOST -d '{"login":"locku","password":"wrong-pass"}' $B/login; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "x-vercel-forwarded-for: 10.2.0.1" -H "x-real-ip: 192.0.2.3" -XPOST -d "$J" $B/login)" = 429
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -XPOST -d '{"login":"no-such-user","password":"x"}' $B/login)" = 401
           # 공지 공개 범위: 권한마다 목록·안 읽음 수·본문이 다르고, 봉사자는 읽기만
           VH0="$(bearer "$A8")"
           NA=$(curl -fs -H "$H" -XPOST -d '{"title":"전체공지","body":"가","audience":"all"}' $B/notices | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')

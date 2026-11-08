@@ -3417,7 +3417,8 @@
       ]), { admin: true, wide: true });
     }
     function exportCsv() {
-      const esc = (v) => (/[",\n]/.test(v) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+      // 엑셀에서 수식으로 실행되지 않게: =, +, -, @, 탭으로 시작하면 앞에 ' 를 붙임
+      const esc = (raw) => { const v = /^[=+\-@\t\r]/.test(String(raw)) ? `'${raw}` : String(raw); return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
       const lines = [["넘버링", "본부", "부서", "직함", "이름", "비고"]];
       orgRowsOrdered().forEach((p, i) => {
         const pl = placeOf(p.unitId);

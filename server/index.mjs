@@ -23,6 +23,11 @@ const PORT = Number(process.env.PORT) || 8787;
 const DATA_DIR = resolve(process.env.DATA_DIR || "data");
 const STATIC_DIR = process.env.STATIC_DIR ? resolve(process.env.STATIC_DIR) : null;
 const DEV = process.env.DEV === "1";
+// 새로 만드는 DB·백업 파일은 소유자만 읽고 쓰게 (같은 서버의 다른 계정이 못 읽음)
+process.umask(0o077);
+const DUMMY_HASH = hashPassword(crypto.randomBytes(12).toString("hex"));
+// 화면 보안 정책: Vercel(vercel.json)과 같게. 로컬 개발만 자동 새로고침 스크립트 허용
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' https://cdn.jsdelivr.net; font-src 'self' https://cdn.jsdelivr.net data:; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 const BACKUP_DIR = resolve(process.env.BACKUP_DIR || join(DATA_DIR, "backups"));
 const BACKUP_KEEP_DAYS = process.env.BACKUP_KEEP_DAYS === undefined ? 30 : Number(process.env.BACKUP_KEEP_DAYS) || 0;
 const BACKUP_HOUR = Number(process.env.BACKUP_HOUR ?? 4);
@@ -408,14 +413,17 @@ Object.assign(q, {
   visCalendarIds: db.prepare(`SELECT c.id FROM calendars c WHERE ${EXT_VIS("c")}`)
 });
 
-/* ---------- 로그인 시도 제한 (IP별, 아이디별) ---------- */
+/* ---------- 로그인 시도 제한 ----------
+ * 키마다 10분 동안 허용 횟수: 'id+ip:' 10회(아이디+접속 IP), 'id:' 30회(아이디 전체, IP를 바꿔도), 'real:' 100회(프록시가 확인한 실제 접속지)
+ * 접속 IP 헤더는 꾸밀 수 있어서 그것만으로는 막지 않음 */
 const attempts = new Map();
-const LIMIT = 10, WINDOW_MS = 10 * 60 * 1000;
+const WINDOW_MS = 10 * 60 * 1000;
+const limitOf = (k) => (k.startsWith("real:") ? 100 : k.startsWith("id:") ? 30 : 10);
 function tooMany(...keys) {
   const now = Date.now();
   return keys.some((k) => {
     const a = attempts.get(k);
-    return a && a.until > now && a.count >= LIMIT;
+    return a && a.until > now && a.count >= limitOf(k);
   });
 }
 function recordFail(...keys) {
@@ -437,6 +445,9 @@ const sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
 const normalizeLogin = (s) => String(s || "").normalize("NFC").trim().toLowerCase();
 const bad = (message, field) => Object.assign(new Error(message), { status: 400, expose: true, field });
 
+// nginx 가 직접 넣는 접속지 (요청자가 보낸 같은 이름 헤더는 nginx 가 덮어씀). 로컬 개발에는 nginx 가 없어 소켓 주소
+const realIp = (req) => String(req.headers["x-real-ip"] || req.socket.remoteAddress || "");
+// 화면에 보이는 사용자 IP (Vercel 을 거치면 그 값). 요청자가 꾸밀 수 있으니 제한의 보조 값으로만 씀
 function clientIp(req) {
   return (
     req.headers["x-vercel-forwarded-for"] ||
@@ -1250,12 +1261,13 @@ async function api(req, res, path) {
   if (path === "/api/login" && method === "POST") {
     const { login, password, as } = await readJson(req);
     const id = normalizeLogin(login);
-    const ip = "ip:" + clientIp(req), key = "id:" + id;
-    if (tooMany(ip, key)) return send(res, 429, { error: "로그인 시도가 너무 많아요. 10분 뒤에 다시 시도해 주세요." });
+    const keys = [`id+ip:${id}|${clientIp(req)}`, "id:" + id, "real:" + realIp(req)];
+    if (tooMany(...keys)) return send(res, 429, { error: "로그인 시도가 너무 많아요. 10분 뒤에 다시 시도해 주세요." });
     const user = id && q.userByLogin.get(id);
-    const ok = user && typeof password === "string" && verifyPassword(password.trim(), user.pw_hash);
+    // 없는 아이디도 같은 시간이 걸리게 (응답 속도로 아이디가 있는지 알 수 없게)
+    const ok = typeof password === "string" && verifyPassword(password.trim(), user ? user.pw_hash : DUMMY_HASH) && !!user;
     if (!ok) {
-      recordFail(ip, key);
+      recordFail(...keys);
       return send(res, 401, { error: "아이디 또는 비밀번호를 다시 확인해 주세요." });
     }
     // 직원·봉사자 로그인 구분: 비밀번호가 맞을 때만 알려 줌 (아이디만으로 계정 종류를 알 수 없게)
@@ -2455,7 +2467,7 @@ function serveStatic(req, res, pathname) {
     return res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found");
   }
   const type = TYPES[extname(file).toLowerCase()] || "application/octet-stream";
-  res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store" });
+  res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-store", ...(type.startsWith("text/html") ? { "Content-Security-Policy": DEV ? CSP.replace("script-src 'self'", "script-src 'self' 'unsafe-inline'") : CSP, "X-Frame-Options": "DENY" } : {}) });
   if (DEV && type.startsWith("text/html")) {
     let html = "";
     createReadStream(file, "utf8").on("data", (c) => (html += c)).on("end", () =>
