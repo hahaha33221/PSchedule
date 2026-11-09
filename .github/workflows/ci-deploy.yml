@@ -463,6 +463,18 @@ jobs:
           printf '{"audience":"all","rows":[{"title":"다","date":"2030-05-03"},{"title":"잘못","date":"2030-13-40"}]}' | (if ADM vol-schedule-import 2>/dev/null; then exit 1; fi)
           if curl -fs -H "$VH" $B/volunteer/home | grep -q '"title":"다"'; then echo "잘못된 줄이 있는데 일부가 들어갔어요"; exit 1; fi
           for S in $(curl -fs -H "$H" $B/admin/vol-schedules | node -pe 'JSON.parse(require("fs").readFileSync(0)).schedules.filter(s=>s.title.startsWith("묵주 교육")).map(s=>s.id).join(" ")'); do curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$S >/dev/null; done
+          # 방문 수량: 관리자가 묵주에 연결한 일정만 봉사자가 수량을 고치고, 프로젝트 화면·달력에 같은 값, 고친 사람 남음
+          RV=$(curl -fs -H "$H" -XPOST -d '{"title":"묵주 교육 · 다","date":"2030-06-01","qty":200,"project":true}' $B/admin/vol-schedules | node -pe 'const s=JSON.parse(require("fs").readFileSync(0)).schedule;if(!s.project||s.qty!==200)process.exit(1);s.id')
+          NV=$(curl -fs -H "$H" -XPOST -d '{"title":"연결 안 된 일정","date":"2030-06-02","qty":5}' $B/admin/vol-schedules | node -pe 'JSON.parse(require("fs").readFileSync(0)).schedule.id')
+          curl -fs -H "$VH" $B/volunteer/projects/$VPJ | node -e 'const v=JSON.parse(require("fs").readFileSync(0)).visits;if(v.length!==1||v[0].qty!==200||v[0].title!=="묵주 교육 · 다")process.exit(1)'
+          curl -fs -H "$VH" -XPATCH -d '{"qty":250}' $B/volunteer/schedules/$RV/qty | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).schedule;if(s.qty!==250||s.qtyBy!=="봉사자일"||!s.qtyAt)process.exit(1)'
+          curl -fs -H "$(bearer "$A9")" $B/volunteer/home | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).schedules.find(x=>x.title==="묵주 교육 · 다");if(s.qty!==250)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPATCH -d '{"qty":1}' $B/volunteer/schedules/$NV/qty)" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPATCH -d '{"qty":-1}' $B/volunteer/schedules/$RV/qty)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPATCH -d '{"qty":1}' $B/volunteer/schedules/$RV/qty)" = 404
+          curl -fs -H "$H" $B/admin/vol-schedules | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).schedules.find(x=>x.title==="묵주 교육 · 다");if(s.qty!==250||s.qtyBy!=="봉사자일")process.exit(1)'
+          curl -fs -H "$H" -XPATCH -d '{"title":"묵주 교육 · 다","date":"2030-06-01","qty":250,"project":true,"note":"메모만"}' $B/admin/vol-schedules/$RV | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).schedule;if(s.qtyBy!=="봉사자일")process.exit(1)'
+          curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$RV >/dev/null; curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$NV >/dev/null
           # 개인 지정 봉사자를 지워도 일정이 전체 공개로 바뀌지 않음
           curl -fs -H "$H" -XDELETE $B/admin/users/$VB >/dev/null
           if curl -fs -H "$VH" $B/volunteer/home | grep -q '개인 일정'; then echo "지정 봉사자를 지우니 일정이 전체에 보여요"; exit 1; fi

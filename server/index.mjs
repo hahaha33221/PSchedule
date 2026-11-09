@@ -269,8 +269,10 @@ const q = {
   volSchedulesFor: db.prepare(`SELECT s.* FROM vol_schedules s WHERE s.audience = 'all' OR EXISTS (SELECT 1 FROM vol_schedule_users x WHERE x.schedule_id = s.id AND x.user_id = ?) ORDER BY s.date, s.start_time, s.id`),
   volSchedulesAll: db.prepare("SELECT * FROM vol_schedules ORDER BY date DESC, start_time, id"),
   volSchedule: db.prepare("SELECT * FROM vol_schedules WHERE id = ?"),
-  addVolSchedule: db.prepare("INSERT INTO vol_schedules (title, date, start_time, end_time, place, note, audience, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
-  setVolSchedule: db.prepare("UPDATE vol_schedules SET title = ?, date = ?, start_time = ?, end_time = ?, place = ?, note = ?, audience = ? WHERE id = ?"),
+  addVolSchedule: db.prepare("INSERT INTO vol_schedules (title, date, start_time, end_time, place, note, audience, qty, project_item_id, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+  setVolSchedule: db.prepare("UPDATE vol_schedules SET title = ?, date = ?, start_time = ?, end_time = ?, place = ?, note = ?, audience = ?, qty = ?, project_item_id = ? WHERE id = ?"),
+  setVolQty: db.prepare("UPDATE vol_schedules SET qty = ? WHERE id = ?"),
+  markVolQty: db.prepare("UPDATE vol_schedules SET qty_by = ?, qty_at = datetime('now') WHERE id = ?"),
   delVolSchedule: db.prepare("DELETE FROM vol_schedules WHERE id = ?"),
   volScheduleUsers: db.prepare("SELECT x.user_id FROM vol_schedule_users x JOIN users u ON u.id = x.user_id AND u.volunteer = 1 WHERE x.schedule_id = ?"),
   clearVolScheduleUsers: db.prepare("DELETE FROM vol_schedule_users WHERE schedule_id = ?"),
@@ -1086,7 +1088,21 @@ function volLedgerProject(l) {
   return p && volItems(p).shown.has(l.item_id) ? p : null;
 }
 const volItemOut = (i, shown) => ({ id: i.id, parentId: shown.has(i.parent_id) ? i.parent_id : null, kind: i.kind, name: i.name, status: i.status, dueDate: i.due_date, note: i.note });
-const volScheduleOut = (s) => ({ id: s.id, title: s.title, date: s.date, startTime: s.start_time, endTime: s.end_time, place: s.place, note: s.note });
+const volScheduleOut = (s) => ({ id: s.id, title: s.title, date: s.date, startTime: s.start_time, endTime: s.end_time, place: s.place, note: s.note, qty: s.qty, qtyBy: s.qty_by, qtyAt: s.qty_at, project: !!s.project_item_id });
+// 봉사자에게 보이는 '묵주' 묶음 (방문 일정을 이 묶음에 연결)
+function rosaryGroupId() {
+  for (const p of volProjectsShown()) {
+    const g = volItems(p).items.find((i) => i.kind === "group" && i.name === VOLUNTEER_GROUP);
+    if (g) return g.id;
+  }
+  return null;
+}
+const volQtyInput = (v) => {
+  if (v === "" || v === null || v === undefined) return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0 || n > 10000000) throw bad("수량은 0 이상의 숫자로 적어 주세요.");
+  return n;
+};
 const volScheduleAdminOut = (s) => {
   const by = s.created_by ? q.userById.get(s.created_by) : null;
   return { ...volScheduleOut(s), audience: s.audience, userIds: q.volScheduleUsers.all(s.id).map((x) => x.user_id), enteredBy: by?.name || "", byVolunteer: !!by?.volunteer };
@@ -1104,7 +1120,7 @@ function volScheduleFields(b) {
   const users = audience === "some" ? [...new Set(Array.isArray(b.userIds) ? b.userIds : [])] : [];
   if (audience === "some" && !users.length) throw bad("봉사자를 한 명 이상 골라 주세요.");
   for (const id of users) if (!Number.isInteger(id) || !q.isVolunteer.get(id)) throw bad("봉사자를 다시 골라 주세요.");
-  return { fields: [title, b.date, st, et, text(b.place, 120, "장소"), text(b.note, 1000, "메모"), audience], users };
+  return { fields: [title, b.date, st, et, text(b.place, 120, "장소"), text(b.note, 1000, "메모"), audience, volQtyInput(b.qty), b.projectItemId ?? null], users };
 }
 function volTrainingFields(b) {
   const title = text(b.title, 120, "제목", true);
@@ -1298,15 +1314,28 @@ async function api(req, res, path) {
       const p = q.volProject.get(VOLUNTEER_PROJECT_TEAM, Number(vpm[1]));
       const shown = p && volItems(p);
       if (!shown?.items.length) throw notFound("프로젝트");
-      return send(res, 200, { project: volProjectSummary(p), items: shown.items.map((i) => volItemOut(i, shown.shown)) });
+      const visits = q.volSchedulesFor.all(user.id).filter((x) => x.project_item_id && shown.shown.has(x.project_item_id)).map((x) => ({ ...volScheduleOut(x), mine: x.created_by === user.id }));
+      return send(res, 200, { project: volProjectSummary(p), items: shown.items.map((i) => volItemOut(i, shown.shown)), visits });
     }
     // 일정: 봉사자가 직접 입력 (자기에게만 보임), 고치기·지우기는 자기가 입력한 일정만
+    // 프로젝트에 묶인 방문 일정의 수량: 그 일정을 볼 수 있는 봉사자가 고침 (누가 언제 고쳤는지 남김)
+    const vqm = path.match(/^\/api\/volunteer\/schedules\/(\d+)\/qty$/);
+    if (vqm && method === "PATCH") {
+      const s = q.volSchedule.get(Number(vqm[1]));
+      const visible = s && (s.audience === "all" || q.volScheduleUsers.all(s.id).some((x) => x.user_id === user.id));
+      const linked = s?.project_item_id && rosaryGroupId() === s.project_item_id;
+      if (!visible || !linked) throw notFound("일정");
+      const qty = volQtyInput((await readJson(req)).qty);
+      inTx(() => { q.setVolQty.run(qty, s.id); if (qty !== s.qty) q.markVolQty.run(user.name, s.id); });
+      return send(res, 200, { schedule: { ...volScheduleOut(q.volSchedule.get(s.id)), mine: s.created_by === user.id } });
+    }
     if (path === "/api/volunteer/schedules" && method === "POST") {
       const b = await readJson(req);
-      const { fields } = volScheduleFields({ ...b, audience: "some", userIds: [user.id] });
+      const { fields } = volScheduleFields({ ...b, audience: "some", userIds: [user.id], projectItemId: null });
       const id = inTx(() => {
         const id = Number(q.addVolSchedule.run(...fields, user.id).lastInsertRowid);
         q.addVolScheduleUser.run(id, user.id);
+        if (fields[7] !== null) q.markVolQty.run(user.name, id);
         return id;
       });
       return send(res, 201, { schedule: volScheduleOut(q.volSchedule.get(id)) });
@@ -1318,8 +1347,8 @@ async function api(req, res, path) {
       if (s.created_by !== user.id) return send(res, 403, { error: "직접 입력한 일정만 고칠 수 있어요." });
       if (method === "PATCH") {
         // 대상은 그대로 (관리자가 전체로 바꿨으면 유지)
-        const { fields } = volScheduleFields({ ...(await readJson(req)), audience: s.audience, userIds: q.volScheduleUsers.all(s.id).map((x) => x.user_id) });
-        q.setVolSchedule.run(...fields, s.id);
+        const { fields } = volScheduleFields({ ...(await readJson(req)), audience: s.audience, userIds: q.volScheduleUsers.all(s.id).map((x) => x.user_id), projectItemId: s.project_item_id });
+        inTx(() => { q.setVolSchedule.run(...fields, s.id); if (fields[7] !== s.qty) q.markVolQty.run(user.name, s.id); });
         return send(res, 200, { schedule: volScheduleOut(q.volSchedule.get(s.id)) });
       }
       if (method === "DELETE") { q.delVolSchedule.run(s.id); return send(res, 204); }
@@ -2049,10 +2078,17 @@ async function api(req, res, path) {
 
     /* 봉사자 일정·기본 교육 */
     if (path === "/api/admin/vol-schedules" && method === "GET") return send(res, 200, { schedules: q.volSchedulesAll.all().map(volScheduleAdminOut) });
+    // 관리자: '묵주 프로젝트 일정'을 고르면 묵주 묶음에 연결 (봉사자 프로젝트 관리에서 수량을 고침)
+    const adminVolFields = (b) => {
+      const projectItemId = b.project ? rosaryGroupId() : null;
+      if (b.project && !projectItemId) throw bad("연결할 묵주 묶음을 찾을 수 없어요.");
+      return volScheduleFields({ ...b, projectItemId });
+    };
     if (path === "/api/admin/vol-schedules" && method === "POST") {
-      const { fields, users } = volScheduleFields(await readJson(req));
+      const { fields, users } = adminVolFields(await readJson(req));
       const id = inTx(() => {
         const id = Number(q.addVolSchedule.run(...fields, user.id).lastInsertRowid);
+        if (fields[7] !== null) q.markVolQty.run(user.name, id);
         for (const u of users) q.addVolScheduleUser.run(id, u);
         return id;
       });
@@ -2064,9 +2100,10 @@ async function api(req, res, path) {
       const s = q.volSchedule.get(Number(vsm[1]));
       if (!s) throw notFound("일정");
       if (method === "PATCH") {
-        const { fields, users } = volScheduleFields(await readJson(req));
+        const { fields, users } = adminVolFields(await readJson(req));
         inTx(() => {
           q.setVolSchedule.run(...fields, s.id);
+          if (fields[7] !== s.qty) q.markVolQty.run(user.name, s.id);
           q.clearVolScheduleUsers.run(s.id);
           for (const u of users) q.addVolScheduleUser.run(s.id, u);
         });

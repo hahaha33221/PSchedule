@@ -4608,8 +4608,8 @@
         link("vtraining", "기본 교육", "check"),
         h("div", { class: "side__group" }, [
           h("div", { class: "side__row" }, [
-            link("vprojects", "묵주", "folder", false, () => { const again = tab === "vprojects"; setOpen(again ? !state.navRosaryOpen : true); if (again) drawVolNav(); }),
-            h("button", { class: "side__toggle" + (open ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(open), "aria-label": `묵주 아래 메뉴 ${open ? "접기" : "펼치기"}`, onclick: () => { setOpen(!state.navRosaryOpen); drawVolNav(); } })
+            link("vprojects", "프로젝트 관리", "folder", false, () => { const again = tab === "vprojects"; setOpen(again ? !state.navRosaryOpen : true); if (again) drawVolNav(); }),
+            h("button", { class: "side__toggle" + (open ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(open), "aria-label": `프로젝트 관리 아래 메뉴 ${open ? "접기" : "펼치기"}`, onclick: () => { setOpen(!state.navRosaryOpen); drawVolNav(); } })
           ]),
           h("div", { class: "side__kids", hidden: !open }, link("vstock", "입출고", "db", true))
         ]),
@@ -4706,7 +4706,7 @@
     h("div", { class: "vol-sched__when" }, [h("strong", { text: volDay(s.date) }), volTime(s) ? h("span", { class: "muted small", text: volTime(s) }) : null]),
     h("div", { class: "vol-sched__what" }, [
       h("strong", { text: s.title }),
-      s.place ? h("span", { class: "muted small", text: s.place }) : null,
+      s.place || s.qty != null ? h("span", { class: "muted small", text: [s.place, s.qty != null ? `수량 ${fmtN(s.qty)}` : ""].filter(Boolean).join(" · ") }) : null,
       s.note ? h("p", { class: "vol-pre small", text: s.note }) : null
     ])
   ]);
@@ -4742,8 +4742,8 @@
           ledgers.length ? h("ul", { class: "vol-list" }, ledgers.map(volStockRow)) : h("p", { class: "muted", text: "아직 입력할 수 있는 대장이 없어요." })
         ]),
         h("section", { class: "card vol__card" }, [
-          h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "묵주" }), more("#/vprojects", "보기")]),
-          h("p", { class: "muted", text: "묵주 진행 상황을 볼 수 있어요." })
+          h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "프로젝트 관리" }), more("#/vprojects", "보기")]),
+          h("p", { class: "muted", text: "묵주 진행 상황과 방문 수량을 관리해요." })
         ])
       ])
     ];
@@ -4758,10 +4758,12 @@
     const end = h("input", { type: "time", value: s?.endTime || "" });
     const place = h("input", { value: s?.place || "", maxlength: "120" });
     const note = h("textarea", { rows: "3", maxlength: "1000" }, s?.note || "");
+    const qty = h("input", { type: "number", min: "0", inputmode: "numeric", value: s?.qty ?? "" });
     const ok = h("button", { class: "btn btn--primary", type: "submit", text: s ? "저장" : "추가" });
     const form = h("form", { class: "stack", novalidate: true }, [
       field("제목", title),
       field("날짜", day),
+      field("수량 (선택)", qty),
       h("div", { class: "row2" }, [field("시작 (선택)", start), field("끝 (선택)", end)]),
       field("장소 (선택)", place), field("메모 (선택)", note),
       s ? null : h("p", { class: "muted small", text: "내 일정으로 저장돼요. 다른 봉사자에게는 보이지 않고, 관리자는 볼 수 있어요." }),
@@ -4779,7 +4781,7 @@
       e.preventDefault();
       busy(ok, async () => {
         try {
-          await api(s ? `/volunteer/schedules/${s.id}` : "/volunteer/schedules", { method: s ? "PATCH" : "POST", body: { title: title.value, date: day.value, startTime: start.value, endTime: end.value, place: place.value, note: note.value } });
+          await api(s ? `/volunteer/schedules/${s.id}` : "/volunteer/schedules", { method: s ? "PATCH" : "POST", body: { title: title.value, date: day.value, startTime: start.value, endTime: end.value, place: place.value, note: note.value, qty: qty.value } });
           volCal.sel = day.value; volCal.month = day.value.slice(0, 7);
           closeDialog(); render();
         } catch (ex) { showError(err, ex.message); }
@@ -4840,7 +4842,7 @@
             h("i", { class: `vol-dayrow__mark ${color(s)}` }),
             h("div", { class: "vol-sched__what" }, [
               h("strong", { text: s.title }),
-              [volTime(s), s.place].some(Boolean) ? h("span", { class: "muted small", text: [volTime(s), s.place].filter(Boolean).join(" · ") }) : null,
+              [volTime(s), s.place, s.qty != null].some(Boolean) ? h("span", { class: "muted small", text: [volTime(s), s.place, s.qty != null ? `수량 ${fmtN(s.qty)}` : ""].filter(Boolean).join(" · ") }) : null,
               s.note ? h("p", { class: "vol-pre small", text: s.note }) : null
             ]),
             s.mine ? h("span", { class: "muted small vol-dayrow__edit", text: "고치기" }) : null
@@ -4877,14 +4879,54 @@
   }
   function volProjects(list) {
     return [
-      h("h1", { class: "vol__hello", text: "묵주" }),
+      h("h1", { class: "vol__hello", text: "프로젝트 관리" }),
       list.length ? h("div", { class: "pj-cards" }, list.map((p) => h("a", { class: "card pj-card", href: `#/vprojects/${p.id}` }, [
         h("strong", { text: p.name }),
         h("span", { class: "muted small", text: `항목 ${p.total}개 · 완료 ${p.done}개` })
       ]))) : h("div", { class: "card empty", text: "아직 볼 수 있는 프로젝트가 없어요." })
     ];
   }
-  function volProject({ project, items }, only, ledgers) {
+  // 방문 일정·수량: 여기서 고친 수량이 달력에 그대로 보임
+  function volVisits(visits) {
+    const box = h("section", { class: "card vol__card vol-visits" });
+    const draw = () => {
+      const sum = (rows) => rows.reduce((n, v) => n + (v.qty || 0), 0);
+      const past = visits.filter((v) => v.date < today()), next = visits.filter((v) => v.date >= today());
+      const empty = visits.filter((v) => v.qty == null).length;
+      const whoOf = (v) => (v.note.match(/담당:\s*([^\n]+)/) || [])[1] || "";
+      const row = (v) => {
+        const input = h("input", { type: "number", min: "0", inputmode: "numeric", class: "vol-visits__qty", value: v.qty ?? "", "aria-label": `${v.title} 수량`, placeholder: "-" });
+        input.addEventListener("change", async () => {
+          try {
+            const r = await api(`/volunteer/schedules/${v.id}/qty`, { method: "PATCH", body: { qty: input.value } });
+            Object.assign(v, r.schedule); toast("수량을 저장했어요."); draw();
+          } catch (ex) { toast(ex.message); input.value = v.qty ?? ""; }
+        });
+        return h("tr", { class: v.date < today() ? "is-past" : null }, [
+          h("td", { class: "nowrap" }, [volDay(v.date), v.startTime ? h("small", { class: "muted", text: ` ${v.startTime}` }) : null]),
+          h("td", {}, [h("span", { text: v.title.split(" · ").pop() }), v.place ? h("small", { class: "muted", text: ` · ${v.place}` }) : null, whoOf(v) ? h("small", { class: "vol-visits__who muted", text: whoOf(v) }) : null]),
+          h("td", { class: "num" }, [input, v.qtyBy ? h("small", { class: "vol-visits__by muted", title: v.qtyAt || "", text: v.qtyBy }) : null])
+        ]);
+      };
+      fill(box,
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "묵주 방문 일정 · 수량" }), h("a", { class: "link-btn", href: "#/vschedule", text: "달력 보기" })]),
+        visits.length ? h("div", { class: "vol-visits__sum" }, [
+          h("span", {}, ["전체 ", h("strong", { text: fmtN(sum(visits)) })]),
+          h("span", {}, ["다녀옴 ", h("strong", { text: fmtN(sum(past)) })]),
+          h("span", {}, ["남음 ", h("strong", { text: fmtN(sum(next)) })]),
+          empty ? h("span", { class: "muted", text: `수량 없음 ${empty}건` }) : null
+        ]) : null,
+        visits.length ? h("div", { class: "table-wrap" }, h("table", { class: "table vol-visits__table" }, [
+          h("thead", {}, h("tr", {}, [h("th", { text: "날짜" }), h("th", { text: "방문" }), h("th", { class: "num", text: "수량" })])),
+          h("tbody", {}, [...next, ...past.reverse()].map(row))
+        ])) : h("p", { class: "muted", text: "아직 연결된 방문 일정이 없어요." }),
+        visits.length ? h("p", { class: "muted small", text: "수량을 고치면 바로 저장되고 달력에도 보여요. 고친 사람 이름이 함께 남아요." }) : null
+      );
+    };
+    draw();
+    return box;
+  }
+  function volProject({ project, items, visits = [] }, only, ledgers) {
     const kids = (pid) => items.filter((i) => i.parentId === pid);
     const itemRow = (i) => h("li", { class: "vol-item" }, [
       h("div", { class: "vol-item__head" }, [h("span", { text: i.name }), h("span", { class: `pj-st pj-st--${i.status}`, text: projectStatusLabel(i.status) }), i.dueDate ? h("span", { class: "muted small", text: `마감 ${shortDate(i.dueDate)}` }) : null]),
@@ -4903,11 +4945,12 @@
     const tops = kids(null);
     const single = tops.length === 1 && tops[0].kind === "group" ? tops[0] : null;
     return [
-      only ? null : h("nav", { class: "muted small" }, h("a", { href: "#/vprojects", text: "묵주" })),
-      h("h1", { class: "vol__hello", text: "묵주" }),
-      h("p", { class: "muted small", text: `${project.name} · 읽기 전용` }),
+      only ? null : h("nav", { class: "muted small" }, h("a", { href: "#/vprojects", text: "프로젝트 관리" })),
+      h("h1", { class: "vol__hello", text: "프로젝트 관리" }),
+      h("p", { class: "muted small", text: `${project.name} › 묵주 · 항목은 읽기 전용` }),
       single?.note ? h("p", { class: "vol-pre muted", text: single.note }) : null,
       h("div", { class: "card vol__card" }, list(single ? single.id : null)),
+      volVisits(visits),
       h("section", { class: "card vol__card vol-stock-card" }, [
         h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "입출고" }), h("a", { class: "link-btn", href: "#/vstock", text: "전체 보기" })]),
         ledgers.length ? h("ul", { class: "vol-list" }, ledgers.map(volStockRow)) : h("p", { class: "muted", text: "아직 입력할 수 있는 대장이 없어요." })
@@ -4942,6 +4985,8 @@
       const end = h("input", { type: "time", value: s?.endTime || "" });
       const place = h("input", { value: s?.place || "", maxlength: "120" });
       const note = h("textarea", { rows: "3", maxlength: "1000" }, s?.note || "");
+      const qty = h("input", { type: "number", min: "0", inputmode: "numeric", value: s?.qty ?? "" });
+      const linkBox = h("input", { type: "checkbox", checked: s ? !!s.project : false });
       let audience = s?.audience || "all";
       const picked = new Set(s?.userIds || []);
       const box = h("div", { class: "vol-pick" });
@@ -4957,10 +5002,11 @@
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: s ? "저장" : "등록" });
       const form = h("form", { class: "stack", novalidate: true }, [
         field("제목", title), h("div", { class: "row2" }, [field("날짜", date), h("div", { class: "row2" }, [field("시작", start), field("끝", end)])]), field("장소", place), field("메모", note),
+        h("div", { class: "row2" }, [field("수량 (선택)", qty, s?.qtyBy ? `마지막 수정: ${s.qtyBy}` : null), h("label", { class: "check vol-linkcheck" }, [linkBox, h("span", { text: "묵주 프로젝트 방문 (봉사자 프로젝트 관리에서 수량을 고쳐요)" })])]),
         h("div", { class: "field" }, [h("span", { class: "field__label", text: "대상" }), seg2, box]), err,
         h("div", { class: "actions" }, [s ? delBtn(s.title, `/admin/vol-schedules/${s.id}`) : null, h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])
       ]);
-      saveForm(form, ok, err, () => api(s ? `/admin/vol-schedules/${s.id}` : "/admin/vol-schedules", { method: s ? "PATCH" : "POST", body: { title: title.value, date: date.value, startTime: start.value, endTime: end.value, place: place.value, note: note.value, audience, userIds: [...picked] } }));
+      saveForm(form, ok, err, () => api(s ? `/admin/vol-schedules/${s.id}` : "/admin/vol-schedules", { method: s ? "PATCH" : "POST", body: { title: title.value, date: date.value, startTime: start.value, endTime: end.value, place: place.value, note: note.value, audience, userIds: [...picked], qty: qty.value, project: linkBox.checked } }));
       openDialog(s ? "봉사 일정 고치기" : "봉사 일정 등록", form, { admin: true });
     }
     function trainingDialog(t) {
@@ -4986,9 +5032,9 @@
     const rowAttrs = (fn) => ({ class: "stock-row", tabindex: "0", onclick: fn, onkeydown: (e) => { if (e.key === "Enter") fn(); } });
     const draw = () => {
       const scheduleView = schedules.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
-        h("thead", {}, h("tr", {}, ["날짜", "시간", "제목", "장소", "대상", "입력자"].map((x) => h("th", { text: x })))),
+        h("thead", {}, h("tr", {}, ["날짜", "시간", "제목", "장소", "수량", "대상", "입력자"].map((x) => h("th", { text: x })))),
         h("tbody", {}, schedules.map((s) => h("tr", rowAttrs(() => scheduleDialog(s)), [
-          h("td", { class: "nowrap", text: volDay(s.date) }), h("td", { class: "nowrap", text: volTime(s) || "-" }), h("td", { text: s.title }), h("td", { text: s.place || "-" }),
+          h("td", { class: "nowrap", text: volDay(s.date) }), h("td", { class: "nowrap", text: volTime(s) || "-" }), h("td", { text: s.title }), h("td", { text: s.place || "-" }), h("td", { class: "nowrap num", text: s.qty != null ? fmtN(s.qty) : "-" }),
           h("td", { text: s.audience === "all" ? "전체" : s.userIds.map((id) => vols.find((u) => u.id === id)?.name).filter(Boolean).join(", ") || "지정 없음" }),
           h("td", { class: "nowrap" }, s.byVolunteer ? [s.enteredBy, " ", h("span", { class: "stock-tag", text: "봉사자" })] : s.enteredBy || "-")
         ])))

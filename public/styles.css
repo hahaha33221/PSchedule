@@ -1511,3 +1511,13 @@ button.gantt__name:hover { background: var(--surface-2); }
   .stock-history li { grid-template-columns: 70px minmax(0, 1fr); }
   .stock-history__what { grid-column: 1 / -1; }
 }
+
+/* 봉사자 프로젝트 관리: 방문 일정·수량 */
+.vol-visits { margin-top: 14px; }
+.vol-visits__sum { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 4px 0 10px; font-size: 13.5px; }
+.vol-visits__table td { vertical-align: middle; font-size: 13.5px; }
+.vol-visits__table tr.is-past td { color: var(--muted); }
+.vol-visits__table input.vol-visits__qty { width: 96px; min-width: 0; height: 32px; padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums; }
+.vol-visits__table th:last-child, .vol-visits__table td:last-child { width: 1%; white-space: nowrap; }
+.vol-visits__who, .vol-visits__by { display: block; font-size: 11.5px; }
+.vol-linkcheck { align-self: end; font-size: 13px; }

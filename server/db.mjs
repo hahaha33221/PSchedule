@@ -471,6 +471,11 @@ function addUnitColumns(db) {
       PRIMARY KEY (training_id, user_id)
     );
   `);
+  // 봉사자 일정 수량·프로젝트 연결: 묵주 방문처럼 프로젝트에 묶인 일정은 봉사자 '프로젝트 관리'에서 수량을 고침
+  if (!has("vol_schedules", "qty")) db.exec("ALTER TABLE vol_schedules ADD COLUMN qty INTEGER");
+  if (!has("vol_schedules", "project_item_id")) db.exec("ALTER TABLE vol_schedules ADD COLUMN project_item_id INTEGER");
+  if (!has("vol_schedules", "qty_by")) db.exec("ALTER TABLE vol_schedules ADD COLUMN qty_by TEXT NOT NULL DEFAULT ''");
+  if (!has("vol_schedules", "qty_at")) db.exec("ALTER TABLE vol_schedules ADD COLUMN qty_at TEXT");
   // 공지 공개 범위: all(봉사자 포함 전체) / staff(직원) / lead(본부장·관리자) / admin(관리자)
   if (!has("notices", "audience")) db.exec("ALTER TABLE notices ADD COLUMN audience TEXT NOT NULL DEFAULT 'staff'");
   // 프로젝트 구역: 맨 위 묶음·프로세스를 나누는 이름 (비면 공통). 구역이 있으면 프로젝트 첫 화면이 구역 카드가 됨
