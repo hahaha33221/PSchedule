@@ -453,6 +453,16 @@ jobs:
           curl -fs -H "$VH" -XPATCH -d '{"title":"고친 일정","date":"2030-04-02","audience":"all"}' $B/volunteer/schedules/$MS | grep -q '고친 일정'
           if curl -fs -H "$(bearer "$A9")" $B/volunteer/home | grep -q '고친 일정'; then echo "고치면서 전체 공개가 됐어요"; exit 1; fi
           curl -fs -H "$VH" -XDELETE $B/volunteer/schedules/$MS >/dev/null
+          # 봉사자 일정 일괄 입력: 미리보기는 저장 안 함, 같은 날·제목은 건너뜀, 잘못된 줄이면 전부 취소
+          printf '{"audience":"all","rows":[{"title":"묵주 교육 · 가","date":"2030-05-01","startTime":"14:00","place":"용산","note":"수량 200"},{"title":"묵주 교육 · 나","date":"2030-05-02"}]}' > /tmp/ps/vs.json
+          ADM vol-schedule-import --dry < /tmp/ps/vs.json | grep -q '미리보기.*2건 추가'
+          if curl -fs -H "$VH" $B/volunteer/home | grep -q '묵주 교육 · 가'; then echo "미리보기가 저장했어요"; exit 1; fi
+          ADM vol-schedule-import < /tmp/ps/vs.json | grep -q '2건 추가, 이미 있어서 건너뜀 0건'
+          ADM vol-schedule-import < /tmp/ps/vs.json | grep -q '0건 추가, 이미 있어서 건너뜀 2건'
+          curl -fs -H "$(bearer "$A9")" $B/volunteer/home | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).schedules.find(x=>x.title==="묵주 교육 · 가");if(!s||s.shared!==true||s.mine||s.startTime!=="14:00"||s.place!=="용산")process.exit(1)'
+          printf '{"audience":"all","rows":[{"title":"다","date":"2030-05-03"},{"title":"잘못","date":"2030-13-40"}]}' | (if ADM vol-schedule-import 2>/dev/null; then exit 1; fi)
+          if curl -fs -H "$VH" $B/volunteer/home | grep -q '"title":"다"'; then echo "잘못된 줄이 있는데 일부가 들어갔어요"; exit 1; fi
+          for S in $(curl -fs -H "$H" $B/admin/vol-schedules | node -pe 'JSON.parse(require("fs").readFileSync(0)).schedules.filter(s=>s.title.startsWith("묵주 교육")).map(s=>s.id).join(" ")'); do curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$S >/dev/null; done
           # 개인 지정 봉사자를 지워도 일정이 전체 공개로 바뀌지 않음
           curl -fs -H "$H" -XDELETE $B/admin/users/$VB >/dev/null
           if curl -fs -H "$VH" $B/volunteer/home | grep -q '개인 일정'; then echo "지정 봉사자를 지우니 일정이 전체에 보여요"; exit 1; fi

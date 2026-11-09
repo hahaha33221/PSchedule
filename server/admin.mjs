@@ -14,6 +14,7 @@
  *   node server/admin.mjs contacts-import [--dry] < 명단.tsv  연락처 일괄 입력 (구역 | 이름 | 직함 | 내선 | 휴대폰, 조직도 자리의 이름으로 찾음)
  *   node server/admin.mjs stock-import [--dry] < 대장.json  입출고 대장 넣기 (README '프로젝트' 참고)
  *   node server/admin.mjs process-import [--dry] < 프로세스.json  상세 프로세스 넣기 ({ project, rows: [{ section, phase, task, detail, output, label, start, due, status, note }] })
+ *   node server/admin.mjs vol-schedule-import [--dry] < 일정.json  봉사자 일정 넣기 ({ audience: "all", rows: [{ title, date, startTime, endTime, place, note }] }, 같은 날 같은 제목은 건너뜀)
  *   node server/admin.mjs project-import <조직> <프로젝트> [--dry] < 목록.txt  프로젝트 목록 넣기 (1. 묶음, 4-1. 아래 묶음, * 항목, ※ 메모)
  *     이미 값이 있으면 그대로 둠. 조직도에서 못 찾으면 넣지 않고 이름만 알려 줌. 번호는 출력하지 않음
  *
@@ -191,6 +192,33 @@ switch (cmd) {
       });
       const n = (st) => data.rows.filter((r) => (r.status || "todo") === st).length;
       console.log(`${dry ? "[미리보기, 저장 안 함] " : ""}프로세스 ${data.rows.length}건 (완료 ${n("done")}, 예정 ${n("todo")})`);
+      db.exec(dry ? "ROLLBACK" : "COMMIT");
+    } catch (e) { db.exec("ROLLBACK"); console.error(e.message); process.exit(1); }
+    break;
+  }
+
+  // 봉사자 일정 넣기: 관리자가 등록한 '안내받은 일정'(봉사자 전체 공개)으로. 같은 날·같은 제목이 있으면 건너뜀
+  case "vol-schedule-import": {
+    const dry = args.includes("--dry");
+    const data = JSON.parse(readFileSync(0, "utf8"));
+    if (data.audience !== "all") { console.error("지금은 audience: \"all\" (봉사자 전체)만 넣을 수 있어요."); process.exit(1); }
+    const isDay = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s + "T00:00:00Z"));
+    const isTime = (s) => !s || /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
+    const admin = db.prepare("SELECT id FROM users WHERE role = 'admin' ORDER BY login = 'admin' DESC, id LIMIT 1").get();
+    const exists = db.prepare("SELECT 1 FROM vol_schedules WHERE date = ? AND title = ?");
+    const add = db.prepare("INSERT INTO vol_schedules (title, date, start_time, end_time, place, note, audience, created_by) VALUES (?, ?, ?, ?, ?, ?, 'all', ?)");
+    let added = 0, skipped = 0;
+    db.exec("BEGIN");
+    try {
+      data.rows.forEach((r, i) => {
+        const title = String(r.title || "").trim();
+        if (!title || title.length > 120 || !isDay(r.date) || !isTime(r.startTime) || !isTime(r.endTime) || (r.endTime && (!r.startTime || r.endTime <= r.startTime))) throw new Error(`${i + 1}번째 줄을 확인해 주세요.`);
+        if (String(r.place || "").length > 120 || String(r.note || "").length > 1000) throw new Error(`${i + 1}번째 줄이 너무 길어요.`);
+        if (exists.get(r.date, title)) { skipped++; return; }
+        add.run(title, r.date, r.startTime || "", r.endTime || "", String(r.place || "").trim(), String(r.note || "").trim(), admin?.id ?? null);
+        added++;
+      });
+      console.log(`${dry ? "[미리보기, 저장 안 함] " : ""}봉사자 일정 ${added}건 추가, 이미 있어서 건너뜀 ${skipped}건`);
       db.exec(dry ? "ROLLBACK" : "COMMIT");
     } catch (e) { db.exec("ROLLBACK"); console.error(e.message); process.exit(1); }
     break;

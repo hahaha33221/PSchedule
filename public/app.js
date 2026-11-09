@@ -4809,7 +4809,7 @@
             role: "gridcell", tabindex: "0", "aria-label": `${volDay(key)}, 일정 ${rows.length}개`, "aria-selected": String(key === volCal.sel), onclick: pick, onkeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } }
           }, [
             h("span", { class: "cal-num", text: String(cur.getDate()) }),
-            h("div", { class: "cal-chips vol-cal__chips" }, rows.slice(0, 3).map((s) => h("span", { class: `vol-chipline ${color(s)}`, title: s.title, text: `${s.startTime ? `${s.startTime} ` : ""}${s.title}` }))),
+            h("div", { class: "cal-chips vol-cal__chips" }, rows.slice(0, 3).map((s) => h("span", { class: `vol-chipline ${color(s)}`, title: s.title, text: `${s.startTime ? `${s.startTime} ` : ""}${s.title.split(" · ").pop()}` }))),
             rows.length > 3 ? h("span", { class: "muted vol-cal__more", text: `+${rows.length - 3}` }) : null,
             rows.length ? h("span", { class: "vol-cal__dots", "aria-hidden": "true" }, rows.slice(0, 3).map((s) => h("i", { class: color(s) }))) : null
           ]));
