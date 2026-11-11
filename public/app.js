@@ -886,7 +886,6 @@
     layout.admin.replaceChildren(
       h("div", { class: "side__adminhead" }, [icon("lock"), "관리자 전용"]),
       link("org", "조직도 편집", "org"),
-      link("alldash", "전체 대시보드", "grid"),
       link("members", "멤버 · 소속 지정", "user"),
       link("volunteers", "봉사자 관리", "people"),
       link("cats", "분류 관리", "folder", manageCategories),
@@ -2094,8 +2093,7 @@
         fill(topBox, h("div", { class: "scopebar" }, [icon("org"), h("span", {}, [h("strong", { text: "보이는 범위: " }),
           u ? `${unitLabel(u)}${unitChildren(u).length ? " (아래 팀 포함)" : ""}${extra ? ` + 추가로 ${extra}` : ""} + 내가 관련된 것`
             : extra ? `${extra} + 내가 관련된 것` : "내가 만들었거나 참석·담당한 것만 (아직 소속이 없어요)",
-          state.user.role === "director" ? " · 본부장 권한: 맡은 조직과 그 아래 조직 포함" : null]),
-          isAdmin() ? h("a", { class: "btn btn--admin btn--sm", href: "#/alldash" }, [icon("lock"), "전체 대시보드"]) : null]));
+          state.user.role === "director" ? " · 본부장 권한: 맡은 조직과 그 아래 조직 포함" : null])]));
         return;
       }
       if (state.allTeam && state.allTeam !== "none" && !unitOf(state.allTeam)) state.allTeam = null;
@@ -5216,7 +5214,7 @@
     window.scrollTo(0, 0);
     if (name === "today") return pageToday(id && /^\d{4}-\d{2}-\d{2}$/.test(id) ? id : null);
     if (name === "dashboard") return pageDashboard("mine");
-    if (name === "alldash") return pageDashboard("all");
+    if (name === "alldash") return go("#/dashboard"); // 전체 대시보드는 메뉴에서 뺌 (예전 주소는 나의 대시보드로)
     if (name === "tasks") return pageTasks();
     if (name === "meetings") return pageMeetings();
     if (name === "memos") return pageMemos();
