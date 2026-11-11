@@ -252,6 +252,10 @@ const q = {
   allProjectItems: db.prepare("SELECT project_id, kind, status, due_date FROM project_items"),
   projectItem: db.prepare("SELECT * FROM project_items WHERE id = ?"),
   addProjectItem: db.prepare("INSERT INTO project_items (project_id, parent_id, kind, name, status, assignee_id, due_date, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
+  areaInfo: db.prepare("SELECT area, partner, note FROM project_area_info WHERE project_id = ? ORDER BY area"),
+  setAreaInfo: db.prepare("INSERT INTO project_area_info (project_id, area, partner, note) VALUES (?, ?, ?, ?) ON CONFLICT (project_id, area) DO UPDATE SET partner = excluded.partner, note = excluded.note"),
+  setItemPartner: db.prepare("UPDATE project_items SET partner_related = ? WHERE id = ?"),
+  setProcessPartner: db.prepare("UPDATE project_processes SET partner_related = ? WHERE id = ?"),
   setProjectItemArea: db.prepare("UPDATE project_items SET area = ? WHERE id = ?"),
   setImportedArea: db.prepare("UPDATE project_items SET area = ? WHERE project_id = ? AND parent_id IS NULL AND id > ?"),
   maxItemId: db.prepare("SELECT coalesce(max(id), 0) AS n FROM project_items"),
@@ -1061,7 +1065,10 @@ const projectItemOut = (i) => ({ id: i.id, parentId: i.parent_id, kind: i.kind, 
 const projectDetail = (p, user) => {
   const items = q.projectItems.all(p.id);
   return {
-    project: projectOut(p, items, user), items: items.map(projectItemOut),
+    project: projectOut(p, items, user),
+    // 협력업체 관련 체크·구역 정보는 우선 관리자에게만
+    items: items.map((i) => (user.role === "admin" ? { ...projectItemOut(i), partnerRelated: !!i.partner_related } : projectItemOut(i))),
+    ...(user.role === "admin" ? { areas: q.areaInfo.all(p.id) } : {}),
     ledgers: q.ledgersOfProject.all(p.id).map((l) => ({ id: l.id, itemId: l.item_id, name: l.name, unit: l.unit, contract: l.contract, inTotal: l.in_total, outTotal: l.out_total }))
   };
 };
@@ -1132,7 +1139,7 @@ function volTrainingFields(b) {
   return [title, text(b.body, 5000, "내용"), date, st, text(b.place, 120, "장소"), link];
 }
 // 상세 프로세스 (빠진 값은 그대로 두기: 상태만 바꿀 때)
-const processOut = (r) => ({ id: r.id, section: r.section, phase: r.phase, task: r.task, detail: r.detail, output: r.output, label: r.label, startDate: r.start_date, dueDate: r.due_date, status: r.status, note: r.note, area: r.area });
+const processOut = (r) => ({ id: r.id, section: r.section, phase: r.phase, task: r.task, detail: r.detail, output: r.output, label: r.label, startDate: r.start_date, dueDate: r.due_date, status: r.status, note: r.note, area: r.area, partnerRelated: !!r.partner_related });
 const processList = (projectId) => ({ processes: q.processes.all(projectId).map(processOut) });
 function processFields(b, cur) {
   const pick = (k, col) => (has(b, k) ? b[k] : cur?.[col ?? k]);
@@ -1902,8 +1909,9 @@ async function api(req, res, path) {
     const id = Number(q.addProject.run(projectUnit(b.unitId, user), text(b.name, 80, "프로젝트 이름", true), text(b.note, 1000, "설명"), user.id).lastInsertRowid);
     return send(res, 201, projectDetail(q.project.get(id), user));
   }
-  const pjm = path.match(/^\/api\/projects\/(\d+)(\/items|\/import|\/processes)?$/);
+  const pjm = path.match(/^\/api\/projects\/(\d+)(\/items|\/import|\/processes|\/areas)?$/);
   if (pjm) {
+    if (pjm[2] === "/areas" && !isAdmin) return send(res, 403, { error: "구역 정보는 관리자만 고칠 수 있어요." }); // 우선 관리자만
     if (pjm[2] === "/processes" && !isAdmin) return send(res, 403, { error: "상세 프로세스는 관리자만 볼 수 있어요." }); // 우선 관리자만
     const p = q.project.get(Number(pjm[1]));
     if (!p || !projectAllowed(user, p)) throw notFound("프로젝트");
@@ -1918,6 +1926,13 @@ async function api(req, res, path) {
       if (q.ledgersOfProject.all(p.id).length) return send(res, 409, { error: "이 프로젝트에 입출고 현황이 있어요. 입출고 관리에서 먼저 지워 주세요." });
       q.delProject.run(p.id);
       return send(res, 204);
+    }
+    if (pjm[2] === "/areas") {
+      if (method !== "PUT") return send(res, 405, { error: "Method not allowed" });
+      const b = await readJson(req);
+      const area = text(b.area, 60, "구역", true);
+      q.setAreaInfo.run(p.id, area, text(b.partner, 60, "협력업체"), text(b.note, 500, "메모"));
+      return send(res, 200, projectDetail(p, user));
     }
     if (pjm[2] === "/processes") {
       if (method === "GET") return send(res, 200, processList(p.id));
@@ -1980,6 +1995,7 @@ async function api(req, res, path) {
       inTx(() => {
         q.setProjectItem.run(...fields, i.id);
         if (area !== null) q.setProjectItemArea.run(area, i.id);
+        if (has(b, "partnerRelated") && isAdmin) q.setItemPartner.run(b.partnerRelated ? 1 : 0, i.id); // 관리자 전용
       });
       return send(res, 200, projectDetail(p, user));
     }
@@ -1998,7 +2014,11 @@ async function api(req, res, path) {
     const p = r && q.project.get(r.project_id);
     if (!p || !projectAllowed(user, p)) throw notFound("프로세스");
     if (method === "PATCH") {
-      q.setProcess.run(...processFields(await readJson(req), r), r.id);
+      const b = await readJson(req);
+      inTx(() => {
+        q.setProcess.run(...processFields(b, r), r.id);
+        if (has(b, "partnerRelated")) q.setProcessPartner.run(b.partnerRelated ? 1 : 0, r.id);
+      });
       return send(res, 200, processList(p.id));
     }
     if (method === "DELETE") {

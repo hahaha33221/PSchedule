@@ -293,6 +293,15 @@ jobs:
           curl -fs -H "$H" -XPOST -d '{"text":"1. 붙인 묶음\n* 붙인 항목","area":"구역나"}' $B/projects/$PJ/import | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.items.find(i=>i.name==="붙인 묶음").area!=="구역나"||d.items.find(i=>i.name==="붙인 항목").area!=="")process.exit(1)'
           APR=$(curl -fs -H "$H" -XPOST -d '{"task":"구역 일","area":"구역나"}' $B/projects/$PJ/processes | node -pe 'const p=JSON.parse(require("fs").readFileSync(0)).processes.find(x=>x.task==="구역 일");if(p.area!=="구역나")process.exit(1);p.id')
           curl -fs -H "$H" -XPATCH -d '{"status":"done"}' $B/project-processes/$APR | node -e 'const p=JSON.parse(require("fs").readFileSync(0)).processes.find(x=>x.task==="구역 일");if(p.area!=="구역나"||p.status!=="done")process.exit(1)'
+          # 협력업체(관리자 전용): 구역 정보 저장, 항목·프로세스 관련 체크, 일반 멤버에게는 값이 안 가고 바꿀 수도 없음
+          curl -fs -H "$H" -XPUT -d '{"area":"구역나","partner":"이노션","note":"메모"}' $B/projects/$PJ/areas | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.areas.some(a=>a.area==="구역나"&&a.partner==="이노션"))process.exit(1)'
+          curl -fs -H "$H" -XPUT -d '{"area":"구역나","partner":""}' $B/projects/$PJ/areas | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.areas.find(a=>a.area==="구역나").partner!=="")process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A2")" -XPUT -d '{"area":"구역나","partner":"x"}' $B/projects/$PJ/areas)" = 403
+          curl -fs -H "$H" -XPATCH -d '{"partnerRelated":true}' $B/project-items/$AG | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.items.find(i=>i.name==="구역 묶음").partnerRelated)process.exit(1)'
+          curl -fs -H "$(bearer "$A2")" $B/projects/$PJ | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if("areas" in d||d.items.some(i=>"partnerRelated" in i))process.exit(1)'
+          curl -fs -H "$(bearer "$A2")" -XPATCH -d '{"partnerRelated":false}' $B/project-items/$AG >/dev/null
+          curl -fs -H "$H" $B/projects/$PJ | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.items.find(i=>i.name==="구역 묶음").partnerRelated)process.exit(1)'
+          curl -fs -H "$H" -XPATCH -d '{"partnerRelated":true}' $B/project-processes/$APR | node -e 'const p=JSON.parse(require("fs").readFileSync(0)).processes.find(x=>x.task==="구역 일");if(!p.partnerRelated||p.status!=="done"||p.area!=="구역나")process.exit(1)'
           # 입출고 관리 목록: 볼 수 있는 프로젝트의 것만, 현황이 있는 묶음·프로젝트는 먼저 못 지움
           curl -fs -H "$H" $B/stock | node -e 'const l=JSON.parse(require("fs").readFileSync(0)).ledgers;const a=l.find(x=>x.name==="실 대장");if(!a||a.inTotal!==30||a.outTotal!==12||a.options!==2||a.itemName!=="묵주"||a.hasAfter)process.exit(1)'
           if curl -fs -H "$(bearer "$A1")" $B/stock | grep -q '실 대장'; then echo "다른 팀 입출고가 보여요"; exit 1; fi

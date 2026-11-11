@@ -416,6 +416,14 @@ function addUnitColumns(db) {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS stock_history_ledger ON stock_history (ledger_id, id);
+    -- 프로젝트 구역 정보: 협력업체 이름·메모 (관리자 전용으로 시작)
+    CREATE TABLE IF NOT EXISTS project_area_info (
+      project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      area       TEXT NOT NULL,
+      partner    TEXT NOT NULL DEFAULT '',
+      note       TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (project_id, area)
+    );
     -- 프로젝트 상세 프로세스: 구분 > 단계 > 세부 업무, 진행 상세·산출물, 시작일·예정일, 상태
     CREATE TABLE IF NOT EXISTS project_processes (
       id         INTEGER PRIMARY KEY,
@@ -471,6 +479,9 @@ function addUnitColumns(db) {
       PRIMARY KEY (training_id, user_id)
     );
   `);
+  // 협력업체 관련 체크 (항목·상세 프로세스, 관리자 전용으로 시작)
+  if (!has("project_items", "partner_related")) db.exec("ALTER TABLE project_items ADD COLUMN partner_related INTEGER NOT NULL DEFAULT 0");
+  if (!has("project_processes", "partner_related")) db.exec("ALTER TABLE project_processes ADD COLUMN partner_related INTEGER NOT NULL DEFAULT 0");
   // 봉사자 일정 수량·프로젝트 연결: 묵주 방문처럼 프로젝트에 묶인 일정은 봉사자 '프로젝트 관리'에서 수량을 고침
   if (!has("vol_schedules", "qty")) db.exec("ALTER TABLE vol_schedules ADD COLUMN qty INTEGER");
   if (!has("vol_schedules", "project_item_id")) db.exec("ALTER TABLE vol_schedules ADD COLUMN project_item_id INTEGER");

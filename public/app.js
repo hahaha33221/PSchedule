@@ -3700,9 +3700,79 @@
     const COMMON = "-", COMMON_NAME = "프로젝트 공통";
     const area = parts[3] === "area" ? (parts[4] === COMMON ? "" : decodeURIComponent(parts[4] || "")) : null;
     const base = area === null ? `#/projects/${id}` : `#/projects/${id}/area/${parts[4]}`;
-    const tab = isAdmin() && (area === null ? parts[3] : parts[5]) === "process" ? "process" : "items"; // 상세 프로세스는 우선 관리자만
+    const tabWord = area === null ? parts[3] : parts[5];
+    // 상세 프로세스·협력업체는 우선 관리자만 (협력업체는 구역 안에서만)
+    const tab = isAdmin() && tabWord === "process" ? "process" : isAdmin() && area && tabWord === "partner" ? "partner" : "items";
     let procs = [];
     const apply = (r) => { data = r; draw(); };
+    const partnerOf = (a) => (data.areas || []).find((x) => x.area === a)?.partner || "";
+    // 협력업체 관련 표시 (관리자에게만 값이 옴): 직접 체크했거나 위 묶음을 체크한 경우
+    const partnerTag = (i) => {
+      let c = i, on = false;
+      while (c && !on) { on = !!c.partnerRelated; c = c.parentId ? data.items.find((x) => x.id === c.parentId) : null; }
+      return on ? h("span", { class: "stock-tag pj-partner-tag", title: "협력업체 관련 (관리자에게만 보임)", text: partnerOf(areaOfItem(i)) || "협력업체" }) : null;
+    };
+    const areaOfItem = (i) => { let c = i; while (c && c.parentId) c = data.items.find((x) => x.id === c.parentId); return c?.area || ""; };
+    // 협력업체 탭 (관리자 전용): 구역의 협력업체와 관련 항목·프로세스를 한눈에, 줄마다 체크
+    let partnerOnly = false;
+    function partnerPanel(p, inside) {
+      const info = (data.areas || []).find((x) => x.area === area) || { partner: "", note: "" };
+      const tops = data.items.filter((i) => !i.parentId && (i.area || "") === area);
+      const allItems = data.items.filter((x) => areaOfItem(x) === area);
+      const pr = procs.filter((r) => (r.area || "") === area);
+      const itemOnes = allItems.filter((i) => i.kind === "item");
+      const relItems = itemOnes.filter((i) => i.partnerRelated || (i.parentId && data.items.find((g) => g.id === i.parentId)?.partnerRelated));
+      const relProcs = pr.filter((r) => r.partnerRelated);
+      const late = (r) => r.dueDate && r.dueDate < today() && r.status !== "done" && r.status !== "hold";
+      const next = relProcs.filter((r) => r.dueDate && r.dueDate >= today() && r.status !== "done" && r.status !== "hold").sort((a, b) => a.dueDate.localeCompare(b.dueDate))[0];
+      const edit = () => {
+        const err = errorLine();
+        const name = h("input", { value: info.partner, maxlength: "60", autofocus: true, placeholder: "예: 이노션" });
+        const note = h("textarea", { rows: "3", maxlength: "500" }, info.note);
+        const ok = h("button", { class: "btn btn--primary", type: "submit", text: "저장" });
+        const form = h("form", { class: "stack", novalidate: true }, [field("협력업체", name, "아직 정해지지 않았으면 비워 두세요"), field("메모", note), err, h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])]);
+        form.addEventListener("submit", (e) => { e.preventDefault(); busy(ok, async () => { try { const r = await api(`/projects/${p.id}/areas`, { method: "PUT", body: { area, partner: name.value, note: note.value } }); closeDialog(); apply(r); } catch (ex) { showError(err, ex.message); } }); });
+        openDialog(`${area} 협력업체`, form, { admin: true });
+      };
+      const check = (on, label, fn) => {
+        const c = h("input", { type: "checkbox", checked: !!on, "aria-label": `${label} 협력업체 관련` });
+        c.addEventListener("change", async () => { c.disabled = true; try { await fn(c.checked); } catch (ex) { toast(ex.message); c.checked = !c.checked; } finally { c.disabled = false; } });
+        return c;
+      };
+      const setItem = async (i, on) => apply(await api(`/project-items/${i.id}`, { method: "PATCH", body: { partnerRelated: on } }));
+      const setProc = async (r, on) => { procs = (await api(`/project-processes/${r.id}`, { method: "PATCH", body: { partnerRelated: on } })).processes; draw(); };
+      const itemRows = tops.flatMap((t) => {
+        const under = inside(t);
+        const rows = [h("tr", { class: "pj-group" }, [h("td", {}, check(t.partnerRelated, t.name, (on) => setItem(t, on))), h("td", {}, h("strong", { text: t.name })), h("td", { class: "muted small", text: `항목 ${under.length}개 · 묶음 전체를 체크하면 아래 항목이 모두 관련으로 잡혀요` })])];
+        for (const i of under) {
+          const viaGroup = !i.partnerRelated && data.items.find((g) => g.id === i.parentId)?.partnerRelated;
+          if (partnerOnly && !i.partnerRelated && !viaGroup) continue;
+          rows.push(h("tr", {}, [h("td", {}, check(i.partnerRelated, i.name, (on) => setItem(i, on))), h("td", { text: i.name }), h("td", { class: "muted small", text: [projectStatusLabel(i.status), i.dueDate ? `마감 ${shortDate(i.dueDate)}` : "", viaGroup ? "묶음으로 관련" : ""].filter(Boolean).join(" · ") })]));
+        }
+        return partnerOnly && !t.partnerRelated && rows.length === 1 ? [] : rows;
+      });
+      const procRows = pr.filter((r) => !partnerOnly || r.partnerRelated).map((r) => h("tr", { class: r.status === "done" ? "is-done" : null }, [
+        h("td", {}, check(r.partnerRelated, r.detail || r.task, (on) => setProc(r, on))),
+        h("td", {}, [h("span", { text: r.detail || r.task }), h("small", { class: "muted pj-note", text: [r.section, r.phase, r.task].filter(Boolean).join(" › ") })]),
+        h("td", { class: "nowrap small" + (late(r) ? " proc-late" : ""), text: [r.dueDate ? shortDate(r.dueDate) : "-", PROC_STATUS.find(([k]) => k === r.status)?.[1] || ""].join(" · ") })
+      ]));
+      const seg = h("div", { class: "seg seg--sm" }, [[false, "전체"], [true, "관련만"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String(k === partnerOnly), text: label, onclick: () => { partnerOnly = k; draw(); } })));
+      return h("div", { class: "stack" }, [
+        h("section", { class: "card partner-card" }, [
+          h("div", { class: "card__head" }, [h("h2", { class: "card__title" }, ["협력업체 ", h("strong", { class: info.partner ? "partner-name" : "muted", text: info.partner || "미정" })]), h("button", { class: "btn btn--ghost btn--sm", type: "button", text: info.partner ? "고치기" : "입력하기", onclick: edit })]),
+          info.note ? h("p", { class: "vol-pre small", text: info.note }) : h("p", { class: "muted small", text: info.partner ? "아래에서 이 업체와 관련된 항목과 상세 프로세스를 체크해 주세요." : "협력업체가 정해지면 '입력하기'로 넣어 주세요. 체크는 지금도 할 수 있어요." })
+        ]),
+        h("div", { class: "unit-stats" }, [
+          h("div", { class: "card unit-stat" }, [h("strong", { text: `${relItems.length}/${itemOnes.length}` }), h("span", { text: "관련 항목" })]),
+          h("div", { class: "card unit-stat" }, [h("strong", { text: `${relProcs.length}/${pr.length}` }), h("span", { text: "관련 프로세스" })]),
+          h("div", { class: "card unit-stat" }, [h("strong", { text: `${relProcs.filter((r) => r.status === "done").length}/${relProcs.length}` }), h("span", { text: "관련 프로세스 완료" })]),
+          h("div", { class: "card unit-stat" + (relProcs.some(late) ? " is-warn" : "") }, [h("strong", { text: next ? shortDate(next.dueDate) : String(relProcs.filter(late).length) }), h("span", { text: next ? `다음: ${next.label || next.task}` : "관련 일정 지남" })])
+        ]),
+        h("div", { class: "filters" }, [seg]),
+        h("section", { class: "card table-wrap" }, [h("h3", { class: "partner-sec__title", text: "항목" }), itemRows.length ? h("table", { class: "table partner-table" }, h("tbody", {}, itemRows)) : h("p", { class: "muted empty", text: partnerOnly ? "관련으로 체크한 항목이 없어요." : "이 구역에 항목이 없어요." })]),
+        h("section", { class: "card table-wrap" }, [h("h3", { class: "partner-sec__title", text: "상세 프로세스" }), procRows.length ? h("table", { class: "table partner-table" }, h("tbody", {}, procRows)) : h("p", { class: "muted empty", text: partnerOnly ? "관련으로 체크한 프로세스가 없어요." : "이 구역에 상세 프로세스가 없어요." })])
+      ]);
+    }
     function itemDialog(item, defaults) {
       const v = item || defaults;
       const isGroup = v.kind === "group";
@@ -3781,7 +3851,7 @@
             rows.push(h("tr", { class: "pj-group" }, [
               h("td", { colspan: "3", style: pad }, h("div", { class: "pj-group__row" }, [
                 h("button", { class: "org-row__chev" + (open ? " is-open" : ""), type: "button", "aria-label": `${i.name} ${open ? "접기" : "펼치기"}`, html: ICON.right, onclick: () => { open ? closed.add(i.id) : closed.delete(i.id); draw(); } }),
-                h("button", { class: "pj-name", type: "button", onclick: () => itemDialog(i) }, [h("strong", { text: i.name })]),
+                h("button", { class: "pj-name", type: "button", onclick: () => itemDialog(i) }, [h("strong", { text: i.name })]), partnerTag(i),
                 h("span", { class: "muted small", text: `${under.filter((x) => x.status === "done").length}/${under.length}` }),
                 i.note ? h("span", { class: "muted small pj-note", text: i.note }) : null
               ])),
@@ -3793,7 +3863,7 @@
             st.value = i.status;
             const due = h("input", { type: "date", class: "inline inline--box", value: i.dueDate || "", "aria-label": `${i.name} 마감일`, onchange: (e) => patchItem(i, { dueDate: e.target.value || null }) });
             rows.push(h("tr", { class: i.status === "done" ? "is-done" : null }, [
-              h("td", { class: "pj-itemname", style: pad }, [h("button", { class: "pj-name", type: "button", onclick: () => itemDialog(i), text: i.name }), i.note ? h("small", { class: "muted pj-note", text: i.note }) : null]),
+              h("td", { class: "pj-itemname", style: pad }, [h("button", { class: "pj-name", type: "button", onclick: () => itemDialog(i), text: i.name }), partnerTag(i), i.note ? h("small", { class: "muted pj-note", text: i.note }) : null]),
               h("td", { "data-label": "상태" }, st),
               h("td", { "data-label": "마감" }, due),
               h("td", { class: "pj-actions" })
@@ -3819,8 +3889,8 @@
           ])
         ]),
         area === null && p.note ? h("p", { class: "muted pj-desc", text: p.note }) : null,
-        isAdmin() ? h("div", { class: "seg pj-tabs", role: "tablist" }, [["items", named.length && area === null ? "구역" : "항목"], ["process", "상세 프로세스"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), title: k === "process" ? "관리자만 볼 수 있어요" : null, onclick: () => go(k === "process" ? `${base}/process` : base) }, k === "process" ? [label, " ", adminBadge()] : label))) : null,
-        ...(tab === "process" ? [processPanel(id, area, () => (area === null ? p.name : `${p.name} ${area || COMMON_NAME}`))] : [area === null ? projectBar(p) : (() => { const its = kids(null).flatMap((k) => (k.kind === "group" ? inside(k) : [k])); return projectBar({ total: its.length, done: its.filter((x) => x.status === "done").length }); })(),
+        isAdmin() ? h("div", { class: "seg pj-tabs", role: "tablist" }, [["items", named.length && area === null ? "구역" : "항목"], ["process", "상세 프로세스"], ...(area ? [["partner", "협력업체"]] : [])].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), title: k !== "items" ? "관리자만 볼 수 있어요" : null, onclick: () => go(k === "items" ? base : `${base}/${k}`) }, k !== "items" ? [label, " ", adminBadge()] : label))) : null,
+        ...(tab === "partner" ? [partnerPanel(p, inside)] : tab === "process" ? [processPanel(id, area, () => (area === null ? p.name : `${p.name} ${area || COMMON_NAME}`))] : [area === null ? projectBar(p) : (() => { const its = kids(null).flatMap((k) => (k.kind === "group" ? inside(k) : [k])); return projectBar({ total: its.length, done: its.filter((x) => x.status === "done").length }); })(),
         h("div", { class: "filters" }, [
           filter,
           h("span", { class: "filters__end actions" }, [
@@ -3848,6 +3918,7 @@
         const enc = key ? encodeURIComponent(key) : COMMON;
         return h("a", { class: "card pj-card pj-area", href: `#/projects/${id}/area/${enc}${!tops.length && pr.length ? "/process" : ""}` }, [
           h("strong", { class: "pj-area__name", text: name }),
+          isAdmin() && key ? h("span", { class: "small pj-area__partner", title: "관리자에게만 보여요" }, ["협력업체 ", h("strong", { text: partnerOf(key) || "미정" })]) : null,
           tops.length ? h("span", { class: "muted small pj-area__groups", text: tops.map((t) => t.name.split(" (")[0]).join(" · ") }) : null,
           tops.length ? projectBar({ total: its.length, done: its.filter((x) => x.status === "done").length }) : null,
           pr.length ? h("span", { class: "small", text: `상세 프로세스 ${prDone}/${pr.length} 완료` }) : null,

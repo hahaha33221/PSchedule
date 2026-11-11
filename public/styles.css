@@ -1521,3 +1521,13 @@ button.gantt__name:hover { background: var(--surface-2); }
 .vol-visits__table th:last-child, .vol-visits__table td:last-child { width: 1%; white-space: nowrap; }
 .vol-visits__who, .vol-visits__by { display: block; font-size: 11.5px; }
 .vol-linkcheck { align-self: end; font-size: 13px; }
+
+/* 협력업체 (관리자 전용) */
+.pj-partner-tag { margin-left: 6px; vertical-align: middle; background: var(--admin-soft); color: var(--admin-text); }
+.pj-area__partner { color: var(--admin-text); }
+.partner-card { padding: 16px 18px; }
+.partner-card .partner-name { color: var(--ink); }
+.partner-sec__title { margin: 0; padding: 12px 14px 4px; font-size: 14px; }
+.partner-table td:first-child { width: 36px; }
+.partner-table td { vertical-align: middle; font-size: 13.5px; }
+.partner-table tr.is-done td:not(:first-child) { color: var(--muted); }
