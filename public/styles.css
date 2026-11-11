@@ -1531,3 +1531,16 @@ button.gantt__name:hover { background: var(--surface-2); }
 .partner-table td:first-child { width: 36px; }
 .partner-table td { vertical-align: middle; font-size: 13.5px; }
 .partner-table tr.is-done td:not(:first-child) { color: var(--muted); }
+
+/* 항목 이미지·수량 (관리자 전용) */
+.pj-thumb { width: 28px; height: 28px; margin-right: 8px; border-radius: 6px; object-fit: cover; vertical-align: middle; background: var(--surface-2); }
+.pj-qty { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.admin-fields { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 12px; background: var(--admin-soft); border: 1px solid var(--admin-line); }
+.admin-fields__head { display: flex; }
+.pj-imgbox { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.pj-imgbox__img { width: 120px; height: 120px; border-radius: 10px; object-fit: cover; background: var(--surface); }
+.pj-imgbox__empty { display: grid; place-items: center; width: 120px; height: 120px; border-radius: 10px; border: 1px dashed var(--line); background: var(--surface); }
+.pj-imgbox__btns { display: flex; gap: 6px; }
+.pj-imgbox__btns label { cursor: pointer; }
+.pj-imgbox__file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.pj-imgbox p { flex-basis: 100%; margin: 0; }

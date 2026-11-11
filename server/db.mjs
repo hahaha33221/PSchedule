@@ -416,6 +416,14 @@ function addUnitColumns(db) {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS stock_history_ledger ON stock_history (ledger_id, id);
+    -- 프로젝트 항목 이미지 (항목마다 한 장, 작게 줄여 DB 에 보관, 관리자 전용으로 시작)
+    CREATE TABLE IF NOT EXISTS project_item_images (
+      item_id    INTEGER PRIMARY KEY REFERENCES project_items(id) ON DELETE CASCADE,
+      mime       TEXT NOT NULL,
+      data       BLOB NOT NULL,
+      updated_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     -- 프로젝트 구역 정보: 협력업체 이름·메모 (관리자 전용으로 시작)
     CREATE TABLE IF NOT EXISTS project_area_info (
       project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -479,6 +487,8 @@ function addUnitColumns(db) {
       PRIMARY KEY (training_id, user_id)
     );
   `);
+  // 항목 수량 (관리자 전용으로 시작)
+  if (!has("project_items", "qty")) db.exec("ALTER TABLE project_items ADD COLUMN qty INTEGER");
   // 협력업체 관련 체크 (항목·상세 프로세스, 관리자 전용으로 시작)
   if (!has("project_items", "partner_related")) db.exec("ALTER TABLE project_items ADD COLUMN partner_related INTEGER NOT NULL DEFAULT 0");
   if (!has("project_processes", "partner_related")) db.exec("ALTER TABLE project_processes ADD COLUMN partner_related INTEGER NOT NULL DEFAULT 0");

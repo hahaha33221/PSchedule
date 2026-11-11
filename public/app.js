@@ -3634,6 +3634,37 @@
   };
   const fmtN = (n) => Number(n || 0).toLocaleString("ko-KR");
   const projectFilter = { unit: null };
+  // 항목 이미지 (관리자 전용): 인증 머리말이 필요해서 받아 와 Blob 주소로 보여 줌. 바뀐 시각으로 캐시
+  const itemImgCache = new Map();
+  function itemImageUrl(i) {
+    const key = `${i.id}:${i.image}`;
+    if (!itemImgCache.has(key)) itemImgCache.set(key, fetch(`${API}/project-items/${i.id}/image`, { headers: { Authorization: "Bearer " + state.token } }).then((r) => (r.ok ? r.blob() : null)).then((b) => (b ? URL.createObjectURL(b) : null)).catch(() => null));
+    return itemImgCache.get(key);
+  }
+  function itemThumb(i, cls) {
+    if (!i.image) return null;
+    const img = h("img", { class: cls || "pj-thumb", alt: `${i.name} 이미지` });
+    itemImageUrl(i).then((u) => { if (u) img.src = u; else img.remove(); });
+    return img;
+  }
+  // 올리기 전에 브라우저에서 줄이기: 긴 변 최대 900px, JPEG 로 46KB 안쪽이 될 때까지 화질·크기를 낮춤
+  async function shrinkImage(file) {
+    if (!/^image\/(jpeg|png|webp|gif|heic|heif)$/i.test(file.type) && !/\.(jpe?g|png|webp)$/i.test(file.name)) throw new Error("이미지 파일을 골라 주세요.");
+    const bmp = await createImageBitmap(file);
+    let scale = Math.min(1, 900 / Math.max(bmp.width, bmp.height));
+    for (let round = 0; round < 6; round++) {
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(bmp.width * scale)); c.height = Math.max(1, Math.round(bmp.height * scale));
+      const g = c.getContext("2d"); g.fillStyle = "#fff"; g.fillRect(0, 0, c.width, c.height); g.drawImage(bmp, 0, 0, c.width, c.height);
+      for (const qv of [0.85, 0.75, 0.65, 0.55, 0.45]) {
+        const b = await new Promise((ok) => c.toBlob(ok, "image/jpeg", qv));
+        if (b && b.size <= 46000) return b;
+      }
+      scale *= 0.75;
+    }
+    throw new Error("이미지를 충분히 줄이지 못했어요. 다른 이미지를 골라 주세요.");
+  }
+  const blobToBase64 = (b) => new Promise((ok, fail) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(",")[1]); r.onerror = fail; r.readAsDataURL(b); });
   // 프로젝트 만들기·고치기
   function projectDialog(p, onSaved) {
     const err = errorLine();
@@ -3782,6 +3813,30 @@
       const status = h("select", {}, PROJECT_STATUS.map(([k, label]) => h("option", { value: k, text: label })));
       status.value = item?.status || "none";
       const due = h("input", { type: "date", value: item?.dueDate || "" });
+      const qty = h("input", { type: "number", min: "0", inputmode: "numeric", value: item?.qty ?? "" });
+      // 이미지 (관리자, 이미 있는 항목만): 고르면 바로 줄여서 올림
+      const imgBox = h("div", { class: "pj-imgbox" });
+      const drawImg = (it) => {
+        const file = h("input", { type: "file", accept: "image/*", class: "pj-imgbox__file" });
+        file.addEventListener("change", async () => {
+          const f = file.files[0]; if (!f) return;
+          try {
+            fill(imgBox, h("span", { class: "muted small", text: "올리는 중…" }));
+            const blob = await shrinkImage(f);
+            const r = await api(`/project-items/${it.id}/image`, { method: "PUT", body: { data: await blobToBase64(blob) } });
+            apply(r); const now = r.items.find((x) => x.id === it.id); toast("이미지를 올렸어요."); drawImg(now);
+          } catch (ex) { toast(ex.message); drawImg(it); }
+        });
+        fill(imgBox,
+          it.image ? itemThumb(it, "pj-imgbox__img") : h("div", { class: "pj-imgbox__empty muted small", text: "이미지 없음" }),
+          h("div", { class: "pj-imgbox__btns" }, [
+            h("label", { class: "btn btn--ghost btn--sm" }, [it.image ? "바꾸기" : "이미지 올리기", file]),
+            it.image ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "지우기", onclick: async () => { if (!confirm("이미지를 지울까요?")) return; const r = await act(() => api(`/project-items/${it.id}/image`, { method: "DELETE" })); apply(r); drawImg(r.items.find((x) => x.id === it.id)); } }) : null
+          ]),
+          h("p", { class: "muted small", text: "올릴 때 자동으로 작게 줄여요 (긴 변 최대 900px)." })
+        );
+      };
+      if (item && !isGroup && isAdmin()) drawImg(item);
       const isTop = item ? !item.parentId : !v.parentId;
       const areaNames = [...new Set([...data.items.map((i) => i.area), ...procs.map((r) => r.area)].filter(Boolean))];
       const areaInput = h("input", { value: item ? item.area || "" : area || "", maxlength: "60", list: "pj-areas", placeholder: "예: 리테일굿즈" });
@@ -3789,6 +3844,11 @@
       const form = h("form", { class: "stack", novalidate: true }, [
         field(isGroup ? "묶음 이름" : "항목 이름", name),
         isGroup ? null : h("div", { class: "row2" }, [field("상태", status), field("마감일", due)]),
+        !isGroup && isAdmin() ? h("div", { class: "admin-fields" }, [
+          h("div", { class: "admin-fields__head" }, adminBadge()),
+          field("수량", qty, "예: 30000"),
+          item ? h("div", { class: "field" }, [h("span", { class: "field__label", text: "이미지" }), imgBox]) : h("p", { class: "muted small", text: "이미지는 항목을 추가한 뒤 '고치기'에서 올릴 수 있어요." })
+        ]) : null,
         isTop ? h("datalist", { id: "pj-areas" }, areaNames.map((x) => h("option", { value: x }))) : null,
         isTop ? field("구역", areaInput, "프로젝트 첫 화면을 나누는 이름이에요. 비우면 공통") : null,
         field("메모", note), err,
@@ -3805,7 +3865,7 @@
         e.preventDefault();
         busy(ok, async () => {
           try {
-            const body = { name: name.value, note: note.value, ...(isGroup ? {} : { status: status.value, dueDate: due.value || null }), ...(isTop ? { area: areaInput.value } : {}) };
+            const body = { name: name.value, note: note.value, ...(isGroup ? {} : { status: status.value, dueDate: due.value || null }), ...(!isGroup && isAdmin() ? { qty: qty.value } : {}), ...(isTop ? { area: areaInput.value } : {}) };
             const r = await api(item ? `/project-items/${item.id}` : `/projects/${id}/items`, { method: item ? "PATCH" : "POST", body: item ? body : { ...body, kind: v.kind, parentId: v.parentId || null } });
             closeDialog(); apply(r);
           } catch (ex) { showError(err, ex.message); }
@@ -3849,7 +3909,7 @@
             if (statusFilter && !under.some(shows)) continue;
             const open = !closed.has(i.id);
             rows.push(h("tr", { class: "pj-group" }, [
-              h("td", { colspan: "3", style: pad }, h("div", { class: "pj-group__row" }, [
+              h("td", { colspan: isAdmin() ? "4" : "3", style: pad }, h("div", { class: "pj-group__row" }, [
                 h("button", { class: "org-row__chev" + (open ? " is-open" : ""), type: "button", "aria-label": `${i.name} ${open ? "접기" : "펼치기"}`, html: ICON.right, onclick: () => { open ? closed.add(i.id) : closed.delete(i.id); draw(); } }),
                 h("button", { class: "pj-name", type: "button", onclick: () => itemDialog(i) }, [h("strong", { text: i.name })]), partnerTag(i),
                 h("span", { class: "muted small", text: `${under.filter((x) => x.status === "done").length}/${under.length}` }),
@@ -3863,9 +3923,10 @@
             st.value = i.status;
             const due = h("input", { type: "date", class: "inline inline--box", value: i.dueDate || "", "aria-label": `${i.name} 마감일`, onchange: (e) => patchItem(i, { dueDate: e.target.value || null }) });
             rows.push(h("tr", { class: i.status === "done" ? "is-done" : null }, [
-              h("td", { class: "pj-itemname", style: pad }, [h("button", { class: "pj-name", type: "button", onclick: () => itemDialog(i), text: i.name }), partnerTag(i), i.note ? h("small", { class: "muted pj-note", text: i.note }) : null]),
+              h("td", { class: "pj-itemname", style: pad }, [itemThumb(i), h("button", { class: "pj-name", type: "button", onclick: () => itemDialog(i), text: i.name }), partnerTag(i), i.note ? h("small", { class: "muted pj-note", text: i.note }) : null]),
               h("td", { "data-label": "상태" }, st),
               h("td", { "data-label": "마감" }, due),
+              isAdmin() ? h("td", { "data-label": "수량", class: "num pj-qty", text: i.qty != null ? fmtN(i.qty) : "-" }) : null,
               h("td", { class: "pj-actions" })
             ]));
           }
@@ -3900,7 +3961,7 @@
           ])
         ]),
         rows.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table pj-table" }, [
-          h("thead", {}, h("tr", {}, [...["이름", "상태", "마감"].map((t) => h("th", { text: t })), h("th", { "aria-label": "추가" })])),
+          h("thead", {}, h("tr", {}, [...["이름", "상태", "마감", ...(isAdmin() ? ["수량"] : [])].map((t) => h("th", { class: t === "수량" ? "num" : null, text: t })), h("th", { "aria-label": "추가" })])),
           h("tbody", {}, rows)
         ])) : h("div", { class: "card empty", text: data.items.length ? "이 상태의 항목이 없어요." : "아직 항목이 없어요. '+ 항목'이나 '목록 붙여넣기'로 넣어 주세요." })
         ])

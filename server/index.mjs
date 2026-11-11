@@ -254,6 +254,11 @@ const q = {
   addProjectItem: db.prepare("INSERT INTO project_items (project_id, parent_id, kind, name, status, assignee_id, due_date, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
   areaInfo: db.prepare("SELECT area, partner, note FROM project_area_info WHERE project_id = ? ORDER BY area"),
   setAreaInfo: db.prepare("INSERT INTO project_area_info (project_id, area, partner, note) VALUES (?, ?, ?, ?) ON CONFLICT (project_id, area) DO UPDATE SET partner = excluded.partner, note = excluded.note"),
+  setItemQty: db.prepare("UPDATE project_items SET qty = ? WHERE id = ?"),
+  itemImagesOfProject: db.prepare("SELECT g.item_id, g.updated_at FROM project_item_images g JOIN project_items i ON i.id = g.item_id WHERE i.project_id = ?"),
+  itemImage: db.prepare("SELECT * FROM project_item_images WHERE item_id = ?"),
+  setItemImage: db.prepare("INSERT INTO project_item_images (item_id, mime, data, updated_by, updated_at) VALUES (?, ?, ?, ?, datetime('now')) ON CONFLICT (item_id) DO UPDATE SET mime = excluded.mime, data = excluded.data, updated_by = excluded.updated_by, updated_at = excluded.updated_at"),
+  delItemImage: db.prepare("DELETE FROM project_item_images WHERE item_id = ?"),
   setItemPartner: db.prepare("UPDATE project_items SET partner_related = ? WHERE id = ?"),
   setProcessPartner: db.prepare("UPDATE project_processes SET partner_related = ? WHERE id = ?"),
   setProjectItemArea: db.prepare("UPDATE project_items SET area = ? WHERE id = ?"),
@@ -1067,7 +1072,11 @@ const projectDetail = (p, user) => {
   return {
     project: projectOut(p, items, user),
     // 협력업체 관련 체크·구역 정보는 우선 관리자에게만
-    items: items.map((i) => (user.role === "admin" ? { ...projectItemOut(i), partnerRelated: !!i.partner_related } : projectItemOut(i))),
+    items: (() => {
+      if (user.role !== "admin") return items.map(projectItemOut);
+      const img = new Map(q.itemImagesOfProject.all(p.id).map((x) => [x.item_id, x.updated_at]));
+      return items.map((i) => ({ ...projectItemOut(i), partnerRelated: !!i.partner_related, qty: i.qty, image: img.get(i.id) || null }));
+    })(),
     ...(user.role === "admin" ? { areas: q.areaInfo.all(p.id) } : {}),
     ledgers: q.ledgersOfProject.all(p.id).map((l) => ({ id: l.id, itemId: l.item_id, name: l.name, unit: l.unit, contract: l.contract, inTotal: l.in_total, outTotal: l.out_total }))
   };
@@ -1104,6 +1113,20 @@ function rosaryGroupId() {
   }
   return null;
 }
+const itemQtyInput = (v) => {
+  if (v === "" || v === null || v === undefined) return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0 || n > 100000000) throw bad("수량은 0 이상의 숫자로 적어 주세요.");
+  return n;
+};
+// 이미지 파일 앞부분으로 형식 확인 (이름·형식 주장은 믿지 않음)
+function imageMime(buf) {
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return "image/jpeg";
+  if (buf.length > 8 && buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+  if (buf.length > 12 && buf.toString("latin1", 0, 4) === "RIFF" && buf.toString("latin1", 8, 12) === "WEBP") return "image/webp";
+  return null;
+}
+const ITEM_IMAGE_MAX = 60 * 1024;
 const volQtyInput = (v) => {
   if (v === "" || v === null || v === undefined) return null;
   const n = Number(v);
@@ -1952,6 +1975,7 @@ async function api(req, res, path) {
       inTx(() => {
         const nid = Number(q.addProjectItem.run(p.id, parent, kind, ...projectItemFields(b, null)).lastInsertRowid);
         if (area) q.setProjectItemArea.run(area, nid);
+        if (has(b, "qty") && isAdmin) q.setItemQty.run(itemQtyInput(b.qty), nid); // 관리자 전용
       });
       return send(res, 201, projectDetail(p, user));
     }
@@ -1971,11 +1995,32 @@ async function api(req, res, path) {
     }
     return send(res, 405, { error: "Method not allowed" });
   }
-  const pim = path.match(/^\/api\/project-items\/(\d+)(\/ledgers)?$/);
+  const pim = path.match(/^\/api\/project-items\/(\d+)(\/ledgers|\/image)?$/);
   if (pim) {
+    if (pim[2] === "/image" && !isAdmin) return send(res, 403, { error: "항목 이미지는 관리자만 볼 수 있어요." }); // 우선 관리자만
     const i = q.projectItem.get(Number(pim[1]));
     const p = i && q.project.get(i.project_id);
     if (!p || !projectAllowed(user, p)) throw notFound("항목");
+    if (pim[2] === "/image") {
+      if (method === "GET") {
+        const g = q.itemImage.get(i.id);
+        if (!g) throw notFound("이미지");
+        res.writeHead(200, { "Content-Type": g.mime, "Content-Length": g.data.length, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'" });
+        return res.end(Buffer.from(g.data));
+      }
+      if (method === "PUT") {
+        const b = await readJson(req);
+        const buf = Buffer.from(String(b.data || ""), "base64");
+        if (!buf.length) throw bad("이미지를 골라 주세요.");
+        if (buf.length > ITEM_IMAGE_MAX) throw bad("이미지가 너무 커요.");
+        const mime = imageMime(buf);
+        if (!mime) throw bad("JPG, PNG, WEBP 이미지만 올릴 수 있어요.");
+        q.setItemImage.run(i.id, mime, buf, user.id);
+        return send(res, 200, projectDetail(p, user));
+      }
+      if (method === "DELETE") { q.delItemImage.run(i.id); return send(res, 200, projectDetail(p, user)); }
+      return send(res, 405, { error: "Method not allowed" });
+    }
     if (pim[2]) {
       if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
       const b = await readJson(req);
@@ -1996,6 +2041,7 @@ async function api(req, res, path) {
         q.setProjectItem.run(...fields, i.id);
         if (area !== null) q.setProjectItemArea.run(area, i.id);
         if (has(b, "partnerRelated") && isAdmin) q.setItemPartner.run(b.partnerRelated ? 1 : 0, i.id); // 관리자 전용
+        if (has(b, "qty") && isAdmin) q.setItemQty.run(itemQtyInput(b.qty), i.id); // 관리자 전용
       });
       return send(res, 200, projectDetail(p, user));
     }

@@ -302,6 +302,20 @@ jobs:
           curl -fs -H "$(bearer "$A2")" -XPATCH -d '{"partnerRelated":false}' $B/project-items/$AG >/dev/null
           curl -fs -H "$H" $B/projects/$PJ | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.items.find(i=>i.name==="구역 묶음").partnerRelated)process.exit(1)'
           curl -fs -H "$H" -XPATCH -d '{"partnerRelated":true}' $B/project-processes/$APR | node -e 'const p=JSON.parse(require("fs").readFileSync(0)).processes.find(x=>x.task==="구역 일");if(!p.partnerRelated||p.status!=="done"||p.area!=="구역나")process.exit(1)'
+          # 항목 수량·이미지(관리자 전용): 형식·크기 검사, 멤버는 못 보고 못 바꿈, 이미지는 받은 그대로 돌려줌
+          QI=$(curl -fs -H "$H" -XPOST -d "{\"kind\":\"item\",\"name\":\"수량 항목\",\"parentId\":$AG,\"qty\":30000}" $B/projects/$PJ/items | node -pe 'const i=JSON.parse(require("fs").readFileSync(0)).items.find(x=>x.name==="수량 항목");if(i.qty!==30000||i.image!==null)process.exit(1);i.id')
+          curl -fs -H "$(bearer "$A2")" -XPATCH -d '{"qty":1}' $B/project-items/$QI >/dev/null
+          curl -fs -H "$H" $B/projects/$PJ | node -e 'const i=JSON.parse(require("fs").readFileSync(0)).items.find(x=>x.name==="수량 항목");if(i.qty!==30000)process.exit(1)'
+          curl -fs -H "$(bearer "$A2")" $B/projects/$PJ | node -e 'if(JSON.parse(require("fs").readFileSync(0)).items.some(i=>"qty" in i||"image" in i))process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPATCH -d '{"qty":-5}' $B/project-items/$QI)" = 400
+          PNG=iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==
+          curl -fs -H "$H" -XPUT -d "{\"data\":\"$PNG\"}" $B/project-items/$QI/image | node -e 'const i=JSON.parse(require("fs").readFileSync(0)).items.find(x=>x.name==="수량 항목");if(!i.image)process.exit(1)'
+          curl -fs -H "$H" -D /tmp/ps/img.h -o /tmp/ps/img.bin $B/project-items/$QI/image; grep -qi 'content-type: image/png' /tmp/ps/img.h; test "$(base64 < /tmp/ps/img.bin | tr -d '\n')" = "$PNG"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A2")" $B/project-items/$QI/image)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A2")" -XPUT -d "{\"data\":\"$PNG\"}" $B/project-items/$QI/image)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"data":"PHN2ZyBvbmxvYWQ9YWxlcnQoMSk+"}' $B/project-items/$QI/image)" = 400
+          curl -fs -H "$H" -XDELETE $B/project-items/$QI/image | node -e 'if(JSON.parse(require("fs").readFileSync(0)).items.find(x=>x.name==="수량 항목").image!==null)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" $B/project-items/$QI/image)" = 404
           # 입출고 관리 목록: 볼 수 있는 프로젝트의 것만, 현황이 있는 묶음·프로젝트는 먼저 못 지움
           curl -fs -H "$H" $B/stock | node -e 'const l=JSON.parse(require("fs").readFileSync(0)).ledgers;const a=l.find(x=>x.name==="실 대장");if(!a||a.inTotal!==30||a.outTotal!==12||a.options!==2||a.itemName!=="묵주"||a.hasAfter)process.exit(1)'
           if curl -fs -H "$(bearer "$A1")" $B/stock | grep -q '실 대장'; then echo "다른 팀 입출고가 보여요"; exit 1; fi
