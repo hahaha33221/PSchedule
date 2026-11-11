@@ -878,20 +878,39 @@
     );
   }
   // 관리자 메뉴: 주황 상자 하나에 (멤버에게는 아예 안 보임)
+  // 관리자 메뉴: 수정중 카테고리 / 직원 관리 / 봉사자 관리 / 공통 관리
+  let adminProjects = null; // 수정중 카테고리의 프로젝트 바로가기 (한 번만 불러옴)
   function drawAdminNav(active) {
     if (!layout.admin) return;
-    const link = (id, label, ic, onclick) => (onclick
+    const sub = route().id;
+    const link = (id, label, ic, onclick, on) => (onclick
       ? h("button", { class: "side__link side__link--admin", type: "button", title: label, onclick: () => { toggleNav(false); onclick(); } }, [icon(ic), h("span", { class: "side__text", text: label })])
-      : h("a", { class: "side__link side__link--admin" + (id === active ? " is-active" : ""), href: "#/" + id, title: label, "aria-current": id === active ? "page" : null, onclick: () => toggleNav(false) }, [icon(ic), h("span", { class: "side__text", text: label })]));
+      : h("a", { class: "side__link side__link--admin" + (on ?? id === active ? " is-active" : ""), href: "#/" + id, title: label, "aria-current": (on ?? id === active) ? "page" : null, onclick: () => toggleNav(false) }, [icon(ic), h("span", { class: "side__text", text: label })]));
+    const part = (label) => h("div", { class: "side__adminpart", text: label });
+    const wip = adminProjects === null ? [h("p", { class: "side__adminnote", text: "불러오는 중…" })]
+      : adminProjects.length ? adminProjects.map((p) => link(`projects/${p.id}`, p.name, "folder", null, active === "projects" && String(sub) === String(p.id)))
+        : [h("p", { class: "side__adminnote", text: "아직 없어요" })];
     layout.admin.replaceChildren(
       h("div", { class: "side__adminhead" }, [icon("lock"), "관리자 전용"]),
-      link("org", "조직도 편집", "org"),
+      part("수정중 카테고리"),
+      h("p", { class: "side__adminnote", text: "상세 프로세스·협력업체·수량·이미지 (아직 관리자만)" }),
+      ...wip,
+      part("직원 관리"),
       link("members", "멤버 · 소속 지정", "user"),
-      link("volunteers", "봉사자 관리", "people"),
+      link("org", "조직도 편집", "org"),
+      part("봉사자 관리"),
+      link("volunteers", "봉사자 일정", "cal", null, active === "volunteers" && !sub),
+      link("volunteers/training", "기본 교육", "check", null, active === "volunteers" && sub === "training"),
+      link("volunteers/stock", "입출고 입력", "db", null, active === "volunteers" && sub === "stock"),
+      part("공통 관리"),
       link("cats", "분류 관리", "folder", manageCategories),
       link("cals", "구글 캘린더 연결", "cal", manageCalendars),
       link("backup", "백업", "db")
     );
+    if (adminProjects === null) {
+      adminProjects = [];
+      api("/projects").then((r) => { adminProjects = r.projects.map((p) => ({ id: p.id, name: p.name })); drawAdminNav(navActive); }).catch(() => {});
+    }
   }
   function drawCalsNav() {
     if (!layout.cals) return;
