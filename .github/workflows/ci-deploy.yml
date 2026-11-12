@@ -328,7 +328,7 @@ jobs:
           VP=$(curl -fs -H "$H" -XPOST -d '{"login":"vola","name":"봉사자일","role":"volunteer","unitId":'$OPS'}' $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).password')
           A8=$(tok vola "$VP"); VU=$(USR vola)
           curl -fs -H "$(bearer "$A8")" $B/me | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.user.role!=="volunteer"||d.user.unitId!==null||d.units.length||d.team.length||d.categories.length)process.exit(1)'
-          for u in projects projects/1/processes stock stock/1 tasks "events?from=2026-02-01&to=2026-02-28" contacts org team memos "search?q=WYD" admin/users people/1 meetings/choices; do test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" "$B/$u")" = 403; done
+          for u in projects projects/1/processes "today-search?date=2030-07-01" stock stock/1 tasks "events?from=2026-02-01&to=2026-02-28" contacts org team memos "search?q=WYD" admin/users people/1 meetings/choices; do test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" "$B/$u")" = 403; done
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" -XPOST -d '{"title":"x"}' $B/tasks)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A8")" -XPUT -d '{"mobile":"1"}' $B/contacts/u$VU)" = 403
           if curl -fs -H "$(bearer "$A1")" $B/me | grep -q '봉사자일'; then echo "직원 명단에 봉사자가 나와요"; exit 1; fi
@@ -356,6 +356,15 @@ jobs:
           for i in $(seq 1 20); do curl -s -o /dev/null -H 'content-type: application/json' -H "x-vercel-forwarded-for: 10.1.0.$i" -H "x-real-ip: 192.0.2.2" -XPOST -d '{"login":"locku","password":"wrong-pass"}' $B/login; done
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -H "x-vercel-forwarded-for: 10.2.0.1" -H "x-real-ip: 192.0.2.3" -XPOST -d "$J" $B/login)" = 429
           test "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -XPOST -d '{"login":"no-such-user","password":"x"}' $B/login)" = 401
+          # 오늘 이름으로 모아 보기: 공통 검색어 + 내 검색어, 그날 것만, 사람마다 따로 저장
+          curl -fs -H "$H" -XPOST -d '{"kind":"meeting","title":"권구택 보고","startDate":"2030-07-01"}' $B/events >/dev/null
+          curl -fs -H "$H" "$B/today-search?date=2030-07-01" | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const g=d.groups.find(x=>x.keyword==="권구택");if(d.common.join()!=="이재호,운영총괄부,권구택"||!g||!g.results.some(r=>r.title==="권구택 보고"))process.exit(1)'
+          curl -fs -H "$H" "$B/today-search?date=2030-07-02" | node -e 'const g=JSON.parse(require("fs").readFileSync(0)).groups.find(x=>x.keyword==="권구택");if(g.results.some(r=>r.title==="권구택 보고"))process.exit(1)'
+          curl -fs -H "$H" -XPUT -d '{"keywords":["보고","이재호"]}' $B/today-keywords | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.mine.join()!=="보고")process.exit(1)'
+          curl -fs -H "$(bearer "$A1")" "$B/today-search?date=2030-07-01" | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.mine.length)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"keywords":["1","2","3","4","5","6","7","8","9","10","11"]}' $B/today-keywords)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" "$B/today-search?date=bad")" = 400
+          curl -fs -H "$H" -XPUT -d '{"keywords":[]}' $B/today-keywords >/dev/null
           # 공지 공개 범위: 권한마다 목록·안 읽음 수·본문이 다르고, 봉사자는 읽기만
           VH0="$(bearer "$A8")"
           NA=$(curl -fs -H "$H" -XPOST -d '{"title":"전체공지","body":"가","audience":"all"}' $B/notices | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')

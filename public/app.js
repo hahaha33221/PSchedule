@@ -1953,9 +1953,42 @@
     ]);
     const memoList = h("div", { class: "today-memos__list" });
     const memoBox = h("div", { class: "card today-memos" }, [h("h2", { class: "card__title", text: "메모" }), quickMemo(day), memoList]);
-    setMain("today", [quickbar, h("div", { class: "today-grid" }, [timelineBox, h("div", { class: "today-side" }, [tasksBox, memoBox])])]);
+    // 이름으로 모아 보기: 공통 검색어 + 내 검색어, 그날 걸린 일정·할 일·메모
+    const findBox = h("section", { class: "card today-find" }, loading());
+    async function loadFind() {
+      const r = await api(`/today-search?date=${day}`);
+      const save = async (mine) => { await act(() => api("/today-keywords", { method: "PUT", body: { keywords: mine } })); quiet(loadFind()); };
+      const me = state.user.name;
+      const hasMe = r.common.includes(me) || r.mine.includes(me);
+      const add = h("input", { class: "today-find__add", maxlength: "30", placeholder: "검색어 추가", "aria-label": "검색어 추가" });
+      add.addEventListener("keydown", (e) => { if (e.key === "Enter" && add.value.trim()) { e.preventDefault(); save([...r.mine, add.value.trim()]); } });
+      const chip = (k, mine) => h("span", { class: "today-find__chip" + (mine ? " is-mine" : "") }, [k, mine ? h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": `${k} 빼기`, html: ICON.close, onclick: () => save(r.mine.filter((x) => x !== k)) }) : h("small", { text: "공통" })]);
+      const row = (x) => {
+        const key = x.ext ? `ext:${x.id}` : x.type === "task" ? `task:${x.id}` : x.type === "memo" ? (x.meetingId ? `event:${x.meetingId}` : `day:${x.date}`) : `event:${x.id}`;
+        const when = x.type === "task" ? "할 일" : x.type === "memo" ? "메모" : x.time ? (x.endTime ? `${x.time}~${x.endTime}` : x.time) : "종일";
+        return h("li", {}, h("button", { class: "today-find__row", type: "button", "data-peek": key, onclick: () => { const [t, id] = key.split(":"); openPeek(t, t === "day" ? id : Number(id)); } }, [
+          h("span", { class: "today-find__time", text: when }),
+          h("span", { class: "today-find__title", text: x.title }),
+          x.field && x.field !== "제목" ? h("span", { class: "today-find__where muted small", text: `${x.field}에서` }) : null
+        ]));
+      };
+      fill(findBox,
+        h("div", { class: "card__head" }, [
+          h("h2", { class: "card__title", text: "이름으로 모아 보기" }),
+          hasMe ? null : h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => save([...r.mine, me]) }, [icon("search"), `내 이름(${me})으로 찾기`])
+        ]),
+        h("div", { class: "today-find__chips" }, [...r.common.map((k) => chip(k, false)), ...r.mine.map((k) => chip(k, true)), add]),
+        h("div", { class: "today-find__groups" }, r.groups.map((g) => h("div", { class: "today-find__group" }, [
+          h("h3", {}, [g.keyword, h("span", { class: "muted small", text: ` ${g.results.length}건` })]),
+          g.results.length ? h("ul", { class: "today-find__list" }, g.results.map(row)) : h("p", { class: "muted small", text: "이 날 걸린 것이 없어요." })
+        ])))
+      );
+      markPeeked();
+    }
+    setMain("today", [quickbar, findBox, h("div", { class: "today-grid" }, [timelineBox, h("div", { class: "today-side" }, [tasksBox, memoBox])])]);
 
     async function load() {
+      quiet(loadFind().catch((e) => { if (e.status !== 401) fill(findBox, failed(e)); }));
       const [ev, tk, mm] = await Promise.all([
         api(`/events?from=${day}&to=${day}`), api(`/tasks?date=${day}&today=${today()}`), api(`/memos?date=${day}`)
       ]);

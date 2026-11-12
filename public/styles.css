@@ -1547,3 +1547,20 @@ button.gantt__name:hover { background: var(--surface-2); }
 .pj-imgbox__btns label { cursor: pointer; }
 .pj-imgbox__file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .pj-imgbox p { flex-basis: 100%; margin: 0; }
+
+/* 오늘: 이름으로 모아 보기 */
+.today-find { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.today-find__chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.today-find__chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px 3px 10px; border-radius: 999px; background: var(--surface-2); font-size: 13px; font-weight: 600; }
+.today-find__chip small { padding-right: 4px; color: var(--muted); font-weight: 500; }
+.today-find__chip.is-mine { background: var(--primary-soft); color: var(--primary); }
+.today-find input.today-find__add { width: 140px; flex: none; height: 28px; padding: 3px 10px; border-radius: 999px; font-size: 13px; }
+.today-find__groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 16px; }
+.today-find__group h3 { margin: 0 0 4px; font-size: 13.5px; }
+.today-find__list { margin: 0; padding: 0; list-style: none; }
+.today-find__row { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 5px 6px; border: 0; border-radius: 8px; background: none; color: var(--ink); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.today-find__row:hover, .today-find__row.is-peeked { background: var(--surface-2); }
+.today-find__time { flex: none; min-width: 72px; color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.today-find__title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.today-find__where { flex: none; }
+.today-find__group p { margin: 0; }

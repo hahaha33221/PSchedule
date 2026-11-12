@@ -970,7 +970,11 @@ function snippet(text, re) {
   const pre = from > 0 ? "…" : "";
   return { text: pre + t.slice(from, to) + (to < t.length ? "…" : ""), hl: [pre.length + m.index - from, pre.length + m.index - from + m[0].length] };
 }
-function runSearch(q, kind, v) {
+// '오늘' 화면에 모든 직원이 함께 보는 검색어
+const TODAY_COMMON_KEYWORDS = ["이재호", "운영총괄부", "권구택"];
+const todayKeywordsOf = (userId) => { try { const v = JSON.parse(db.prepare("SELECT today_keywords FROM users WHERE id = ?").get(userId)?.today_keywords || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } };
+// day 를 주면 그날에 걸친 것만 (일정은 시작~끝, 할 일은 마감일, 메모는 날짜)
+function runSearch(q, kind, v, day) {
   const re = searchPattern(q);
   if (!re) return { results: [], total: 0 };
   // 볼 수 있는 항목만
@@ -1029,6 +1033,7 @@ function runSearch(q, kind, v) {
         important: !!m.important, categoryId: m.category_id, createdBy: m.created_by, ...h });
     }
   }
+  if (day) { const keep = out.filter((r) => r.date && r.date <= day && (r.endDate || r.date) >= day); out.length = 0; out.push(...keep); }
   // 날짜 순서 (날짜 없는 할 일은 맨 끝), 같은 날은 종일 먼저 → 시간 순
   out.sort((a, b) => (a.date ? 0 : 1) - (b.date ? 0 : 1) || String(a.date).localeCompare(String(b.date)) || (a.time ? 1 : 0) - (b.time ? 1 : 0) || String(a.time).localeCompare(String(b.time)) || a.id - b.id);
   return { results: out.slice(0, SEARCH_LIMIT), total: out.length };
@@ -1851,6 +1856,21 @@ async function api(req, res, path) {
     return send(res, 405, { error: "Method not allowed" });
   }
 
+  // '오늘' 화면 검색 모아 보기: 공통 검색어 + 내 검색어로 그날 걸린 것 (볼 수 있는 것만)
+  if (path === "/api/today-search" && method === "GET") {
+    const day = param("date");
+    if (!isDate(day)) throw bad("날짜를 확인해 주세요.");
+    const mine = todayKeywordsOf(user.id);
+    const words = [...new Set([...TODAY_COMMON_KEYWORDS, ...mine])];
+    return send(res, 200, { common: TODAY_COMMON_KEYWORDS, mine, groups: words.map((k) => ({ keyword: k, results: runSearch(k, "all", V, day).results })) });
+  }
+  if (path === "/api/today-keywords" && method === "PUT") {
+    const b = await readJson(req);
+    if (!Array.isArray(b.keywords) || b.keywords.length > 10) throw bad("검색어는 10개까지 정할 수 있어요.");
+    const list = [...new Set(b.keywords.map((k) => text(k, 30, "검색어", true)))].filter((k) => !TODAY_COMMON_KEYWORDS.includes(k));
+    db.prepare("UPDATE users SET today_keywords = ? WHERE id = ?").run(JSON.stringify(list), user.id);
+    return send(res, 200, { common: TODAY_COMMON_KEYWORDS, mine: list });
+  }
   if (path === "/api/search" && method === "GET") {
     const qv = String(param("q") || "").slice(0, 100);
     const kind = ["meeting", "task", "memo"].includes(param("kind")) ? param("kind") : "all";
