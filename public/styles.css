@@ -512,6 +512,13 @@ li:hover > .row-del, li:focus-within > .row-del { opacity: 1; }
 .catbar { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; border-radius: 12px; background: var(--primary-soft); color: var(--primary); font-size: 13.5px; }
 .catbar > span { flex: 1; min-width: 0; text-align: left; }
 .catbar > .ic { flex: none; display: inline-flex; }
+.catfold { display: block; }
+.catfold__sum { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); cursor: pointer; list-style: none; font-size: 14.5px; }
+.catfold__sum::-webkit-details-marker { display: none; }
+.catfold__sum > .ic { flex: none; display: inline-flex; transition: transform .15s; }
+.catfold[open] > .catfold__sum > .ic { transform: rotate(90deg); }
+.catfold__sum > span:nth-child(2) { flex: 1; min-width: 0; }
+.catfold__body { margin-top: 12px; display: flex; flex-direction: column; gap: 16px; }
 .catman { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .catman li { display: flex; align-items: center; gap: 8px; }
 .catman .inline { flex: 1; min-width: 0; margin: 0; }

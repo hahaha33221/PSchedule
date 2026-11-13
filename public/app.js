@@ -434,6 +434,14 @@
   document.addEventListener("mousedown", (e) => {
     if (openPop && !openPop.el.contains(e.target) && !openPop.anchor.contains(e.target)) closePop();
   });
+  // 빈 날짜 칸을 누르면 오늘 날짜가 먼저 들어가 있게 (달력도 오늘에서 열림)
+  document.addEventListener("focusin", (e) => {
+    const el = e.target;
+    if (!(el instanceof HTMLInputElement) || el.type !== "date" || el.value || el.disabled || el.readOnly) return;
+    el.value = today();
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape" && openPop) { e.stopPropagation(); e.preventDefault(); closePop(); } }, true);
   // 대화상자 안 팝업이 열려 있을 때 Esc 는 팝업만 닫음
   dialog.addEventListener("cancel", (e) => { if (openPop) { e.preventDefault(); closePop(); } });
@@ -970,7 +978,9 @@
   // 분류 트리: 누르면 오늘·대시보드·할 일·회의·메모를 그 분류(와 그 아래)로 걸러 봄
   const CAT_PAGES = new Set(["today", "dashboard", "alldash", "tasks", "meetings", "memos"]);
   const ADMIN_PAGES = new Set(["org", "members", "volunteers", "backup", "alldash"]);
+  let catShown = null; // 내용을 펼쳐 둔 분류 (분류를 바꾸면 다시 접힘)
   function setCat(id) {
+    if (id !== state.cat) catShown = null;
     state.cat = id;
     id ? store.set("ps.cat", String(id)) : store.remove("ps.cat");
     toggleNav(false);
@@ -1040,6 +1050,18 @@
       icon("folder"), h("span", {}, ["분류 ", h("strong", { text: catLabel(state.cat) }), " 만 보는 중 (아래 분류 포함)"]),
       h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "전체 보기", onclick: () => setCat(null) })
     ]) : null;
+    // 분류로 걸러 보는 중이면 내용은 처음에 접어 두고, 눌러야 펼쳐 봄 (같은 분류 안에서는 펼친 채로 유지)
+    if (bar) {
+      const box = h("details", { class: "catfold" }, [
+        h("summary", { class: "catfold__sum" }, [icon("right"), h("span", {}, ["'", h("strong", { text: catLabel(state.cat) }), "' 분류에서 쓴 내용"]), h("span", { class: "catfold__hint muted small" })]),
+        h("div", { class: "catfold__body" }, content)
+      ]);
+      const hint = box.querySelector(".catfold__hint");
+      const sync = () => { hint.textContent = box.open ? "눌러서 접기" : "눌러서 펼치기"; };
+      box.open = catShown === state.cat; sync();
+      box.addEventListener("toggle", () => { catShown = box.open ? state.cat : null; sync(); });
+      content = box;
+    }
     // 관리자 전용 화면: 맨 위 주황 줄
     fill(layout.main, ADMIN_PAGES.has(name) ? h("div", { class: "admin-bar", "aria-hidden": "true" }) : null, bar, content);
   }
