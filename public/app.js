@@ -122,6 +122,8 @@
     if (diff < 86400 * 7) return `${Math.floor(diff / 86400)}일 전`;
     return `${t.getFullYear()}.${pad(t.getMonth() + 1)}.${pad(t.getDate())}`;
   }
+  // 공지 날짜는 항상 2026-11-13 형식 (서버 UTC → 이 기기 시각)
+  const dayOf = (s) => (s ? ymd(new Date(s.replace(" ", "T") + "Z")) : "");
   // 회의 진행 상태 (지금 시각 기준)
   function meetingState(e) {
     const t = today(), n = nowHm();
@@ -2580,7 +2582,7 @@
         r.notices.length ? h("ul", { class: "notice-list" }, r.notices.map((n) => h("li", {}, h("a", { class: "card notice-item" + (n.pinned ? " is-pinned" : ""), href: `#/notices/${n.id}` }, [
           h("div", { class: "notice-item__title" }, [n.pinned ? icon("pin", "pin") : null, h("strong", { text: n.title }), audTag(n.audience), n.unread ? h("span", { class: "new-badge", text: "새 글" }) : null]),
           h("p", { class: "notice-item__preview", text: n.preview }),
-          h("div", { class: "notice-item__meta muted" }, [h("span", { text: n.author || "관리자" }), h("span", { text: ago(n.createdAt) }), n.comments ? h("span", { class: "with-icon" }, [icon("chat"), String(n.comments)]) : null])
+          h("div", { class: "notice-item__meta muted" }, [h("span", { text: n.author || "관리자" }), h("span", { text: dayOf(n.createdAt) }), n.comments ? h("span", { class: "with-icon" }, [icon("chat"), String(n.comments)]) : null])
         ])))) : h("div", { class: "card empty", text: isAdmin ? "아직 공지가 없어요. 첫 공지를 써 보세요." : "아직 공지가 없어요." })
       ]));
     }
@@ -2601,7 +2603,7 @@
         h("article", { class: "card notice-view stack" }, [
           h("h1", {}, [n.pinned ? icon("pin", "pin") : null, n.title]),
           audTag(n.audience),
-          h("div", { class: "muted notice-item__meta" }, [h("span", { text: n.author || "관리자" }), h("span", { text: ago(n.createdAt) }), n.updatedAt !== n.createdAt ? h("span", { text: "수정됨" }) : null]),
+          h("div", { class: "muted notice-item__meta" }, [h("span", { text: n.author || "관리자" }), h("span", { text: dayOf(n.createdAt) }), n.updatedAt !== n.createdAt ? h("span", { text: "수정됨" }) : null]),
           h("div", { class: "prose", text: n.body }),
           n.canEdit ? h("div", { class: "actions actions--start" }, [
             h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "수정", onclick: () => editNotice(n) }),
@@ -4840,7 +4842,7 @@
           document.title = `${r.notice.title} · ${TITLE}`;
           return show([
             h("a", { class: "back-link", href: "#/vnotices" }, [icon("left"), "공지 목록"]),
-            h("article", { class: "card notice-view stack" }, [h("h1", { text: r.notice.title }), h("div", { class: "muted notice-item__meta" }, h("span", { text: ago(r.notice.createdAt) })), h("div", { class: "prose", text: r.notice.body })])
+            h("article", { class: "card notice-view stack" }, [h("h1", { text: r.notice.title }), h("div", { class: "muted notice-item__meta" }, h("span", { text: dayOf(r.notice.createdAt) })), h("div", { class: "prose", text: r.notice.body })])
           ]);
         }
         const r = await api("/notices");
@@ -4850,7 +4852,7 @@
           r.notices.length ? h("ul", { class: "notice-list" }, r.notices.map((n) => h("li", {}, h("a", { class: "card notice-item" + (n.pinned ? " is-pinned" : ""), href: `#/vnotices/${n.id}` }, [
             h("div", { class: "notice-item__title" }, [h("strong", { text: n.title }), n.unread ? h("span", { class: "new-badge", text: "새 글" }) : null]),
             h("p", { class: "notice-item__preview", text: n.preview }),
-            h("div", { class: "notice-item__meta muted" }, h("span", { text: ago(n.createdAt) }))
+            h("div", { class: "notice-item__meta muted" }, h("span", { text: dayOf(n.createdAt) }))
           ])))) : h("div", { class: "card empty", text: "아직 공지가 없어요." })
         ]);
       }
