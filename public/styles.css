@@ -616,6 +616,10 @@ li:hover > .row-del, li:focus-within > .row-del { opacity: 1; }
 .cal-title { font-size: 20px; font-variant-numeric: tabular-nums; }
 .cal-nav { display: flex; align-items: center; gap: 2px; }
 .cal-tools { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cal-fold > svg { transition: transform .15s; }
+.cal-fold.is-open > svg { transform: rotate(90deg); }
+.cal-card.is-folded .cal-head { margin-bottom: 0; }
+.cal-body[hidden] { display: none; }
 .cal-grid { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
 .cal-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
 .cal-row + .cal-row { border-top: 1px solid var(--line); }

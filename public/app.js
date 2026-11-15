@@ -2218,7 +2218,9 @@
       const search = h("label", { class: "search search--main" }, [icon("search"), h("input", { type: "search", value: state.search, placeholder: "안건·메모·댓글까지 전체 검색", "aria-label": "검색", oninput: (e) => { state.search = e.target.value; scheduleSearch(); } }), searchToggle]);
       const views = h("div", { class: "seg seg--sm" }, [["month", "월"], ["list", "목록"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String(state.view === k), text: label, onclick: () => { state.view = k; store.set("ps.view", k); draw(); } }))
         .concat(h("a", { href: "#/today", class: "seg__link", text: "일" })));
+      const foldBtn = h("button", { class: "icon-btn cal-fold" + (calFolded ? "" : " is-open"), type: "button", html: ICON.right, "aria-expanded": String(!calFolded), "aria-label": calFolded ? "달력 펼치기" : "달력 접기", title: calFolded ? "달력 펼치기" : "달력 접기", onclick: () => { calFolded = !calFolded; store.set("ps.calFold", calFolded ? "1" : "0"); draw(); } });
       return h("div", { class: "cal-head" }, [
+        foldBtn,
         h("div", { class: "cal-nav" }, [
           h("button", { class: "icon-btn", type: "button", "aria-label": "이전 달", html: ICON.left, onclick: () => setMonth(new Date(state.month.getFullYear(), state.month.getMonth() - 1, 1)) }),
           h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "오늘", onclick: () => setMonth(new Date(new Date().getFullYear(), new Date().getMonth(), 1)) }),
@@ -2230,8 +2232,10 @@
     }
 
     let bodyBox;
+    let calFolded = store.get("ps.calFold", "0") === "1"; // 달력 접기 (이 기기에 기억)
     function draw() {
       bodyBox = h("div", { class: "cal-body" });
+      calCard.classList.toggle("is-folded", calFolded);
       calCard.replaceChildren(toolbar(), bodyBox);
       drawBody();
     }
@@ -2239,6 +2243,7 @@
       const searching = !!state.search.trim();
       listCard.hidden = searching;
       if (searchToggle) searchToggle.hidden = !searching;
+      bodyBox.hidden = calFolded && !searching; // 접어도 검색 결과는 보임
       bodyBox.replaceChildren(searching ? searchView() : state.view === "list" ? monthList() : monthGrid());
       if (!searching) drawMeetingList();
       markPeeked();
