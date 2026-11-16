@@ -1959,6 +1959,14 @@
   }
 
   /* ---------- 오늘 (일자별 세부) ---------- */
+  // 이름으로 모아 보기에 나오는 종류 (새 종류는 여기에 한 줄 추가)
+  const FIND_KINDS = {
+    event: { label: "일정", when: (x) => (x.time ? (x.endTime ? `${x.time}~${x.endTime}` : x.time) : "종일") },
+    meeting: { label: "회의", when: (x) => (x.time ? (x.endTime ? `${x.time}~${x.endTime}` : x.time) : "종일") },
+    ext: { label: "구글 일정", when: (x) => (x.time ? (x.endTime ? `${x.time}~${x.endTime}` : x.time) : "종일") },
+    task: { label: "할 일" },
+    memo: { label: "메모" }
+  };
   async function pageToday(day) {
     if (!day) day = today();
     document.title = `${relDay(day) === "오늘" ? "오늘" : dateLabel(day)} · ${TITLE}`;
@@ -1989,23 +1997,35 @@
       const chip = (k, mine) => h("span", { class: "today-find__chip" + (mine ? " is-mine" : "") }, [k, mine ? h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": `${k} 빼기`, html: ICON.close, onclick: () => save(r.mine.filter((x) => x !== k)) }) : h("small", { text: "공통" })]);
       const row = (x) => {
         const key = x.ext ? `ext:${x.id}` : x.type === "task" ? `task:${x.id}` : x.type === "memo" ? (x.meetingId ? `event:${x.meetingId}` : `day:${x.date}`) : `event:${x.id}`;
-        const when = x.type === "task" ? "할 일" : x.type === "memo" ? "메모" : x.time ? (x.endTime ? `${x.time}~${x.endTime}` : x.time) : "종일";
-        return h("li", {}, h("button", { class: "today-find__row", type: "button", "data-peek": key, onclick: () => { const [t, id] = key.split(":"); openPeek(t, t === "day" ? id : Number(id)); } }, [
-          h("span", { class: "today-find__time", text: when }),
+        const kind = FIND_KINDS[x.type] || FIND_KINDS.event;
+        const when = kind.when ? kind.when(x) : kind.label;
+        // 제목이 아닌 곳(설명·안건·메모 등)에서 찾은 것은 + 로 표시
+        const extra = x.field && x.field !== "제목";
+        return h("li", {}, h("button", { class: "today-find__row today-find__row--" + (FIND_KINDS[x.type] ? x.type : "event"), type: "button", "data-peek": key, title: extra ? `${x.field}에 '${x.keyword || ""}'이(가) 들어 있어요` : null, onclick: () => { const [t, id] = key.split(":"); openPeek(t, t === "day" ? id : Number(id)); } }, [
+          h("span", { class: "today-find__kind", text: kind.label }),
           h("span", { class: "today-find__title", text: x.title }),
-          x.field && x.field !== "제목" ? h("span", { class: "today-find__where muted small", text: `${x.field}에서` }) : null
+          extra ? h("span", { class: "today-find__plus", "aria-label": `${x.field}에서 찾음`, text: "+" }) : null,
+          kind.when ? h("span", { class: "today-find__time", text: when }) : null
         ]));
       };
+      const open = store.get("ps.findOpen", "1") === "1"; // 처음에는 펼친 상태
+      const toggle = h("button", { class: "today-find__toggle", type: "button", "aria-expanded": String(open), onclick: () => { store.set("ps.findOpen", open ? "0" : "1"); quiet(loadFind()); } }, [
+        h("span", { class: "today-find__chev" + (open ? " is-open" : ""), html: ICON.right }),
+        h("h2", { class: "card__title", text: "이름으로 모아 보기" }),
+        h("span", { class: "muted small", text: `${r.groups.reduce((n, g) => n + g.results.length, 0)}건` })
+      ]);
+      findBox.classList.toggle("is-folded", !open);
       fill(findBox,
         h("div", { class: "card__head" }, [
-          h("h2", { class: "card__title", text: "이름으로 모아 보기" }),
-          hasMe ? null : h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => save([...r.mine, me]) }, [icon("search"), `내 이름(${me})으로 찾기`])
+          toggle,
+          open && !hasMe ? h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => save([...r.mine, me]) }, [icon("search"), `내 이름(${me})으로 찾기`]) : null
         ]),
-        h("div", { class: "today-find__chips" }, [...r.common.map((k) => chip(k, false)), ...r.mine.map((k) => chip(k, true)), add]),
-        h("div", { class: "today-find__groups" }, r.groups.map((g) => h("div", { class: "today-find__group" }, [
+        open ? h("div", { class: "today-find__chips" }, [...r.common.map((k) => chip(k, false)), ...r.mine.map((k) => chip(k, true)), add]) : null,
+        open ? h("div", { class: "today-find__groups" }, r.groups.map((g) => h("div", { class: "today-find__group" }, [
           h("h3", {}, [g.keyword, h("span", { class: "muted small", text: ` ${g.results.length}건` })]),
-          g.results.length ? h("ul", { class: "today-find__list" }, g.results.map(row)) : h("p", { class: "muted small", text: "이 날 걸린 것이 없어요." })
-        ])))
+          g.results.length ? h("ul", { class: "today-find__list" }, g.results.map((x) => row({ ...x, keyword: g.keyword }))) : h("p", { class: "muted small", text: "이 날 걸린 것이 없어요." })
+        ]))) : null,
+        open && r.groups.some((g) => g.results.some((x) => x.field && x.field !== "제목")) ? h("p", { class: "muted small today-find__legend" }, [h("span", { class: "today-find__plus", text: "+" }), " 제목이 아닌 내용(설명·안건·메모 등)에서 찾은 것"]) : null
       );
       markPeeked();
     }
