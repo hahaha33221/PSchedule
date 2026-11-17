@@ -415,6 +415,10 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/volunteer/projects/$HPJ)" = 404
           curl -fs -H "$VH" $B/volunteer/projects/$VPJ | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const s=JSON.stringify(d);if(d.items.length!==2||!d.items.some(i=>i.name==="공개 항목")||/가방|종이묵주|assignee|createdBy|ledger/i.test(s))process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d '{"name":"x"}' $B/volunteer/projects/$VPJ/items)" = 403
+          # 손십자가 묶음도 봉사자에게 보임 (그 아래 항목까지, 다른 묶음은 여전히 숨김)
+          CG=$(curl -fs -H "$H" -XPOST -d '{"kind":"group","name":"손십자가"}' $B/projects/$VPJ/items | node -pe 'JSON.parse(require("fs").readFileSync(0)).items.find(i=>i.name==="손십자가").id')
+          curl -fs -H "$H" -XPOST -d "{\"kind\":\"item\",\"name\":\"나무 손십자가\",\"parentId\":$CG}" $B/projects/$VPJ/items >/dev/null
+          curl -fs -H "$VH" $B/volunteer/projects/$VPJ | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const n=d.items.map(i=>i.name);if(!n.includes("손십자가")||!n.includes("나무 손십자가")||n.includes("가방"))process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/projects/$VPJ)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/admin/vol-schedules)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/admin/vol-schedules)" = 403

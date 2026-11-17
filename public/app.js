@@ -4841,7 +4841,8 @@
     layout.main = null;
     const seq = ++volSeq;
     const { name, id } = route();
-    const tab = ["vschedule", "vtraining", "vstock", "vprojects", "vnotices"].includes(name) ? name : "vhome";
+    const tab = ["vschedule", "vtraining", "vstock", "vprojects", "vp", "vnotices"].includes(name) ? name : "vhome";
+    const vpView = tab === "vp" ? location.hash.split("/")[3] || "" : null; // 요약 / wbs / in / req / out
     document.title = `봉사자 · ${TITLE}`;
     // 왼쪽 메뉴: 직원 화면과 같은 틀 (묵주 아래에 입출고를 접고 펴기)
     layout.tags = null;
@@ -4852,20 +4853,30 @@
         class: "side__link" + (sub ? " side__link--sub" : "") + (id === tab ? " is-active" : ""), href: `#/${id}`, "aria-current": id === tab ? "page" : null, title: badge ? `${label} · 새 글 ${badge}개` : label,
         onclick: () => { if (onclick) onclick(); toggleNav(false); }
       }, [icon(ic), h("span", { class: "side__text", text: label }), badge ? h("span", { class: "nav-badge", "aria-label": `안 읽은 공지 ${badge}개`, text: badge > 99 ? "99+" : String(badge) }) : null]);
-      const setOpen = (open) => { state.navRosaryOpen = open; store.set("ps.navRosary", open ? "1" : "0"); };
-      if (tab === "vstock") setOpen(true);
-      const open = state.navRosaryOpen;
+      // 묶음(묵주·손십자가)마다 프로젝트 관리 메뉴: 요약 아래 WBS · 입고 · 요청수량 · 출고
+      const groupNav = (g) => {
+        const key = "ps.navVg." + g.key;
+        const here = tab === "vp" && id === g.key;
+        const open = here || store.get(key, "1") !== "0";
+        const setOpen = (o) => { store.set(key, o ? "1" : "0"); drawVolNav(); };
+        const sub = (view, label, ic) => {
+          const on = here && vpView === view;
+          return h("a", { class: "side__link side__link--sub" + (on ? " is-active" : ""), href: `#/vp/${g.key}/${view}`, "aria-current": on ? "page" : null, title: label, onclick: () => toggleNav(false) }, [icon(ic), h("span", { class: "side__text", text: label })]);
+        };
+        const top = here && !vpView;
+        return h("div", { class: "side__group" }, [
+          h("div", { class: "side__row" }, [
+            h("a", { class: "side__link" + (top ? " is-active" : ""), href: `#/vp/${g.key}`, "aria-current": top ? "page" : null, title: `프로젝트 관리(${g.name})`, onclick: () => toggleNav(false) }, [icon("folder"), h("span", { class: "side__text", text: `프로젝트 관리(${g.name})` })]),
+            h("button", { class: "side__toggle" + (open ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(open), "aria-label": `${g.name} 아래 메뉴 ${open ? "접기" : "펼치기"}`, onclick: () => setOpen(!open) })
+          ]),
+          h("div", { class: "side__kids", hidden: !open }, [sub("wbs", "WBS", "grid"), sub("in", "입고", "db"), sub("req", `${g.name} 요청수량`, "cal"), sub("out", "출고", "db")])
+        ]);
+      };
       navBox.replaceChildren(
         link("vhome", "대시보드", "grid"),
         link("vschedule", "일정", "cal"),
         link("vtraining", "기본 교육", "check"),
-        h("div", { class: "side__group" }, [
-          h("div", { class: "side__row" }, [
-            link("vprojects", "프로젝트 관리", "folder", false, () => { const again = tab === "vprojects"; setOpen(again ? !state.navRosaryOpen : true); if (again) drawVolNav(); }),
-            h("button", { class: "side__toggle" + (open ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(open), "aria-label": `프로젝트 관리 아래 메뉴 ${open ? "접기" : "펼치기"}`, onclick: () => { setOpen(!state.navRosaryOpen); drawVolNav(); } })
-          ]),
-          h("div", { class: "side__kids", hidden: !open }, link("vstock", "입출고", "db", true))
-        ]),
+        ...VOL_GROUPS.map(groupNav),
         link("vnotices", "공지", "bell", false, null, state.unreadNotices)
       );
     };
@@ -4937,7 +4948,12 @@
           ledgers.length ? h("div", { class: "stack" }, stockGroupSections(ledgers, (l) => `#/vstock/${l.id}`)) : h("div", { class: "card empty", text: "아직 입력할 수 있는 입출고 대장이 없어요." })
         ]);
       }
+      if (tab === "vp") {
+        const g = VOL_GROUPS.find((x) => x.key === id) || VOL_GROUPS[0];
+        return show(await volGroupPage(g, vpView));
+      }
       if (tab === "vprojects") {
+        if (!id) { location.replace(`#/vp/${VOL_GROUPS[0].key}`); return; } // 예전 주소 → 묵주 요약
         if (id) {
           const d = await api(`/volunteer/projects/${Number(id)}`);
           const ls = (await api("/volunteer/stock")).ledgers.filter((l) => l.projectId === d.project.id);
@@ -4996,7 +5012,7 @@
           ledgers.length ? h("ul", { class: "vol-list" }, ledgers.map(volStockRow)) : h("p", { class: "muted", text: "아직 입력할 수 있는 대장이 없어요." })
         ]),
         h("section", { class: "card vol__card" }, [
-          h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "프로젝트 관리" }), more("#/vprojects", "보기")]),
+          h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "프로젝트 관리" }), more(`#/vp/${VOL_GROUPS[0].key}`, "보기")]),
           h("p", { class: "muted", text: "묵주 진행 상황과 방문 수량을 관리해요." })
         ])
       ])
@@ -5131,6 +5147,53 @@
       })) : h("div", { class: "card empty", text: "아직 등록된 교육이 없어요." })
     ];
   }
+  // 봉사자 프로젝트 관리는 묶음별: 묵주 / 손십자가
+  const VOL_GROUPS = [{ key: "rosary", name: "묵주" }, { key: "cross", name: "손십자가" }];
+  async function volGroupPage(g, view) {
+    document.title = `프로젝트 관리(${g.name}) · ${TITLE}`;
+    const title = (t) => h("h1", { class: "vol__hello", text: t });
+    const { projects } = await api("/volunteer/projects");
+    let d = null, grp = null;
+    for (const p of projects) {
+      const x = await api(`/volunteer/projects/${p.id}`);
+      const found = x.items.find((i) => i.kind === "group" && i.name === g.name);
+      if (found) { d = x; grp = found; break; }
+    }
+    if (!grp) return [title(`프로젝트 관리(${g.name})`), h("div", { class: "card empty", text: `아직 '${g.name}' 프로젝트가 준비되지 않았어요.` })];
+    // 이 묶음과 그 아래 항목만
+    const ids = new Set([grp.id]);
+    for (let grew = true; grew;) { grew = false; for (const i of d.items) if (i.parentId && ids.has(i.parentId) && !ids.has(i.id)) { ids.add(i.id); grew = true; } }
+    const items = d.items.filter((i) => ids.has(i.id));
+    const visits = (d.visits || []).filter((v) => ids.has(v.itemId));
+    const ledgers = (await api("/volunteer/stock")).ledgers.filter((l) => ids.has(l.itemId));
+    const head = (label) => [h("nav", { class: "muted small" }, h("a", { href: `#/vp/${g.key}`, text: `프로젝트 관리(${g.name})` })), title(label)];
+    if (view === "wbs") return [...head("WBS"), volWbs({ name: g.name }, visits)];
+    if (view === "req") return [...head(`${g.name} 요청수량`), volVisits(visits, `${g.name} 요청수량`)];
+    if (view === "in" || view === "out") return [...head(view === "in" ? "입고" : "출고"), volMoveCard(view, ledgers, await volLedgerDetails(ledgers))];
+    // 요약
+    const leaf = items.filter((i) => i.kind === "item");
+    const inT = ledgers.reduce((n, l) => n + l.inTotal, 0), outT = ledgers.reduce((n, l) => n + l.outTotal, 0);
+    const reqT = visits.reduce((n, v) => n + (v.qty || 0), 0), reqLeft = visits.filter((v) => v.date >= today()).reduce((n, v) => n + (v.qty || 0), 0);
+    const unit = ledgers[0]?.unit || "개";
+    const tile = (view, label, value, sub) => h("a", { class: "card vol-sum__tile", href: `#/vp/${g.key}/${view}` }, [h("span", { class: "muted small", text: label }), h("strong", { text: value }), sub ? h("span", { class: "muted small", text: sub }) : null]);
+    return [
+      title(`프로젝트 관리(${g.name})`),
+      h("p", { class: "muted small", text: `${d.project.name} › ${g.name} · 요약` }),
+      h("div", { class: "vol-sum" }, [
+        tile("wbs", "WBS 진척", "0%", "항목 준비 중"),
+        tile("in", "입고", `${fmtN(inT)} ${unit}`, ledgers.length ? `대장 ${ledgers.length}개` : "대장 없음"),
+        tile("req", `${g.name} 요청수량`, `${fmtN(reqT)}`, visits.length ? `방문 ${visits.length}건 · 남음 ${fmtN(reqLeft)}` : "연결된 일정 없음"),
+        tile("out", "출고", `${fmtN(outT)} ${unit}`, `재고 ${fmtN(inT - outT)} ${unit}`)
+      ]),
+      grp.note ? h("p", { class: "vol-pre muted", text: grp.note }) : null,
+      h("section", { class: "card vol__card" }, [
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "항목" }), h("span", { class: "muted small", text: `${leaf.length}개 · 완료 ${leaf.filter((i) => i.status === "done").length}개 · 읽기 전용` })]),
+        leaf.length ? h("ul", { class: "vol-items" }, leaf.map((i) => h("li", { class: "vol-item" }, [
+          h("div", { class: "vol-item__head" }, [h("span", { text: i.name }), h("span", { class: `pj-st pj-st--${i.status}`, text: projectStatusLabel(i.status) }), i.dueDate ? h("span", { class: "muted small", text: `마감 ${shortDate(i.dueDate)}` }) : null])
+        ]))) : h("p", { class: "muted", text: "아직 항목이 없어요." })
+      ])
+    ];
+  }
   function volProjects(list) {
     return [
       h("h1", { class: "vol__hello", text: "프로젝트 관리" }),
@@ -5141,7 +5204,7 @@
     ];
   }
   // 방문 일정·수량: 여기서 고친 수량이 달력에 그대로 보임
-  function volVisits(visits) {
+  function volVisits(visits, heading) {
     const box = h("section", { class: "card vol__card vol-visits" });
     const draw = () => {
       const sum = (rows) => rows.reduce((n, v) => n + (v.qty || 0), 0);
@@ -5163,7 +5226,7 @@
         ]);
       };
       fill(box,
-        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "일정 관리" }), h("span", { class: "muted small", text: "묵주 방문 일정 · 수량" }), h("a", { class: "link-btn", href: "#/vschedule", text: "달력 보기" })]),
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: heading || "일정 관리" }), h("span", { class: "muted small", text: "방문 일정 · 수량" }), h("a", { class: "link-btn", href: "#/vschedule", text: "달력 보기" })]),
         visits.length ? h("div", { class: "vol-visits__sum" }, [
           h("span", {}, ["전체 ", h("strong", { text: fmtN(sum(visits)) })]),
           h("span", {}, ["다녀옴 ", h("strong", { text: fmtN(sum(past)) })]),
@@ -5208,7 +5271,7 @@
     ]);
     const scroller = h("div", { class: "gantt vol-wbs__chart", role: "table" }, [
       h("div", { class: "gantt__row gantt__row--head" }, [h("div", { class: "gantt__name gantt__name--head wbs__name" }, [h("span", { class: "wbs__chev" }), h("span", { class: "wbs__code", text: "WBS" }), h("span", { class: "wbs__label", text: "작업" }), h("span", { class: "wbs__pct", text: "진척" })]), h("div", { class: "gantt__track", style: `width:${width}px` }, [...months, todayLine()])]),
-      row(0, "1", project.name.includes("묵주") ? project.name : "묵주"),
+      row(0, "1", project.name),
       row(1, "1.1", "단계", "준비 중")
     ]);
     requestAnimationFrame(() => { scroller.scrollLeft = Math.max(0, dayX(t) - 120); });

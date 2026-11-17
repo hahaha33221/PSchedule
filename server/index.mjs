@@ -1089,12 +1089,13 @@ const projectDetail = (p, user) => {
     ledgers: q.ledgersOfProject.all(p.id).map((l) => ({ id: l.id, itemId: l.item_id, name: l.name, unit: l.unit, contract: l.contract, inTotal: l.in_total, outTotal: l.out_total }))
   };
 };
-// 봉사자에게 보여 줄 범위: 기념품팀 프로젝트의 '묵주' 묶음과 그 아래만, 읽기 전용 (만든 사람·담당 직원·프로젝트 설명은 뺌)
+// 봉사자에게 보여 줄 범위: 기념품팀 프로젝트의 '묵주'·'손십자가' 묶음과 그 아래만, 읽기 전용 (만든 사람·담당 직원·프로젝트 설명은 뺌)
 const VOLUNTEER_PROJECT_TEAM = "기념품팀";
-const VOLUNTEER_GROUP = "묵주";
+const VOLUNTEER_GROUP = "묵주"; // 방문 일정(요청 수량)을 잇는 묶음
+const VOLUNTEER_GROUPS = [VOLUNTEER_GROUP, "손십자가"];
 function volItems(p) {
   const items = q.projectItems.all(p.id);
-  const shown = new Set(items.filter((i) => i.kind === "group" && i.name === VOLUNTEER_GROUP).map((i) => i.id));
+  const shown = new Set(items.filter((i) => i.kind === "group" && VOLUNTEER_GROUPS.includes(i.name)).map((i) => i.id));
   for (let grew = shown.size > 0; grew;) {
     grew = false;
     for (const i of items) if (i.parent_id && shown.has(i.parent_id) && !shown.has(i.id)) { shown.add(i.id); grew = true; }
@@ -1112,7 +1113,7 @@ function volLedgerProject(l) {
   return p && volItems(p).shown.has(l.item_id) ? p : null;
 }
 const volItemOut = (i, shown) => ({ id: i.id, parentId: shown.has(i.parent_id) ? i.parent_id : null, kind: i.kind, name: i.name, status: i.status, dueDate: i.due_date, note: i.note });
-const volScheduleOut = (s) => ({ id: s.id, title: s.title, date: s.date, startTime: s.start_time, endTime: s.end_time, place: s.place, note: s.note, qty: s.qty, qtyBy: s.qty_by, qtyAt: s.qty_at, project: !!s.project_item_id });
+const volScheduleOut = (s) => ({ id: s.id, title: s.title, date: s.date, startTime: s.start_time, endTime: s.end_time, place: s.place, note: s.note, qty: s.qty, qtyBy: s.qty_by, qtyAt: s.qty_at, project: !!s.project_item_id, itemId: s.project_item_id || null });
 // 봉사자에게 보이는 '묵주' 묶음 (방문 일정을 이 묶음에 연결)
 function rosaryGroupId() {
   for (const p of volProjectsShown()) {
