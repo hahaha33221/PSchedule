@@ -5465,8 +5465,6 @@
     const tag = (cls, text) => h("span", { class: "vwbs__tag vwbs__tag--" + cls, text });
     // 원자재 조달(2026-07)부터 WYD(2027-08)까지
     const tl = volTimeline("2026-07-01", "2027-08-31");
-    const openProc = new Set(JSON.parse(store.get("ps.vwbsOpenProc", "[]") || "[]"));
-    const saveOpen = () => store.set("ps.vwbsOpenProc", JSON.stringify([...openProc]));
     // 한 줄짜리 이름 칸: 번호 · 이름 · 상태 점. 자세한 내용은 줄을 눌러 펼침
     const nameCell = (level, code, label, tags, chev, onclick, extraCls) => h(onclick ? "button" : "div", { class: `gantt__name wbs__name vwbs__cell${extraCls ? " " + extraCls : ""}`, type: onclick ? "button" : null, style: `padding-left:${10 + level * 16}px`, "aria-expanded": chev == null ? null : String(chev), onclick }, [
       h("span", { class: "wbs__chev" + (chev ? " is-open" : ""), html: chev == null ? "" : ICON.right }),
@@ -5484,32 +5482,22 @@
         const open = !closed.has(code);
         const fixedN = m.procs.filter((n) => ROSARY_PROCS[n].fixed).length;
         const toggle = () => { open ? closed.add(code) : closed.delete(code); store.set("ps.vwbsClosed", JSON.stringify([...closed])); draw(); };
-        rows.push(h("div", { class: "gantt__row wbs-row wbs-row--0" + (m.first ? " is-first" : ""), role: "row", title: `주요 업무: ${m.main} · 연계: ${m.link}` }, [
+        rows.push(h("div", { class: "gantt__row wbs-row wbs-row--0" + (m.first ? " is-first" : ""), role: "row", title: `주요 업무: ${m.main}` }, [
           nameCell(0, code, h("span", {}, [h("strong", { text: m.name }), h("small", { class: "muted", text: `  ${m.main}` })]), [m.first ? tag("first", "먼저 결정") : m.procs.length ? h("span", { class: "vwbs__count", text: `확정 ${fixedN}/${m.procs.length}` }) : null], open, toggle),
           tl.track()
         ]));
         if (!open) return;
         if (!m.procs.length) rows.push(h("div", { class: "gantt__row wbs-row wbs-row--1", role: "row" }, [nameCell(1, `${code}.1`, `${m.main} — 판매가(20·25달러)·판매 경로 결정`, [dot("todo", "결정 필요")]), tl.track()]));
         procs.forEach((n, pi) => {
-          const p = ROSARY_PROCS[n], pc = `${code}.${pi + 1}`, isOpen = openProc.has(n);
-          const flip = () => { isOpen ? openProc.delete(n) : openProc.add(n); saveOpen(); draw(); };
-          rows.push(h("div", { class: "gantt__row wbs-row wbs-row--1" + (isOpen ? " is-open" : ""), role: "row" }, [
-            nameCell(1, pc, `공정 ${n} · ${p.name}`, [p.joint ? dot("joint", "공동") : null, dot(p.fixed ? "fixed" : "open", p.fixed ? "확정" : "미정")], isOpen, flip),
+          const p = ROSARY_PROCS[n], pc = `${code}.${pi + 1}`;
+          rows.push(h("div", { class: "gantt__row wbs-row wbs-row--1", role: "row" }, [
+            nameCell(1, pc, `공정 ${n} · ${p.name}`, [p.joint ? dot("joint", "공동") : null, dot(p.fixed ? "fixed" : "open", p.fixed ? "확정" : "미정")]),
             tl.track()
-          ]));
-          if (isOpen) rows.push(h("div", { class: "vwbs__detail", role: "row" }, [
-            h("dl", {}, [
-              h("dt", { text: "업무 특성" }), h("dd", { text: p.feat }),
-              p.joint ? h("dt", { text: "공동 작업" }) : null, p.joint ? h("dd", { class: "vwbs__joint", text: p.joint }) : null,
-              h("dt", { text: "연계 업무" }), h("dd", { text: p.link }),
-              p.tasks?.length ? h("dt", { text: "추가 과업" }) : null,
-              p.tasks?.length ? h("dd", {}, h("ol", { class: "vwbs__tasks" }, p.tasks.map((tk) => h("li", { text: tk })))) : null
-            ])
           ]));
         });
       });
       const chart = h("div", { class: "gantt vol-wbs__chart", role: "table" }, [
-        tl.head(h("div", { class: "gantt__name gantt__name--head wbs__name vwbs__cell" }, [h("span", { class: "wbs__chev" }), h("span", { class: "wbs__code", text: "WBS" }), h("span", { class: "vwbs__title", text: "마일스톤 · 공정 (눌러서 자세히)" }), h("span", { class: "vwbs__state", text: "상태" })])),
+        tl.head(h("div", { class: "gantt__name gantt__name--head wbs__name vwbs__cell" }, [h("span", { class: "wbs__chev" }), h("span", { class: "wbs__code", text: "WBS" }), h("span", { class: "vwbs__title", text: "마일스톤 · 공정" }), h("span", { class: "vwbs__state", text: "상태" })])),
         ...rows
       ]);
       tl.scrollToToday(chart);
@@ -5526,7 +5514,7 @@
         ]),
         chart,
         h("div", { class: "vwbs__legend muted small" }, [dot("fixed", "확정 (진행 중)"), dot("open", "미정 (방식 결정 필요)"), dot("joint", "공동 작업 (봉사자와 함께)"), h("span", {}, [h("i", { class: "vwbs__todaykey" }), " 오늘"]), h("span", {}, [h("i", { class: "vwbs__nowkey" }), " 이번 달"])]),
-        h("p", { class: "muted small", text: "공정 줄을 누르면 업무 특성·연계 업무·추가 과업이 펼쳐져요. 공정별 일정이 정해지면 막대로 보여요." })
+        h("p", { class: "muted small", text: "공정별 일정이 정해지면 막대로 보여요." })
       );
     };
     draw();
