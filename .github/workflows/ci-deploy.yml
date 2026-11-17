@@ -429,6 +429,7 @@ jobs:
           J="{\"itemId\":$CG,\"kind\":\"x\",\"date\":\"2030-03-01\",\"qty\":1}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d "$J" $B/volunteer/records)" = 400
           curl -fs -H "$VH" -XPOST -d "{\"itemId\":$CG,\"kind\":\"recovery\",\"date\":\"2030-03-01\",\"name\":\"성당\",\"qty\":7}" $B/volunteer/records | grep -q '"qty":7'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" "$B/volunteer/records?item=$VG&kind=material")" = 404
+          curl -fs -H "$H" $B/admin/vol-records | node -e 'const r=JSON.parse(require("fs").readFileSync(0)).records;if(!r.some(x=>x.kind==="recovery"&&x.qty===7&&x.group==="손십자가"))process.exit(1)'
           curl -fs -H "$VH" -XDELETE $B/volunteer/records/$VR | node -e 'if(JSON.parse(require("fs").readFileSync(0)).records.length)process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/projects/$VPJ)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/admin/vol-schedules)" = 403
@@ -498,6 +499,16 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/stock-photos/$PH)" = 404
           curl -fs -H "$H" -XDELETE $B/stock-photos/$PH | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.moves.find(x=>x.id==='$VM').photos.length!==3||!d.history.some(h=>h.summary.includes("사진 삭제")))process.exit(1)'
           J="{\"type\":\"in\",\"date\":\"2030-03-03\",\"issue\":\"박스 파손\",\"qty\":{\"$VO\":1}}"; curl -fs -H "$H" -XPOST -d "$J" $B/stock/$VL/moves | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const m=d.moves.find(x=>x.id===d.newMoveId);if(!m||m.issue!=="박스 파손")process.exit(1)'
+          # 입고 검수(합격·불량): 입고에만 저장, 음수는 거절, 관리자 봉사자 입출고 목록에 이슈·사진·검수가 보임
+          curl -fs -H "$VH" -XPATCH -d '{"inspectOk":8,"inspectBad":2}' $B/volunteer/stock-moves/$VM | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const m=d.moves.find(x=>x.id==='$VM');if(m.inspectOk!==8||m.inspectBad!==2)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPATCH -d '{"inspectBad":-1}' $B/volunteer/stock-moves/$VM)" = 400
+          curl -fs -H "$H" $B/admin/vol-stock-moves | node -e 'const m=JSON.parse(require("fs").readFileSync(0)).moves.find(x=>x.id==='$VM');if(!m||m.inspectBad!==2||m.photos!==3||!m.issue)process.exit(1)'
+          # 봉사자 메뉴 공개: 처음엔 입고·출고 중심, 관리자만 바꿈, 모르는 키는 버림
+          curl -fs -H "$VH" $B/volunteer/menu | grep -q '"menu":\["home","notices","in","out"\]'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPUT -d '{"menu":["in"]}' $B/admin/vol-menu)" = 403
+          curl -fs -H "$H" -XPUT -d '{"menu":["in","out","req","nope"]}' $B/admin/vol-menu | grep -q '"menu":\["req","in","out"\]'
+          curl -fs -H "$VH" $B/volunteer/menu | grep -q '"menu":\["req","in","out"\]'
+          curl -fs -H "$H" -XPUT -d '{"menu":["home","notices","in","out"]}' $B/admin/vol-menu >/dev/null
           if curl -fs -H "$VH" $B/volunteer/stock/$VL | grep -q '"history"'; then echo "봉사자 응답에 수정 기록이 있어요"; exit 1; fi
           HN=$(curl -fs -H "$H" $B/stock/$VL | node -pe 'JSON.parse(require("fs").readFileSync(0)).history.length')
           J="{\"qty\":{\"$VO\":8}}"; curl -fs -H "$VH" -XPATCH -d "$J" $B/volunteer/stock-moves/$VM >/dev/null

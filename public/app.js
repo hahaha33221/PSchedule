@@ -711,6 +711,7 @@
     state.token = "";
     state.user = null;
     state.peek = null;
+    state.volMenu = null;
     store.remove("ps.token");
     closeDialog();
     closePop();
@@ -4677,6 +4678,9 @@
       const handler = h("input", { value: m?.handler ?? (vol && type === "out" ? state.user.name : ""), maxlength: "40" });
       const note = h("textarea", { rows: "2", maxlength: "500" }, m?.note || "");
       const issue = h("textarea", { rows: "2", maxlength: "500", placeholder: "예: 10개 중 2개 불량, 박스 파손, 수량 부족" }, m?.issue || "");
+      // 입고 검수: 들어온 수량 중 합격·불량 (비우면 검수 안 함)
+      const insOk = h("input", { type: "number", min: "0", inputmode: "numeric", value: m?.inspectOk ?? "", "aria-label": "검수 합격" });
+      const insBad = h("input", { type: "number", min: "0", inputmode: "numeric", value: m?.inspectBad ?? "", "aria-label": "검수 불량" });
       // 사진: 고른 사진은 바로 줄여 두고 저장할 때 올림. 봉사자가 새로 넣을 때는 1장 이상
       const needPhoto = !!vol && !m;
       const pending = [];
@@ -4713,6 +4717,7 @@
         h("div", { class: "row2" }, [field(type === "in" ? "입고일" : "출고일", date), type === "out" ? field("전달자", handler) : null]),
         inputs.length ? h("div", { class: "stock-grid" }, inputs.map((x) => h("label", { class: "stock-grid__cell" }, [h("span", { class: "small", text: x.o.name }), x.el, h("span", { class: "muted stock-grid__left", text: `재고 ${fmtN(leftOf(x.o.id))}` })]))) : h("p", { class: "muted small", text: "먼저 1단계 기본 정보에서 품목 열을 추가해 주세요." }),
         sum, field("비고", note),
+        type === "in" ? h("div", { class: "row2" }, [field("검수 합격", insOk), field("검수 불량", insBad, "검수했으면 적어 주세요. 불량이 있으면 아래 이슈에도 적어 주세요.")]) : null,
         field("이슈 (문제가 된 점)", issue, "이 날짜·물량에 문제가 있었으면 적어 주세요. 나중에 모아서 업체에 보낼 수 있어요."),
         h("div", { class: "field" }, [h("span", { class: "field__label", text: `${type === "in" ? "영수증·사진" : "출고 사진"}${needPhoto ? " (1장 이상)" : " (선택)"}` }), photoBox, h("div", {}, [pickBtn, fileIn]), h("small", { class: "muted", text: `${PHOTO_MAX}장까지, 올릴 때 자동으로 작게 줄여요.` })]),
         m?.enteredBy ? h("p", { class: "muted small", text: `입력: ${m.enteredBy}` }) : null,
@@ -4736,7 +4741,7 @@
             if (over.length && !confirm(`재고보다 많이 출고해요: ${over.map((x) => `${x.o.name} (재고 ${fmtN(leftOf(x.o.id))})`).join(", ")}\n그래도 저장할까요?`)) return;
             if (needPhoto && !pending.length) return showError(err, type === "in" ? "영수증이나 사진을 1장 이상 올려 주세요." : "출고 사진을 1장 이상 올려 주세요.");
             const qty = Object.fromEntries(inputs.map((x) => [x.o.id, x.el.value]));
-            const body = { date: date.value, handler: handler.value, note: note.value, issue: issue.value, qty };
+            const body = { date: date.value, handler: handler.value, note: note.value, issue: issue.value, qty, ...(type === "in" ? { inspectOk: insOk.value, inspectBad: insBad.value } : {}) };
             let r = await api(m ? moveUrl(m.id) : `${base}/moves`, { method: m ? "PATCH" : "POST", body: m ? body : { ...body, type } });
             const mid = m ? m.id : r.newMoveId;
             for (const b of pending) r = await api(`${moveUrl(mid)}/photos`, { method: "POST", body: { data: await blobToBase64(b) } });
@@ -4750,8 +4755,8 @@
     function exportIssues() {
       const { ledger: l, options, moves } = data;
       const esc = (raw) => { const v = /^[=+\-@\t\r]/.test(String(raw)) ? `'${raw}` : String(raw); return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
-      const lines = [["구분", "날짜", ...options.map((o) => o.name), "합계", "전달자", "비고", "이슈", "사진 수", "입력자"]];
-      for (const m of moves.filter((x) => x.issue)) lines.push([m.type === "in" ? "입고" : "출고", m.date, ...options.map((o) => m.qty[o.id] || 0), Object.values(m.qty).reduce((a, b) => a + b, 0), m.handler, m.note, m.issue, m.photos.length, m.enteredBy || ""]);
+      const lines = [["구분", "날짜", ...options.map((o) => o.name), "합계", "검수 합격", "검수 불량", "전달자", "비고", "이슈", "사진 수", "입력자"]];
+      for (const m of moves.filter((x) => x.issue)) lines.push([m.type === "in" ? "입고" : "출고", m.date, ...options.map((o) => m.qty[o.id] || 0), Object.values(m.qty).reduce((a, b) => a + b, 0), m.inspectOk ?? "", m.inspectBad ?? "", m.handler, m.note, m.issue, m.photos.length, m.enteredBy || ""]);
       const blob = new Blob(["\ufeff" + lines.map((r) => r.map(esc).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
       const a = h("a", { href: URL.createObjectURL(blob), download: `${l.name}_이슈_${today()}.csv` });
       document.body.append(a); a.click(); a.remove();
@@ -4776,12 +4781,13 @@
             h("td", { class: "num muted", text: String(i + 1) }), h("td", { class: "nowrap", text: m.date }),
             ...options.map((o) => num(m.qty[o.id])), num(day, "stock-strong"), num(running),
             isOut ? h("td", { text: m.handler || "-" }) : null, h("td", { class: "stock-note", text: m.note }),
+            isOut ? null : h("td", { class: "nowrap", text: m.inspectOk != null || m.inspectBad != null ? `합격 ${fmtN(m.inspectOk || 0)} · 불량 ${fmtN(m.inspectBad || 0)}` : "-" }),
             h("td", { class: "stock-note move-issue", text: m.issue || "" }),
             h("td", { class: "nowrap" }, m.photos.length ? h("button", { class: "btn btn--ghost btn--sm move-photo-btn", type: "button", title: "사진 보기", onclick: (e) => { e.stopPropagation(); viewPhotos(m); } }, [icon("note"), String(m.photos.length)]) : h("span", { class: "muted", text: "-" })),
             vol ? null : h("td", { class: "nowrap", text: m.enteredBy || "-" })
           ]);
         });
-        const colsAfter = (isOut ? 2 : 1) + 2 + (vol ? 0 : 1);
+        const colsAfter = (isOut ? 2 : 2) + 2 + (vol ? 0 : 1);
         return h("section", { class: "stock-sec" }, [
           h("div", { class: "card__head" }, [
             h("h2", { class: "card__title" }, [isOut ? "출고 현황 " : "입고 현황 ", h("span", { class: "muted small", text: isOut ? l.outLabel : l.inLabel })]),
@@ -4791,7 +4797,7 @@
             ])
           ]),
           h("div", { class: "card table-wrap" }, h("table", { class: "table stock-table" }, [
-            h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "순번" }), h("th", { text: isOut ? "출고일" : "입고일" }), ...options.map((o) => h("th", { class: "num", text: o.name })), h("th", { class: "num", text: "일계" }), h("th", { class: "num", text: "누계" }), isOut ? h("th", { text: "전달자" }) : null, h("th", { text: "비고" }), h("th", { text: "이슈" }), h("th", { text: "사진" }), vol ? null : h("th", { text: "입력자" })])),
+            h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "순번" }), h("th", { text: isOut ? "출고일" : "입고일" }), ...options.map((o) => h("th", { class: "num", text: o.name })), h("th", { class: "num", text: "일계" }), h("th", { class: "num", text: "누계" }), isOut ? h("th", { text: "전달자" }) : null, h("th", { text: "비고" }), isOut ? null : h("th", { text: "검수" }), h("th", { text: "이슈" }), h("th", { text: "사진" }), vol ? null : h("th", { text: "입력자" })])),
             h("tbody", {}, body.length ? body : h("tr", {}, h("td", { colspan: String(options.length + 4 + colsAfter), class: "muted empty", text: "아직 기록이 없어요." }))),
             h("tfoot", {}, [
               h("tr", {}, [h("th", { colspan: "2", text: "합계" }), ...options.map((o) => num(sumOf(type, o.id))), num(sumOf(type)), h("td", { colspan: String(1 + colsAfter) })]),
@@ -4899,7 +4905,11 @@
   const volDay = (s) => parseYmd(s).toLocaleDateString("ko-KR", { month: "long", day: "numeric", weekday: "short" });
   const volTime = (x) => (x.startTime ? (x.endTime ? `${x.startTime}~${x.endTime}` : x.startTime) : "");
   let volSeq = 0;
+  // 관리자가 연 메뉴만 봉사자에게 보임 (단계적으로 엶). 못 받아 오면 입고·출고 중심
+  const VOL_MENU_DEFAULT = ["home", "notices", "in", "out"];
+  const volOn = (k) => (state.volMenu || VOL_MENU_DEFAULT).includes(k);
   function renderVolunteer() {
+    if (!state.volMenu) { api("/volunteer/menu").then((r) => { state.volMenu = r.menu; render(); }).catch(() => { state.volMenu = VOL_MENU_DEFAULT; render(); }); }
     layout.main = null;
     const seq = ++volSeq;
     const { name, id } = route();
@@ -4931,16 +4941,16 @@
             h("a", { class: "side__link" + (top ? " is-active" : ""), href: `#/vp/${g.key}`, "aria-current": top ? "page" : null, title: `프로젝트 관리(${g.name})`, onclick: () => toggleNav(false) }, [icon("folder"), h("span", { class: "side__text", text: `프로젝트 관리(${g.name})` })]),
             h("button", { class: "side__toggle" + (open ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(open), "aria-label": `${g.name} 아래 메뉴 ${open ? "접기" : "펼치기"}`, onclick: () => setOpen(!open) })
           ]),
-          h("div", { class: "side__kids", hidden: !open }, [sub("wbs", "WBS", "grid"), sub("req", `${g.name} 요청수량`, "cal"), sub("in", "입고", "db"), sub("out", "출고", "db"), sub("material", "원자재 보유물량", "db"), sub("recovery", "제품 회수물량", "db")])
+          h("div", { class: "side__kids", hidden: !open }, [volOn("wbs") ? sub("wbs", "WBS", "grid") : null, volOn("req") ? sub("req", `${g.name} 요청수량`, "cal") : null, volOn("in") ? sub("in", "입고", "db") : null, volOn("out") ? sub("out", "출고", "db") : null, volOn("material") ? sub("material", "원자재 보유물량", "db") : null, volOn("recovery") ? sub("recovery", "제품 회수물량", "db") : null])
         ]);
       };
-      navBox.replaceChildren(
-        link("vhome", "대시보드", "grid"),
-        link("vschedule", "일정", "cal"),
-        link("vtraining", "기본 교육", "check"),
+      navBox.replaceChildren(...[
+        volOn("home") ? link("vhome", "대시보드", "grid") : null,
+        volOn("schedule") ? link("vschedule", "일정", "cal") : null,
+        volOn("training") ? link("vtraining", "기본 교육", "check") : null,
         ...VOL_GROUPS.map(groupNav),
-        link("vnotices", "공지", "bell", false, null, state.unreadNotices)
-      );
+        volOn("notices") ? link("vnotices", "공지", "bell", false, null, state.unreadNotices) : null
+      ].filter(Boolean));
     };
     drawVolNav();
     const account = h("button", { class: "side__account", type: "button", "aria-label": "내 계정" }, [
@@ -4976,6 +4986,11 @@
     applySide();
     const show = (...kids) => { if (seq === volSeq) fill(main, ...kids); };
     const load = async () => {
+      // 아직 열지 않은 메뉴로 들어오면 안내 (주소를 직접 쳐도)
+      const closedMsg = () => show([h("h1", { class: "vol__hello", text: "준비 중인 메뉴예요" }), h("div", { class: "card empty", text: "이 메뉴는 아직 열리지 않았어요. 왼쪽의 입고·출고 메뉴를 써 주세요." })]);
+      const keyOf = { vschedule: "schedule", vtraining: "training", vnotices: "notices" }[tab];
+      if (state.volMenu && keyOf && !volOn(keyOf)) return closedMsg();
+      if (state.volMenu && tab === "vp" && vpView && !volOn(vpView)) return closedMsg();
       if (tab === "vnotices") {
         const setBadge = (r) => { if (seq === volSeq) { state.unreadNotices = r.unreadNotices; drawVolNav(); } };
         if (id) {
@@ -5026,6 +5041,7 @@
         if (projects.length === 1) return show(volProject(await api(`/volunteer/projects/${projects[0].id}`), true, ledgers, await volLedgerDetails(ledgers))); // 하나면 바로
         return show(volProjects(projects));
       }
+      if (tab === "vhome" && state.volMenu && !volOn("home")) { location.replace(`#/vp/${VOL_GROUPS[0].key}/${volOn("in") ? "in" : ""}`); return; }
       const d = await api("/volunteer/home");
       if (tab === "vhome") d.ledgers = (await api("/volunteer/stock")).ledgers;
       if (tab === "vschedule") return show(volSchedules(d.schedules));
@@ -5060,22 +5076,22 @@
       h("p", { class: "muted", text: when }),
       h("h1", { class: "vol__hello", text: `${state.user.name}님, 안녕하세요` }),
       h("div", { class: "vol__cards" }, [
-        h("section", { class: "card vol__card" }, [
+        !volOn("schedule") ? null : h("section", { class: "card vol__card" }, [
           h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "내 봉사 일정" }), more("#/vschedule", "전체 보기")]),
           next.length ? h("ul", { class: "vol-list" }, next.map(volSchedRow)) : h("p", { class: "muted", text: "다가오는 일정이 없어요." })
         ]),
-        h("section", { class: "card vol__card" }, [
+        !volOn("training") ? null : h("section", { class: "card vol__card" }, [
           h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "기본 교육" }), more("#/vtraining", "전체 보기")]),
           trainings.length ? h("p", { class: "muted", text: `${trainings.length}개 중 ${doneN}개 이수` }) : h("p", { class: "muted", text: "아직 등록된 교육이 없어요." }),
           todo.length ? h("ul", { class: "vol-todo" }, todo.map((t) => h("li", { text: t.title }))) : null
         ]),
         h("section", { class: "card vol__card" }, [
-          h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "묵주 입출고" }), more("#/vstock", "전체 보기")]),
+          h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "입고 · 출고" }), h("span", { class: "actions actions--start" }, [volOn("in") ? more(`#/vp/${VOL_GROUPS[0].key}/in`, "입고") : null, volOn("out") ? more(`#/vp/${VOL_GROUPS[0].key}/out`, "출고") : null])]),
           ledgers.length ? h("ul", { class: "vol-list" }, ledgers.map(volStockRow)) : h("p", { class: "muted", text: "아직 입력할 수 있는 대장이 없어요." })
         ]),
         h("section", { class: "card vol__card" }, [
           h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "프로젝트 관리" }), more(`#/vp/${VOL_GROUPS[0].key}`, "보기")]),
-          h("p", { class: "muted", text: "묵주 진행 상황과 방문 수량을 관리해요." })
+          h("p", { class: "muted", text: "묵주·손십자가 요약과 입고·출고를 봐요." })
         ])
       ])
     ];
@@ -5239,7 +5255,7 @@
     const reqT = visits.reduce((n, v) => n + (v.qty || 0), 0), reqLeft = visits.filter((v) => v.date >= today()).reduce((n, v) => n + (v.qty || 0), 0);
     const unit = ledgers[0]?.unit || "개";
     const [mat, rec] = await Promise.all(["material", "recovery"].map((k) => api(`/volunteer/records?item=${grp.id}&kind=${k}`).then((r) => r.records)));
-    const tile = (view, label, value, sub) => h("a", { class: "card vol-sum__tile", href: `#/vp/${g.key}/${view}` }, [h("span", { class: "muted small", text: label }), h("strong", { text: value }), sub ? h("span", { class: "muted small", text: sub }) : null]);
+    const tile = (view, label, value, sub) => !volOn(view) ? null : h("a", { class: "card vol-sum__tile", href: `#/vp/${g.key}/${view}` }, [h("span", { class: "muted small", text: label }), h("strong", { text: value }), sub ? h("span", { class: "muted small", text: sub }) : null]);
     return [
       title(`프로젝트 관리(${g.name})`),
       h("p", { class: "muted small", text: `${d.project.name} › ${g.name} · 요약` }),
@@ -5414,6 +5430,8 @@
       const past = visits.filter((v) => v.date < today()), next = visits.filter((v) => v.date >= today());
       const empty = visits.filter((v) => v.qty == null).length;
       const whoOf = (v) => (v.note.match(/담당:\s*([^\n]+)/) || [])[1] || "";
+      // 번호: 날짜순 몇 번째 / 전체
+      const order = new Map([...visits].sort((a, b) => (a.date + (a.startTime || "")).localeCompare(b.date + (b.startTime || "")) || a.id - b.id).map((v, i) => [v.id, i + 1]));
       const row = (v) => {
         const input = h("input", { type: "number", min: "0", inputmode: "numeric", class: "vol-visits__qty", value: v.qty ?? "", "aria-label": `${v.title} 수량`, placeholder: "-" });
         input.addEventListener("change", async () => {
@@ -5423,6 +5441,7 @@
           } catch (ex) { toast(ex.message); input.value = v.qty ?? ""; }
         });
         return h("tr", { class: v.date < today() ? "is-past" : null }, [
+          h("td", { class: "num muted nowrap", text: `${order.get(v.id)} / ${visits.length}` }),
           h("td", { class: "nowrap" }, [volDay(v.date), v.startTime ? h("small", { class: "muted", text: ` ${v.startTime}` }) : null]),
           h("td", {}, [h("span", { text: v.title.split(" · ").pop() }), v.place ? h("small", { class: "muted", text: ` · ${v.place}` }) : null, whoOf(v) ? h("small", { class: "vol-visits__who muted", text: whoOf(v) }) : null]),
           h("td", { class: "num" }, [input, v.qtyBy ? h("small", { class: "vol-visits__by muted", title: v.qtyAt || "", text: v.qtyBy }) : null])
@@ -5431,13 +5450,14 @@
       fill(box,
         h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: heading || "일정 관리" }), h("span", { class: "muted small", text: "방문 일정 · 수량" }), h("a", { class: "link-btn", href: "#/vschedule", text: "달력 보기" })]),
         visits.length ? h("div", { class: "vol-visits__sum" }, [
+          h("span", {}, ["방문 ", h("strong", { text: `${visits.length}건` })]),
           h("span", {}, ["전체 ", h("strong", { text: fmtN(sum(visits)) })]),
           h("span", {}, ["다녀옴 ", h("strong", { text: fmtN(sum(past)) })]),
           h("span", {}, ["남음 ", h("strong", { text: fmtN(sum(next)) })]),
           empty ? h("span", { class: "muted", text: `수량 없음 ${empty}건` }) : null
         ]) : null,
         visits.length ? h("div", { class: "table-wrap" }, h("table", { class: "table vol-visits__table" }, [
-          h("thead", {}, h("tr", {}, [h("th", { text: "날짜" }), h("th", { text: "방문" }), h("th", { class: "num", text: "수량" })])),
+          h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "번호" }), h("th", { text: "날짜" }), h("th", { text: "방문" }), h("th", { class: "num", text: "수량" })])),
           h("tbody", {}, [...next, ...past.reverse()].map(row))
         ])) : h("p", { class: "muted", text: "아직 연결된 방문 일정이 없어요." }),
         visits.length ? h("p", { class: "muted small", text: "수량을 고치면 바로 저장되고 달력에도 보여요. 고친 사람 이름이 함께 남아요." }) : null
@@ -5504,6 +5524,7 @@
             h("strong", { class: "num", text: `${fmtN(sumOf(m))} ${l.unit}` }),
             h("span", { class: "muted small", text: [m.handler, m.note].filter(Boolean).join(" · ") }),
             m.photos?.length ? h("span", { class: "muted small", text: `사진 ${m.photos.length}` }) : null,
+            m.inspectBad ? h("span", { class: "move-issue small", text: `불량 ${fmtN(m.inspectBad)}` }) : null,
             m.issue ? h("span", { class: "move-issue small", title: m.issue, text: "이슈 있음" }) : null
           ]))) : h("p", { class: "muted small", text: `아직 ${label} 기록이 없어요.` }),
           moves.length > 5 ? h("a", { class: "link-btn small", href: `#/vstock/${l.id}`, text: `${label} 기록 ${moves.length}건 모두 보기` }) : null
@@ -5547,9 +5568,9 @@
     document.title = `봉사자 관리 · ${TITLE}`;
     drawMini(null);
     setMain("volunteers", loading());
-    const tab = ["training", "stock"].includes(route().id) ? route().id : "schedule";
-    let vols = [], schedules = [], trainings = [], stockMoves = [];
-    const seg = h("div", { class: "seg", role: "tablist" }, [["schedule", "일정"], ["training", "기본 교육"], ["stock", "입출고 입력"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "schedule" ? "#/volunteers" : `#/volunteers/${k}`) })));
+    const tab = ["training", "stock", "records", "menu"].includes(route().id) ? route().id : "schedule";
+    let vols = [], schedules = [], trainings = [], stockMoves = [], volRecords = [], volMenuSet = null;
+    const seg = h("div", { class: "seg", role: "tablist" }, [["schedule", "일정"], ["training", "기본 교육"], ["stock", "입출고 입력"], ["records", "원자재·회수"], ["menu", "메뉴 공개"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "schedule" ? "#/volunteers" : `#/volunteers/${k}`) })));
     const dateAndTime = (date, start, end) => h("div", { class: "row2" }, [field("날짜", date), h("div", { class: "row2" }, [field("시작", start), end ? field("끝", end) : h("span")])]);
     const saveForm = (form, ok, err, send) => form.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -5615,8 +5636,9 @@
     const rowAttrs = (fn) => ({ class: "stock-row", tabindex: "0", onclick: fn, onkeydown: (e) => { if (e.key === "Enter") fn(); } });
     const draw = () => {
       const scheduleView = schedules.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
-        h("thead", {}, h("tr", {}, ["날짜", "시간", "제목", "장소", "수량", "대상", "입력자"].map((x) => h("th", { text: x })))),
-        h("tbody", {}, schedules.map((s) => h("tr", rowAttrs(() => scheduleDialog(s)), [
+        h("thead", {}, h("tr", {}, ["번호", "날짜", "시간", "제목", "장소", "수량", "대상", "입력자"].map((x) => h("th", { text: x })))),
+        h("tbody", {}, schedules.map((s, i) => h("tr", rowAttrs(() => scheduleDialog(s)), [
+          h("td", { class: "num muted nowrap", text: `${i + 1} / ${schedules.length}` }),
           h("td", { class: "nowrap", text: volDay(s.date) }), h("td", { class: "nowrap", text: volTime(s) || "-" }), h("td", { text: s.title }), h("td", { text: s.place || "-" }), h("td", { class: "nowrap num", text: s.qty != null ? fmtN(s.qty) : "-" }),
           h("td", { text: s.audience === "all" ? "전체" : s.userIds.map((id) => vols.find((u) => u.id === id)?.name).filter(Boolean).join(", ") || "지정 없음" }),
           h("td", { class: "nowrap" }, s.byVolunteer ? [s.enteredBy, " ", h("span", { class: "stock-tag", text: "봉사자" })] : s.enteredBy || "-")
@@ -5630,24 +5652,47 @@
       ])) : h("div", { class: "card empty", text: "아직 등록한 교육이 없어요." });
       const when = (m) => { const d = new Date(`${m.createdAt.replace(" ", "T")}Z`); return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
       const stockView = stockMoves.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
-        h("thead", {}, h("tr", {}, ["입력 시각", "입력자", "대장", "구분", "날짜", "수량", "비고"].map((x) => h("th", { text: x })))),
+        h("thead", {}, h("tr", {}, ["입력 시각", "입력자", "대장", "구분", "날짜", "수량", "검수", "사진", "이슈", "비고"].map((x) => h("th", { text: x })))),
         h("tbody", {}, stockMoves.map((m) => h("tr", rowAttrs(() => go(`#/stock/${m.ledgerId}`)), [
-          h("td", { class: "nowrap", text: when(m) }), h("td", { class: "nowrap", text: m.enteredBy }), h("td", { text: m.ledgerName }), h("td", { class: "nowrap", text: m.type === "in" ? "입고" : "출고" }), h("td", { class: "nowrap", text: m.date }), h("td", { class: "nowrap", text: `${fmtN(m.total)} ${m.unit}` }), h("td", { text: m.note || "-" })
+          h("td", { class: "nowrap", text: when(m) }), h("td", { class: "nowrap", text: m.enteredBy }), h("td", { text: m.ledgerName }), h("td", { class: "nowrap", text: m.type === "in" ? "입고" : "출고" }), h("td", { class: "nowrap", text: m.date }), h("td", { class: "nowrap", text: `${fmtN(m.total)} ${m.unit}` }),
+          h("td", { class: "nowrap", text: m.inspectOk != null || m.inspectBad != null ? `합격 ${fmtN(m.inspectOk || 0)} · 불량 ${fmtN(m.inspectBad || 0)}` : "-" }),
+          h("td", { class: "nowrap", text: m.photos ? `${m.photos}장` : "-" }), h("td", { class: "move-issue", text: m.issue || "" }), h("td", { text: m.note || "-" })
         ])))
       ])) : h("div", { class: "card empty", text: "아직 봉사자가 입력한 기록이 없어요." });
+      // 봉사자가 적은 원자재 보유물량 · 제품 회수물량
+      const recView = volRecords.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
+        h("thead", {}, h("tr", {}, ["종류", "묶음", "날짜", "원자재·회수처", "수량", "메모", "적은 사람"].map((x) => h("th", { text: x })))),
+        h("tbody", {}, volRecords.map((r) => h("tr", {}, [
+          h("td", { class: "nowrap", text: r.kind === "material" ? "원자재 보유" : "제품 회수" }), h("td", { class: "nowrap", text: r.group }), h("td", { class: "nowrap", text: r.date }), h("td", { text: r.name || "-" }), h("td", { class: "num nowrap", text: fmtN(r.qty) }), h("td", { class: "muted small", text: r.note }), h("td", { class: "nowrap", text: r.author || "-" })
+        ])))
+      ])) : h("div", { class: "card empty", text: "아직 봉사자가 적은 원자재·회수 기록이 없어요." });
+      // 메뉴 공개: 고른 메뉴만 봉사자 화면에 보임 (단계적으로 엶)
+      const MENU_LABEL = { home: "대시보드", schedule: "일정", training: "기본 교육", notices: "공지", wbs: "WBS", req: "요청수량", in: "입고", out: "출고", material: "원자재 보유물량", recovery: "제품 회수물량" };
+      const menuView = volMenuSet ? (() => {
+        const boxes = volMenuSet.keys.map((k) => ({ k, el: h("input", { type: "checkbox", checked: volMenuSet.menu.includes(k) }) }));
+        const ok = h("button", { class: "btn btn--primary", type: "button", text: "저장", onclick: () => busy(ok, async () => {
+          volMenuSet = await act(() => api("/admin/vol-menu", { method: "PUT", body: { menu: boxes.filter((x) => x.el.checked).map((x) => x.k) } }));
+          toast("봉사자 메뉴를 저장했어요. 봉사자가 새로고침하면 바뀌어요."); draw();
+        }) });
+        return h("section", { class: "card stack", style: "padding:16px" }, [
+          h("p", { class: "muted small", text: "체크한 메뉴만 봉사자 화면에 보여요. 처음에는 입고·출고 중심(대시보드·공지·입고·출고)으로 열려 있어요. 프로젝트 관리(묵주·손십자가) 요약은 늘 보여요." }),
+          h("div", { class: "vol-menu-grid" }, boxes.map((x) => h("label", { class: "check" }, [x.el, h("span", { text: MENU_LABEL[x.k] || x.k })]))),
+          h("div", { class: "actions actions--start" }, ok)
+        ]);
+      })() : loading();
       setMain("volunteers", [
         h("div", { class: "page-head" }, [
           h("h1", { text: "봉사자 관리" }),
-          tab === "stock" ? null : h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => (tab === "training" ? trainingDialog() : scheduleDialog()) }, [icon("plus"), tab === "training" ? "교육 등록" : "일정 등록"])
+          ["stock", "records", "menu"].includes(tab) ? null : h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => (tab === "training" ? trainingDialog() : scheduleDialog()) }, [icon("plus"), tab === "training" ? "교육 등록" : "일정 등록"])
         ]),
         h("div", { class: "filters" }, [seg, h("span", { class: "muted small", text: `봉사자 ${vols.length}명` })]),
-        tab === "stock" ? stockView : tab === "training" ? trainingView : scheduleView
+        tab === "stock" ? stockView : tab === "records" ? recView : tab === "menu" ? menuView : tab === "training" ? trainingView : scheduleView
       ]);
     };
     page = { name: "volunteers", reload: async () => {
-      const [u, s, t, m] = await Promise.all([api("/admin/users"), api("/admin/vol-schedules"), api("/admin/vol-trainings"), api("/admin/vol-stock-moves")]);
+      const [u, s, t, m, rc, mn] = await Promise.all([api("/admin/users"), api("/admin/vol-schedules"), api("/admin/vol-trainings"), api("/admin/vol-stock-moves"), api("/admin/vol-records"), api("/admin/vol-menu")]);
       vols = u.users.filter((x) => x.role === "volunteer");
-      schedules = s.schedules; trainings = t.trainings; stockMoves = m.moves;
+      schedules = s.schedules; trainings = t.trainings; stockMoves = m.moves; volRecords = rc.records; volMenuSet = mn;
       draw();
     } };
     try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("volunteers", failed(e)); }

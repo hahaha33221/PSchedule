@@ -302,8 +302,9 @@ const q = {
   setVolDone: db.prepare("INSERT OR IGNORE INTO vol_training_done (training_id, user_id) VALUES (?, ?)"),
   clearVolDone: db.prepare("DELETE FROM vol_training_done WHERE training_id = ? AND user_id = ?"),
   lastStockMove: db.prepare("SELECT m.date, m.type, u.name AS author FROM stock_moves m LEFT JOIN users u ON u.id = m.created_by WHERE m.ledger_id = ? ORDER BY m.id DESC LIMIT 1"),
-  volStockMoves: db.prepare(`SELECT m.id, m.type, m.date, m.note, m.handler, m.created_at, u.name AS author, l.id AS ledger_id, l.name AS ledger_name, l.unit,
-      (SELECT coalesce(sum(x.qty), 0) FROM stock_qty x WHERE x.move_id = m.id) AS total
+  volStockMoves: db.prepare(`SELECT m.id, m.type, m.date, m.note, m.handler, m.issue, m.inspect_ok, m.inspect_bad, m.created_at, u.name AS author, l.id AS ledger_id, l.name AS ledger_name, l.unit,
+      (SELECT coalesce(sum(x.qty), 0) FROM stock_qty x WHERE x.move_id = m.id) AS total,
+      (SELECT count(*) FROM stock_move_photos p WHERE p.move_id = m.id) AS photos
     FROM stock_moves m JOIN users u ON u.id = m.created_by AND u.volunteer = 1 JOIN stock_ledgers l ON l.id = m.ledger_id ORDER BY m.id DESC LIMIT 100`),
   processes: db.prepare("SELECT * FROM project_processes WHERE project_id = ? ORDER BY sort_order, id"),
   process: db.prepare("SELECT * FROM project_processes WHERE id = ?"),
@@ -331,6 +332,8 @@ const q = {
   setStockMove: db.prepare("UPDATE stock_moves SET date = ?, handler = ?, note = ? WHERE id = ?"),
   delStockMove: db.prepare("DELETE FROM stock_moves WHERE id = ?"),
   setMoveIssue: db.prepare("UPDATE stock_moves SET issue = ? WHERE id = ?"),
+  setMoveInspect: db.prepare("UPDATE stock_moves SET inspect_ok = ?, inspect_bad = ? WHERE id = ?"),
+  volRecordsAll: db.prepare("SELECT r.*, u.name AS author, i.name AS group_name FROM vol_records r LEFT JOIN users u ON u.id = r.created_by JOIN project_items i ON i.id = r.item_id ORDER BY r.date DESC, r.id DESC LIMIT 300"),
   photoIdsOfLedger: db.prepare("SELECT p.id, p.move_id FROM stock_move_photos p JOIN stock_moves m ON m.id = p.move_id WHERE m.ledger_id = ? ORDER BY p.id"),
   photoCount: db.prepare("SELECT count(*) AS n FROM stock_move_photos WHERE move_id = ?"),
   photo: db.prepare("SELECT * FROM stock_move_photos WHERE id = ?"),
@@ -1244,7 +1247,7 @@ function ledgerOut(l, p, user) {
     project: { id: p.id, name: p.name, unitId: p.unit_id }, itemName: item.name,
     options: q.stockOptions.all(l.id),
     moves: q.stockMoves.all(l.id).map((m) => ({
-      id: m.id, type: m.type, date: m.date, handler: m.handler, note: m.note, issue: m.issue || "", photos: photos.get(m.id) || [], qty: qty.get(m.id) || {}, mine: m.created_by === user.id,
+      id: m.id, type: m.type, date: m.date, handler: m.handler, note: m.note, issue: m.issue || "", photos: photos.get(m.id) || [], inspectOk: m.inspect_ok ?? null, inspectBad: m.inspect_bad ?? null, qty: qty.get(m.id) || {}, mine: m.created_by === user.id,
       ...(user.volunteer ? {} : { enteredBy: (m.created_by && q.userById.get(m.created_by)?.name) || "" }) // 입력한 사람: 직원 화면만
     })),
     ...(user.volunteer ? {} : { history: q.stockHistory.all(l.id).map((h) => ({ id: h.id, action: h.action, summary: h.summary, by: h.user_name, at: h.created_at })) }) // 수정 기록: 직원 화면만
@@ -1266,14 +1269,27 @@ function addStockMoveFrom(l, b, user) {
   if (b.type !== "in" && b.type !== "out") throw bad("입고·출고를 골라 주세요.");
   const date = text(b.date, 20, "날짜", true), handler = text(b.handler, 40, "전달자"), note = text(b.note, 500, "비고"), issue = text(b.issue, 500, "이슈");
   const rows = stockQtyInput(l.id, b.qty);
+  const ok = b.type === "in" ? inspectInput(b.inspectOk, "합격") : null, badN = b.type === "in" ? inspectInput(b.inspectBad, "불량") : null;
   return inTx(() => {
     const id = Number(q.addStockMove.run(l.id, b.type, date, handler, note, user.id).lastInsertRowid);
     for (const [o, n] of rows) q.addStockQty.run(id, o, n);
     if (issue) q.setMoveIssue.run(issue, id);
+    if (ok != null || badN != null) q.setMoveInspect.run(ok, badN, id);
     logStock(l.id, "add", `${moveKind(b)} 추가 (${date}): ${qtyText(moveQty(id), optionNames(l.id))}${issue ? ` · 이슈: ${issue}` : ""}`, user);
     return id;
   });
 }
+// 입고 검수 수량: 비우면 검수 안 함
+function inspectInput(v, label) {
+  if (v === "" || v === null || v === undefined) return null;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < 0 || n > 100000000) throw bad(`검수 ${label} 수량은 0 이상의 숫자로 적어 주세요.`);
+  return n;
+}
+// 봉사자에게 보일 메뉴 (관리자가 단계적으로 엶). 저장 안 했으면 입고·출고 중심
+const VOL_MENU_KEYS = ["home", "schedule", "training", "notices", "wbs", "req", "in", "out", "material", "recovery"];
+const VOL_MENU_DEFAULT = ["home", "notices", "in", "out"];
+const volMenu = () => { try { const v = JSON.parse(q.setting.get("vol_menu")?.value || "null"); return Array.isArray(v) ? v.filter((k) => VOL_MENU_KEYS.includes(k)) : VOL_MENU_DEFAULT; } catch { return VOL_MENU_DEFAULT; } };
 // 기록 사진: 줄여 올린 JPG·PNG·WEBP 만, 기록당 4장까지
 const MOVE_PHOTO_MAX = 4;
 function addMovePhoto(m, l, b, user) {
@@ -1299,15 +1315,18 @@ function deleteStockMoveBy(m, l, user) {
 function patchStockMoveFrom(m, l, b, user) {
   const date = text(has(b, "date") ? b.date : m.date, 20, "날짜", true), handler = text(has(b, "handler") ? b.handler : m.handler, 40, "전달자"), note = text(has(b, "note") ? b.note : m.note, 500, "비고");
   const issue = text(has(b, "issue") ? b.issue : m.issue, 500, "이슈");
+  const okN = m.type === "in" ? (has(b, "inspectOk") ? inspectInput(b.inspectOk, "합격") : m.inspect_ok ?? null) : null;
+  const badN = m.type === "in" ? (has(b, "inspectBad") ? inspectInput(b.inspectBad, "불량") : m.inspect_bad ?? null) : null;
   const rows = has(b, "qty") ? stockQtyInput(l.id, b.qty) : null;
   inTx(() => {
     const before = moveQty(m.id), names = optionNames(l.id);
     q.setStockMove.run(date, handler, note, m.id);
     q.setMoveIssue.run(issue, m.id);
+    q.setMoveInspect.run(okN, badN, m.id);
     if (rows) { q.clearStockQty.run(m.id); for (const [o, n] of rows) q.addStockQty.run(m.id, o, n); }
     const after = moveQty(m.id);
     const changes = [
-      changeText("날짜", m.date, date), changeText("전달자", m.handler, handler), changeText("비고", m.note, note), changeText("이슈", m.issue || "", issue),
+      changeText("날짜", m.date, date), changeText("전달자", m.handler, handler), changeText("비고", m.note, note), changeText("이슈", m.issue || "", issue), changeText("검수 합격", m.inspect_ok ?? "", okN ?? ""), changeText("검수 불량", m.inspect_bad ?? "", badN ?? ""),
       ...[...new Set([...before.keys(), ...after.keys()])].map((o) => changeText(names.get(o) || "품목", before.get(o) || 0, after.get(o) || 0))
     ].filter(Boolean);
     if (changes.length) logStock(l.id, "edit", `${moveKind(m)} 수정 (${m.date}): ${changes.join(", ")}`, user);
@@ -1395,6 +1414,7 @@ async function api(req, res, path) {
         trainings: q.volTrainings.all().map((t) => ({ ...volTrainingOut(t), done: done.has(t.id), doneAt: done.get(t.id) || null }))
       });
     }
+    if (path === "/api/volunteer/menu" && method === "GET") return send(res, 200, { menu: volMenu() });
     if (path === "/api/volunteer/projects" && method === "GET") return send(res, 200, { projects: volProjectsShown().map(volProjectSummary) });
     const vpm = path.match(/^\/api\/volunteer\/projects\/(\d+)$/);
     if (vpm && method === "GET") {
@@ -2336,7 +2356,21 @@ async function api(req, res, path) {
       return send(res, 405, { error: "Method not allowed" });
     }
     if (path === "/api/admin/vol-stock-moves" && method === "GET") {
-      return send(res, 200, { moves: q.volStockMoves.all().map((m) => ({ id: m.id, type: m.type, date: m.date, note: m.note, handler: m.handler, createdAt: m.created_at, enteredBy: m.author, ledgerId: m.ledger_id, ledgerName: m.ledger_name, unit: m.unit, total: m.total })) });
+      return send(res, 200, { moves: q.volStockMoves.all().map((m) => ({ id: m.id, type: m.type, date: m.date, note: m.note, handler: m.handler, issue: m.issue || "", photos: m.photos, inspectOk: m.inspect_ok ?? null, inspectBad: m.inspect_bad ?? null, createdAt: m.created_at, enteredBy: m.author, ledgerId: m.ledger_id, ledgerName: m.ledger_name, unit: m.unit, total: m.total })) });
+    }
+    // 봉사자가 적은 원자재 보유물량 · 제품 회수물량 (최근 300건)
+    if (path === "/api/admin/vol-records" && method === "GET") {
+      return send(res, 200, { records: q.volRecordsAll.all().map((r) => ({ id: r.id, kind: r.kind, group: r.group_name, date: r.date, name: r.name, qty: r.qty, note: r.note, author: r.author || "", updatedAt: r.updated_at })) });
+    }
+    // 봉사자 메뉴 공개 범위
+    if (path === "/api/admin/vol-menu" && method === "GET") return send(res, 200, { menu: volMenu(), keys: VOL_MENU_KEYS });
+    if (path === "/api/admin/vol-menu" && method === "PUT") {
+      const b = await readJson(req);
+      if (!Array.isArray(b.menu)) throw bad("메뉴를 확인해 주세요.");
+      const menu = VOL_MENU_KEYS.filter((k) => b.menu.includes(k));
+      q.setSetting.run("vol_menu", JSON.stringify(menu));
+      console.log(`[admin] ${user.login} → 봉사자 메뉴 공개: ${menu.join(",")}`);
+      return send(res, 200, { menu, keys: VOL_MENU_KEYS });
     }
     const volTrainingAdminOut = (t) => ({ ...volTrainingOut(t), doneBy: q.volDoneOfTraining.all(t.id).map((d) => ({ id: d.user_id, name: d.name, doneAt: d.done_at })) });
     if (path === "/api/admin/vol-trainings" && method === "GET") return send(res, 200, { trainings: q.volTrainings.all().map(volTrainingAdminOut) });
