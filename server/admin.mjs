@@ -15,6 +15,7 @@
  *   node server/admin.mjs stock-import [--dry] < 대장.json  입출고 대장 넣기 (README '프로젝트' 참고)
  *   node server/admin.mjs process-import [--dry] < 프로세스.json  상세 프로세스 넣기 ({ project, rows: [{ section, phase, task, detail, output, label, start, due, status, note }] })
  *   node server/admin.mjs vol-schedule-import [--dry] < 일정.json  봉사자 일정 넣기 ({ audience: "all", project?, group?, rows: [{ title, date, startTime, endTime, place, note, qty, link? }] }, 같은 날 같은 제목은 건너뜀)
+ *   node server/admin.mjs vol-request-import [--dry] < 신청.json  묵주 수업 신청 넣기 ({ project, group, rows: [{ no, org, date, time, qty, appliedAt }] }, 그 묶음의 신청을 통째로 바꿈, 연락처는 넣지 않음)
  *   node server/admin.mjs project-import <조직> <프로젝트> [--dry] < 목록.txt  프로젝트 목록 넣기 (1. 묶음, 4-1. 아래 묶음, * 항목, ※ 메모)
  *     이미 값이 있으면 그대로 둠. 조직도에서 못 찾으면 넣지 않고 이름만 알려 줌. 번호는 출력하지 않음
  *
@@ -233,6 +234,35 @@ switch (cmd) {
     break;
   }
 
+  case "vol-request-import": {
+    const dry = args.includes("--dry");
+    const data = JSON.parse(readFileSync(0, "utf8"));
+    const g = db.prepare("SELECT i.id FROM project_items i JOIN projects p ON p.id = i.project_id WHERE p.name = ? AND i.kind = 'group' AND i.name = ?").all(data.project, data.group);
+    if (g.length !== 1) { console.error("넣을 묶음이 하나로 찾아지지 않아요."); process.exit(1); }
+    const isDay = (s) => !s || (/^\d{4}-\d{2}-\d{2}$/.test(s) && !Number.isNaN(Date.parse(s + "T00:00:00Z")));
+    const isTime = (s) => !s || /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
+    // 연락처처럼 보이는 값은 받지 않음 (전화번호·메일)
+    const looksContact = (s) => /\d{2,3}-?\d{3,4}-?\d{4}|@/.test(String(s || ""));
+    const add = db.prepare("INSERT INTO vol_requests (item_id, no, org, req_date, req_time, qty, applied_at) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    db.exec("BEGIN");
+    try {
+      const before = db.prepare("SELECT count(*) AS n FROM vol_requests WHERE item_id = ?").get(g[0].id).n;
+      db.prepare("DELETE FROM vol_requests WHERE item_id = ?").run(g[0].id);
+      let total = 0;
+      data.rows.forEach((r, i) => {
+        const org = String(r.org || "").trim();
+        if (!org || org.length > 120 || looksContact(org) || !isDay(r.date) || !isTime(r.time)) throw new Error(`${i + 1}번째 줄을 확인해 주세요.`);
+        const qty = r.qty === undefined || r.qty === null || r.qty === "" ? null : Number(r.qty);
+        if (qty !== null && (!Number.isInteger(qty) || qty < 0)) throw new Error(`${i + 1}번째 줄의 수량을 확인해 주세요.`);
+        add.run(g[0].id, Number.isInteger(r.no) ? r.no : null, org, r.date || "", r.time || "", qty, String(r.appliedAt || "").slice(0, 19));
+        total += qty || 0;
+      });
+      console.log(`${dry ? "[미리보기, 저장 안 함] " : ""}수업 신청 ${data.rows.length}건 (예전 ${before}건 바꿈), 신청 수량 합계 ${total}`);
+      db.exec(dry ? "ROLLBACK" : "COMMIT");
+    } catch (e) { db.exec("ROLLBACK"); console.error(e.message); process.exit(1); }
+    break;
+  }
+
   case "notice-add": {
     const title = String(args[0] || "").trim();
     const body = readFileSync(0, "utf8").replace(/\r\n?/g, "\n").trim();
@@ -261,6 +291,6 @@ switch (cmd) {
   }
 
   default:
-    console.log("사용법: node server/admin.mjs list | add <아이디> <이름> [admin] | reset-password <아이디> | backup | backups | view <아이디> | view-add <아이디> \"<조직 경로>\" [only] | view-remove <아이디> \"<조직 경로>\" | notice-add \"<제목>\" [pin] < 본문");
+    console.log("사용법: node server/admin.mjs list | add <아이디> <이름> [admin] | reset-password <아이디> | backup | backups | view <아이디> | view-add <아이디> \"<조직 경로>\" [only] | view-remove <아이디> \"<조직 경로>\" | notice-add \"<제목>\" [pin] < 본문 | vol-request-import [--dry] < 신청.json");
     process.exit(cmd ? 1 : 0);
 }

@@ -333,6 +333,11 @@ const q = {
   delStockMove: db.prepare("DELETE FROM stock_moves WHERE id = ?"),
   setMoveIssue: db.prepare("UPDATE stock_moves SET issue = ? WHERE id = ?"),
   setMoveInspect: db.prepare("UPDATE stock_moves SET inspect_ok = ?, inspect_bad = ? WHERE id = ?"),
+  // 직원 프로젝트 '봉사자 현황': 묶음별 일정·신청·기록·변동
+  volSchedulesOfItems: db.prepare("SELECT * FROM vol_schedules WHERE project_item_id IS NOT NULL ORDER BY date, start_time"),
+  volRequestsOf: db.prepare("SELECT * FROM vol_requests WHERE item_id = ? ORDER BY req_date, req_time, no"),
+  volRecordsOfItem: db.prepare("SELECT r.*, u.name AS author FROM vol_records r LEFT JOIN users u ON u.id = r.created_by WHERE r.item_id = ? ORDER BY r.date DESC, r.id DESC"),
+  stockHistoryRecent: db.prepare("SELECT h.*, l.name AS ledger_name, coalesce(u.volunteer, 0) AS by_volunteer FROM stock_history h JOIN stock_ledgers l ON l.id = h.ledger_id LEFT JOIN users u ON u.id = h.user_id WHERE h.ledger_id = ? ORDER BY h.id DESC LIMIT 60"),
   volRecordsAll: db.prepare("SELECT r.*, u.name AS author, i.name AS group_name FROM vol_records r LEFT JOIN users u ON u.id = r.created_by JOIN project_items i ON i.id = r.item_id ORDER BY r.date DESC, r.id DESC LIMIT 300"),
   photoIdsOfLedger: db.prepare("SELECT p.id, p.move_id FROM stock_move_photos p JOIN stock_moves m ON m.id = p.move_id WHERE m.ledger_id = ? ORDER BY p.id"),
   photoCount: db.prepare("SELECT count(*) AS n FROM stock_move_photos WHERE move_id = ?"),
@@ -1150,6 +1155,38 @@ function imageMime(buf) {
   return null;
 }
 const ITEM_IMAGE_MAX = 60 * 1024;
+// 프로젝트 안의 봉사자 묶음 (기념품팀 프로젝트의 묵주·손십자가)
+function volGroupsOf(p) {
+  if (!q.volProject.get(VOLUNTEER_PROJECT_TEAM, p.id)) return [];
+  return volItems(p).items.filter((i) => i.kind === "group" && VOLUNTEER_GROUPS.includes(i.name));
+}
+function volGroupStatus(p, g) {
+  const items = q.projectItems.all(p.id);
+  const ids = new Set([g.id]);
+  for (let grew = true; grew;) { grew = false; for (const i of items) if (i.parent_id && ids.has(i.parent_id) && !ids.has(i.id)) { ids.add(i.id); grew = true; } }
+  const ledgers = q.ledgersOfProject.all(p.id).filter((l) => ids.has(l.item_id));
+  const visits = q.volSchedulesOfItems.all().filter((s) => ids.has(s.project_item_id));
+  const records = q.volRecordsOfItem.all(g.id);
+  const requests = q.volRequestsOf.all(g.id);
+  const volNames = new Set(db.prepare("SELECT name FROM users WHERE volunteer = 1").all().map((u) => u.name)); // 요청수량은 고친 사람 이름만 남아 있음
+  // 최근 변동: 입출고 수정 기록 + 요청수량 수정 + 원자재·회수 기록 (시각은 UTC)
+  const changes = [
+    ...ledgers.flatMap((l) => q.stockHistoryRecent.all(l.id).map((h) => ({ at: h.created_at, who: h.user_name, volunteer: !!h.by_volunteer, kind: "stock", where: l.name, ledgerId: l.id, what: h.summary }))),
+    ...visits.filter((s) => s.qty_at).map((s) => ({ at: s.qty_at, who: s.qty_by, volunteer: volNames.has(s.qty_by), kind: "qty", where: s.title, what: `요청수량 ${s.qty ?? "(없음)"}` })),
+    ...records.map((r) => ({ at: r.updated_at, who: r.author || "", volunteer: true, kind: r.kind, where: r.kind === "material" ? "원자재 보유물량" : "제품 회수물량", what: `${r.date} ${r.name || ""} ${r.qty}`.trim() }))
+  ].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 60);
+  const latest = new Map();
+  for (const r of records.filter((x) => x.kind === "material")) if (!latest.has(r.name)) latest.set(r.name, r);
+  return {
+    id: g.id, name: g.name,
+    ledgers: ledgers.map((l) => ({ id: l.id, name: l.name, unit: l.unit, contract: l.contract, inTotal: l.in_total, outTotal: l.out_total })),
+    visits: visits.map((s) => ({ id: s.id, date: s.date, startTime: s.start_time, title: s.title, place: s.place, qty: s.qty, qtyBy: s.qty_by, qtyAt: s.qty_at })),
+    requests: requests.map((r) => ({ id: r.id, no: r.no, org: r.org, date: r.req_date, time: r.req_time, qty: r.qty })),
+    material: { total: [...latest.values()].reduce((n, r) => n + r.qty, 0), kinds: latest.size, count: records.filter((x) => x.kind === "material").length },
+    recovery: { total: records.filter((x) => x.kind === "recovery").reduce((n, r) => n + r.qty, 0), count: records.filter((x) => x.kind === "recovery").length },
+    changes
+  };
+}
 // 봉사자에게 보이는 묶음(묵주·손십자가)인지
 function volGroupItem(id) {
   const i = Number.isInteger(id) && q.projectItem.get(id);
@@ -2084,13 +2121,20 @@ async function api(req, res, path) {
     const id = Number(q.addProject.run(projectUnit(b.unitId, user), text(b.name, 80, "프로젝트 이름", true), text(b.note, 1000, "설명"), user.id).lastInsertRowid);
     return send(res, 201, projectDetail(q.project.get(id), user));
   }
+  // 직원 프로젝트 '봉사자 현황': 봉사자 묶음(묵주·손십자가)마다 요청·입출고·기록 요약과 최근 변동
+  const pvm = path.match(/^\/api\/projects\/(\d+)\/volunteer-status$/);
+  if (pvm && method === "GET") {
+    const p = q.project.get(Number(pvm[1]));
+    if (!p || !projectAllowed(user, p)) throw notFound("프로젝트");
+    return send(res, 200, { groups: volGroupsOf(p).map((g) => volGroupStatus(p, g)) });
+  }
   const pjm = path.match(/^\/api\/projects\/(\d+)(\/items|\/import|\/processes|\/areas)?$/);
   if (pjm) {
     if (pjm[2] === "/areas" && !isAdmin) return send(res, 403, { error: "구역 정보는 관리자만 고칠 수 있어요." }); // 우선 관리자만
     if (pjm[2] === "/processes" && !isAdmin) return send(res, 403, { error: "상세 프로세스는 관리자만 볼 수 있어요." }); // 우선 관리자만
     const p = q.project.get(Number(pjm[1]));
     if (!p || !projectAllowed(user, p)) throw notFound("프로젝트");
-    if (!pjm[2] && method === "GET") return send(res, 200, projectDetail(p, user));
+    if (!pjm[2] && method === "GET") return send(res, 200, { ...projectDetail(p, user), volGroups: volGroupsOf(p).map((g) => ({ id: g.id, name: g.name })) });
     if (!pjm[2] && method === "PATCH") {
       const b = await readJson(req);
       q.setProject.run(has(b, "unitId") ? projectUnit(b.unitId, user) : p.unit_id, has(b, "name") ? text(b.name, 80, "프로젝트 이름", true) : p.name, has(b, "note") ? text(b.note, 1000, "설명") : p.note, p.id);

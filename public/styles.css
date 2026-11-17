@@ -1653,3 +1653,17 @@ button.gantt__name:hover { background: var(--surface-2); }
 .move-issue { color: var(--danger); }
 .move-photo-btn { gap: 4px; }
 .vol-menu-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 16px; }
+/* 직원 프로젝트 '봉사자 현황' */
+.vstat__group { padding: 16px; }
+.vstat__tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.vstat__tile { display: flex; flex-direction: column; gap: 3px; padding: 12px 14px; box-shadow: none; border: 1px solid var(--line); }
+.vstat__tile strong { font-size: 20px; font-variant-numeric: tabular-nums; }
+.vstat__ledgers { display: flex; flex-wrap: wrap; gap: 6px; }
+.vstat__ledgers a { text-decoration: none; }
+.vstat__h { margin: 4px 0 0; font-size: 14px; }
+.vstat__changes { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; }
+.vstat__changes li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 7px 0; border-top: 1px solid var(--line-2); font-size: 13px; }
+.vstat__changes li:first-child { border-top: 0; }
+.vstat__what { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; color: var(--ink-2); }
+.vstat__more summary { cursor: pointer; font-weight: 600; font-size: 13.5px; padding: 4px 0; }
+.vstat__miss td { background: color-mix(in srgb, var(--danger) 6%, transparent); }

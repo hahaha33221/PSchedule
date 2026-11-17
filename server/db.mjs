@@ -488,6 +488,19 @@ function addUnitColumns(db) {
       updated_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS vol_records_item ON vol_records (item_id, kind, date);
+    -- 묵주 제작 수업 신청 (네이버폼에서 옮김, 연락처·담당자 이름은 넣지 않음)
+    CREATE TABLE IF NOT EXISTS vol_requests (
+      id         INTEGER PRIMARY KEY,
+      item_id    INTEGER NOT NULL REFERENCES project_items(id) ON DELETE CASCADE,
+      no         INTEGER,
+      org        TEXT NOT NULL,
+      req_date   TEXT NOT NULL DEFAULT '',
+      req_time   TEXT NOT NULL DEFAULT '',
+      qty        INTEGER,
+      applied_at TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS vol_requests_item ON vol_requests (item_id, req_date);
     CREATE TABLE IF NOT EXISTS vol_schedule_users (
       schedule_id INTEGER NOT NULL REFERENCES vol_schedules(id) ON DELETE CASCADE,
       user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

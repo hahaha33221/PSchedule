@@ -3855,7 +3855,7 @@
     const base = area === null ? `#/projects/${id}` : `#/projects/${id}/area/${parts[4]}`;
     const tabWord = area === null ? parts[3] : parts[5];
     // 상세 프로세스·협력업체는 우선 관리자만 (협력업체는 구역 안에서만)
-    const tab = isAdmin() && tabWord === "process" ? "process" : isAdmin() && area && tabWord === "partner" ? "partner" : "items";
+    const tab = isAdmin() && tabWord === "process" ? "process" : isAdmin() && area && tabWord === "partner" ? "partner" : area === null && tabWord === "volunteer" ? "volunteer" : "items";
     let procs = [];
     const apply = (r) => { data = r; draw(); };
     const partnerOf = (a) => (data.areas || []).find((x) => x.area === a)?.partner || "";
@@ -4072,8 +4072,8 @@
           ])
         ]),
         area === null && p.note ? h("p", { class: "muted pj-desc", text: p.note }) : null,
-        isAdmin() ? h("div", { class: "seg pj-tabs", role: "tablist" }, [["items", named.length && area === null ? "구역" : "항목"], ["process", "상세 프로세스"], ...(area ? [["partner", "협력업체"]] : [])].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), title: k !== "items" ? "관리자만 볼 수 있어요" : null, onclick: () => go(k === "items" ? base : `${base}/${k}`) }, k !== "items" ? [label, " ", adminBadge()] : label))) : null,
-        ...(tab === "partner" ? [partnerPanel(p, inside)] : tab === "process" ? [processPanel(id, area, () => (area === null ? p.name : `${p.name} ${area || COMMON_NAME}`))] : [area === null ? projectBar(p) : (() => { const its = kids(null).flatMap((k) => (k.kind === "group" ? inside(k) : [k])); return projectBar({ total: its.length, done: its.filter((x) => x.status === "done").length }); })(),
+        isAdmin() || (area === null && data.volGroups?.length) ? h("div", { class: "seg pj-tabs", role: "tablist" }, [["items", named.length && area === null ? "구역" : "항목"], ...(area === null && data.volGroups?.length ? [["volunteer", "봉사자 현황"]] : []), ...(isAdmin() ? [["process", "상세 프로세스"]] : []), ...(area && isAdmin() ? [["partner", "협력업체"]] : [])].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), title: k === "process" || k === "partner" ? "관리자만 볼 수 있어요" : null, onclick: () => go(k === "items" ? base : `${base}/${k}`) }, k === "process" || k === "partner" ? [label, " ", adminBadge()] : label))) : null,
+        ...(tab === "volunteer" ? [volunteerPanel(id)] : tab === "partner" ? [partnerPanel(p, inside)] : tab === "process" ? [processPanel(id, area, () => (area === null ? p.name : `${p.name} ${area || COMMON_NAME}`))] : [area === null ? projectBar(p) : (() => { const its = kids(null).flatMap((k) => (k.kind === "group" ? inside(k) : [k])); return projectBar({ total: its.length, done: its.filter((x) => x.status === "done").length }); })(),
         h("div", { class: "filters" }, [
           filter,
           h("span", { class: "filters__end actions" }, [
@@ -4126,11 +4126,89 @@
           ])
         ]),
         p.note ? h("p", { class: "muted pj-desc", text: p.note }) : null,
-        isAdmin() ? h("div", { class: "seg pj-tabs", role: "tablist" }, [
-          h("button", { type: "button", role: "tab", "aria-selected": "true", text: "구역" }),
-          h("button", { type: "button", role: "tab", "aria-selected": "false", title: "프로젝트 전체 WBS와 PDF. 관리자만 볼 수 있어요", onclick: () => go(`#/projects/${id}/process`) }, ["상세 프로세스", " ", adminBadge()])
+        isAdmin() || data.volGroups?.length ? h("div", { class: "seg pj-tabs", role: "tablist" }, [
+          h("button", { type: "button", role: "tab", "aria-selected": String(tab !== "volunteer"), text: "구역", onclick: () => go(`#/projects/${id}`) }),
+          data.volGroups?.length ? h("button", { type: "button", role: "tab", "aria-selected": String(tab === "volunteer"), title: "봉사자가 입력한 요청수량·입고·출고·원자재·회수와 최근 변동", onclick: () => go(`#/projects/${id}/volunteer`) }, "봉사자 현황") : null,
+          isAdmin() ? h("button", { type: "button", role: "tab", "aria-selected": "false", title: "프로젝트 전체 WBS와 PDF. 관리자만 볼 수 있어요", onclick: () => go(`#/projects/${id}/process`) }, ["상세 프로세스", " ", adminBadge()]) : null
         ]) : null,
-        h("div", { class: "pj-areas" }, [...named.map((n) => card(n, n)), common ? card("", COMMON_NAME) : null])
+        tab === "volunteer" ? volunteerPanel(id) : h("div", { class: "pj-areas" }, [...named.map((n) => card(n, n)), common ? card("", COMMON_NAME) : null])
+      ]);
+    }
+    // 봉사자 현황: 묶음(묵주·손십자가)마다 요약, 최근 변동, 신청과 일정 대조
+    function volunteerPanel(pid) {
+      const box = h("div", { class: "stack vstat" }, loading());
+      api(`/projects/${pid}/volunteer-status`).then((r) => fill(box, ...(r.groups.length ? r.groups.map(volGroupSection) : [h("div", { class: "card empty", text: "이 프로젝트에는 봉사자 묶음이 없어요." })]))).catch((e) => fill(box, failed(e)));
+      return box;
+    }
+    const localAt = (at) => { if (!at) return ""; const d = new Date(`${at.replace(" ", "T")}Z`); return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+    // 수도회 이름 대조 (참고용): 띄어쓰기·괄호·흔한 낱말을 빼고 앞 3글자가 겹치면 같은 곳으로 봄
+    const orgKey = (s) => { let v = String(s || "").replace(/\(.*?\)|\[.*?\]/g, "").replace(/[\s·]/g, "").replace(/^묵주교육/, ""); for (const w of ["수녀회", "수도회", "수녀원", "수녀", "회", "한국", "총원", "관구", "서울", "대구", "대전", "수원", "인천", "봉쇄"]) v = v.split(w).join(""); return v.replace(/\d+$/, ""); };
+    function volGroupSection(g) {
+      const unit = g.ledgers[0]?.unit || "개";
+      const inT = g.ledgers.reduce((n, l) => n + l.inTotal, 0), outT = g.ledgers.reduce((n, l) => n + l.outTotal, 0);
+      const t = today();
+      const reqT = g.visits.reduce((n, v) => n + (v.qty || 0), 0), left = g.visits.filter((v) => v.date >= t).reduce((n, v) => n + (v.qty || 0), 0);
+      const appT = g.requests.reduce((n, r) => n + (r.qty || 0), 0);
+      const tile = (label, value, sub) => h("div", { class: "card vstat__tile" }, [h("span", { class: "muted small", text: label }), h("strong", { text: value }), sub ? h("span", { class: "muted small", text: sub }) : null]);
+      // 신청 ↔ 일정 대조
+      const used = new Set();
+      const matchOf = (r) => {
+        const k = orgKey(r.org); if (!k) return null;
+        let best = null;
+        for (const v of g.visits) {
+          if (used.has(v.id)) continue;
+          const vk = orgKey(v.title.replace(/^묵주 교육 · /, ""));
+          if (!vk || !(k.includes(vk.slice(0, 3)) || vk.includes(k.slice(0, 3)))) continue;
+          const dd = Math.abs((parseYmd(v.date) - parseYmd(r.date || v.date)) / 86400000);
+          if (dd <= 60 && (!best || dd < best.dd)) best = { v, dd };
+        }
+        if (best) used.add(best.v.id);
+        return best?.v || null;
+      };
+      const matched = g.requests.map((r) => ({ r, v: matchOf(r) }));
+      const unassigned = matched.filter((x) => !x.v);
+      const kindLabel = { stock: "입출고", qty: "요청수량", material: "원자재", recovery: "회수" };
+      return h("section", { class: "card stack vstat__group" }, [
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: `${g.name} · 봉사자 현황` }), h("span", { class: "muted small", text: "봉사자 화면에서 입력한 값이 바로 반영돼요" })]),
+        h("div", { class: "vstat__tiles" }, [
+          g.requests.length ? tile("수업 신청", `${g.requests.length}건`, `신청 수량 ${fmtN(appT)}${unassigned.length ? ` · 일정 미배정 ${unassigned.length}건` : ""}`) : null,
+          tile("요청수량 (일정)", fmtN(reqT), `방문 ${g.visits.length}건 · 남음 ${fmtN(left)}`),
+          tile("입고", `${fmtN(inT)} ${unit}`, g.ledgers.map((l) => l.name).join(", ") || "대장 없음"),
+          tile("출고", `${fmtN(outT)} ${unit}`, `재고 ${fmtN(inT - outT)} ${unit}`),
+          tile("원자재 보유", fmtN(g.material.total), g.material.count ? `원자재 ${g.material.kinds}종 · 최근 기준` : "기록 없음"),
+          tile("제품 회수", fmtN(g.recovery.total), g.recovery.count ? `기록 ${g.recovery.count}건` : "기록 없음")
+        ]),
+        g.ledgers.length ? h("div", { class: "vstat__ledgers" }, g.ledgers.map((l) => h("a", { class: "stock-tag", href: `#/stock/${l.id}`, text: `${l.name} · 재고 ${fmtN(l.inTotal - l.outTotal)} ${l.unit}` }))) : null,
+        h("h3", { class: "vstat__h", text: "최근 변동" }),
+        g.changes.length ? h("ul", { class: "vstat__changes" }, g.changes.slice(0, 20).map((c) => h("li", {}, [
+          h("span", { class: "nowrap muted small", text: localAt(c.at) }),
+          h("span", { class: "nowrap" }, [c.who || "-", c.volunteer ? h("span", { class: "stock-tag", text: "봉사자" }) : null]),
+          h("span", { class: "stock-tag vstat__kind", text: kindLabel[c.kind] || c.kind }),
+          c.ledgerId ? h("a", { href: `#/stock/${c.ledgerId}`, text: c.where }) : h("span", { text: c.where }),
+          h("span", { class: "vstat__what", text: c.what })
+        ]))) : h("p", { class: "muted", text: "아직 변동이 없어요." }),
+        g.changes.length > 20 ? h("p", { class: "muted small", text: `최근 20건만 보여요 (전체 ${g.changes.length}건). 대장별 자세한 기록은 입출고 관리에서 봐요.` }) : null,
+        g.requests.length ? h("details", { class: "vstat__more", open: unassigned.length > 0 }, [
+          h("summary", {}, [`수업 신청과 일정 대조 (${g.requests.length}건)`, unassigned.length ? h("span", { class: "move-issue small", text: ` · 미배정 ${unassigned.length}건` }) : null]),
+          h("p", { class: "muted small", text: "네이버폼 신청(연락처 제외)과 봉사자 일정을 수도회 이름으로 자동 대조한 참고용이에요. 합동 수업·이름이 다른 경우 틀릴 수 있어요." }),
+          h("div", { class: "table-wrap" }, h("table", { class: "table" }, [
+            h("thead", {}, h("tr", {}, ["번호", "수도회", "희망일", "신청 수량", "일정", "일정 수량"].map((x) => h("th", { text: x })))),
+            h("tbody", {}, matched.map(({ r, v }) => h("tr", { class: v ? null : "vstat__miss" }, [
+              h("td", { class: "num muted", text: r.no ?? "-" }), h("td", { text: r.org }), h("td", { class: "nowrap", text: r.date ? `${shortDate(r.date)}${r.time ? " " + r.time : ""}` : "-" }), h("td", { class: "num", text: r.qty != null ? fmtN(r.qty) : "-" }),
+              h("td", { class: "nowrap", text: v ? `${shortDate(v.date)} ${v.title.replace(/^묵주 교육 · /, "")}` : "미배정" }), h("td", { class: "num" + (v && r.qty != null && v.qty != null && v.qty !== r.qty ? " move-issue" : ""), text: v?.qty != null ? fmtN(v.qty) : "-" })
+            ])))
+          ]))
+        ]) : null,
+        h("details", { class: "vstat__more" }, [
+          h("summary", {}, `요청수량 일정 (${g.visits.length}건)`),
+          g.visits.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" }, [
+            h("thead", {}, h("tr", {}, ["번호", "날짜", "방문", "수량", "마지막 수정"].map((x) => h("th", { text: x })))),
+            h("tbody", {}, g.visits.map((v, i) => h("tr", { class: v.date < t ? "is-past" : null }, [
+              h("td", { class: "num muted nowrap", text: `${i + 1} / ${g.visits.length}` }), h("td", { class: "nowrap", text: `${shortDate(v.date)}${v.startTime ? " " + v.startTime : ""}` }), h("td", { text: v.title.replace(/^묵주 교육 · /, "") + (v.place ? ` · ${v.place}` : "") }),
+              h("td", { class: "num", text: v.qty != null ? fmtN(v.qty) : "-" }), h("td", { class: "muted small nowrap", text: v.qtyBy ? `${v.qtyBy} ${localAt(v.qtyAt)}` : "-" })
+            ])))
+          ])) : h("p", { class: "muted", text: "연결된 일정이 없어요." })
+        ])
       ]);
     }
     page = { name: "projects", reload: async () => { const [d, r] = await Promise.all([api(`/projects/${id}`), isAdmin() ? api(`/projects/${id}/processes`) : { processes: [] }]); procs = r.processes; apply(d); } };
