@@ -428,6 +428,9 @@ jobs:
           J="{\"itemId\":$CG,\"kind\":\"recovery\",\"date\":\"2030-03-01\",\"qty\":-1}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d "$J" $B/volunteer/records)" = 400
           J="{\"itemId\":$CG,\"kind\":\"x\",\"date\":\"2030-03-01\",\"qty\":1}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d "$J" $B/volunteer/records)" = 400
           curl -fs -H "$VH" -XPOST -d "{\"itemId\":$CG,\"kind\":\"recovery\",\"date\":\"2030-03-01\",\"name\":\"성당\",\"qty\":7}" $B/volunteer/records | grep -q '"qty":7'
+          # 완제품 단계(입고·검수완료·패키징완료·출고): 단계마다 저장, 잘못된 단계는 거절, 직원 현황에 단계별 합계
+          J="{\"itemId\":$CG,\"kind\":\"recovery\",\"stage\":\"packed\",\"date\":\"2030-03-02\",\"qty\":5}"; curl -fs -H "$VH" -XPOST -d "$J" $B/volunteer/records | node -e 'const r=JSON.parse(require("fs").readFileSync(0)).records;if(!r.some(x=>x.stage==="packed"&&x.qty===5)||!r.some(x=>x.stage==="in"&&x.qty===7))process.exit(1)'
+          J="{\"itemId\":$CG,\"kind\":\"recovery\",\"stage\":\"sold\",\"date\":\"2030-03-02\",\"qty\":1}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d "$J" $B/volunteer/records)" = 400
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" "$B/volunteer/records?item=$VG&kind=material")" = 404
           curl -fs -H "$H" $B/admin/vol-records | node -e 'const r=JSON.parse(require("fs").readFileSync(0)).records;if(!r.some(x=>x.kind==="recovery"&&x.qty===7&&x.group==="손십자가"))process.exit(1)'
           # 수업 신청 넣기(연락처처럼 보이면 거절, 다시 넣으면 통째로 바뀜)와 직원 프로젝트 '봉사자 현황'(묶음별 요약·변동·신청)
@@ -437,7 +440,7 @@ jobs:
           ADM vol-request-import < /tmp/ps/req.json | grep -q '예전 2건 바꿈'
           printf '{"project":"봉사자 공개 프로젝트","group":"묵주","rows":[{"org":"010-1234-5678","date":"2030-03-05","qty":1}]}' | (if ADM vol-request-import 2>/dev/null; then exit 1; fi)
           curl -fs -H "$H" $B/projects/$VPJ | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.volGroups.some(g=>g.name==="묵주")||!d.volGroups.some(g=>g.name==="손십자가"))process.exit(1)'
-          curl -fs -H "$H" $B/projects/$VPJ/volunteer-status | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const r=d.groups.find(g=>g.name==="묵주"),c=d.groups.find(g=>g.name==="손십자가");if(!r||r.requests.length!==2||r.requests[0].org!=="테스트수녀회"||!c||c.recovery.total!==7||!c.changes.some(x=>x.kind==="recovery"&&x.volunteer))process.exit(1)'
+          curl -fs -H "$H" $B/projects/$VPJ/volunteer-status | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const r=d.groups.find(g=>g.name==="묵주"),c=d.groups.find(g=>g.name==="손십자가");if(!r||r.requests.length!==2||r.requests[0].org!=="테스트수녀회"||!c||c.recovery.total!==7||c.recovery.stages.packed!==5||!c.changes.some(x=>x.kind==="recovery"&&x.volunteer))process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/projects/$VPJ/volunteer-status)" = 404
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/projects/$VPJ/volunteer-status)" = 403
           # 묵주 봉사자 대시보드(직원 프로젝트 목록 위): 볼 수 있는 기념품팀 프로젝트의 묵주만, 월별 집계 포함, 다른 팀 직원은 빈 목록

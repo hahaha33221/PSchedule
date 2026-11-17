@@ -3927,7 +3927,7 @@
         tile("입고", `${fmtN(inT)} ${unit}`, g.ledgers.map((l) => l.name).join(", ") || "대장 없음"),
         tile("출고", `${fmtN(outT)} ${unit}`, `재고 ${fmtN(inT - outT)} ${unit}`),
         tile("원자재 보유", fmtN(g.material.total), g.material.count ? `원자재 ${g.material.kinds}종 · 최근 기준` : "기록 없음"),
-        tile("제품 회수", fmtN(g.recovery.total), g.recovery.count ? `기록 ${g.recovery.count}건` : "기록 없음")
+        (() => { const st = g.recovery.stages || {}; return tile(g.name === "손십자가" ? "제품 (판매 가능)" : "완제품 (판매 가능)", fmtN((st.packed || 0) - (st.out || 0)), g.recovery.count ? `입고 ${fmtN(st.in || 0)} · 검수 ${fmtN(st.checked || 0)} · 패키징 ${fmtN(st.packed || 0)} · 출고 ${fmtN(st.out || 0)}` : "기록 없음"); })()
       ]),
       g.ledgers.length ? h("div", { class: "vstat__ledgers" }, g.ledgers.map((l) => h("a", { class: "stock-tag", href: `#/stock/${l.id}`, text: `${l.name} · 재고 ${fmtN(l.inTotal - l.outTotal)} ${l.unit}` }))) : null,
       h("div", { class: "vstat__dash" }, [
@@ -5074,7 +5074,7 @@
             h("a", { class: "side__link" + (top ? " is-active" : ""), href: `#/vp/${g.key}`, "aria-current": top ? "page" : null, title: `프로젝트 관리(${g.name})`, onclick: () => toggleNav(false) }, [icon("folder"), h("span", { class: "side__text", text: `프로젝트 관리(${g.name})` })]),
             h("button", { class: "side__toggle" + (open ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(open), "aria-label": `${g.name} 아래 메뉴 ${open ? "접기" : "펼치기"}`, onclick: () => setOpen(!open) })
           ]),
-          h("div", { class: "side__kids", hidden: !open }, [volOn("wbs") ? sub("wbs", "WBS", "grid") : null, volOn("req") ? sub("req", "추가 전달 물량", "cal") : null, volOn("in") ? sub("in", "입고", "db") : null, volOn("out") ? sub("out", "출고", "db") : null, volOn("material") ? sub("material", "원자재 보유물량", "db") : null, volOn("recovery") ? sub("recovery", "제품 회수물량", "db") : null])
+          h("div", { class: "side__kids", hidden: !open }, [volOn("wbs") ? sub("wbs", "WBS", "grid") : null, volOn("req") ? sub("req", "추가 전달 물량", "cal") : null, volOn("in") ? sub("in", "입고", "db") : null, volOn("out") ? sub("out", "출고", "db") : null, volOn("material") ? sub("material", "원자재 보유물량", "db") : null, volOn("recovery") ? sub("recovery", g.key === "cross" ? "제품 관리" : "완제품 관리", "db") : null])
         ]);
       };
       navBox.replaceChildren(...[
@@ -5380,8 +5380,14 @@
     const head = (label) => [h("nav", { class: "muted small" }, h("a", { href: `#/vp/${g.key}`, text: `프로젝트 관리(${g.name})` })), title(label)];
     if (view === "wbs") return [...head("WBS"), g.key === "rosary" ? volWbsRosary() : volWbs({ name: g.name }, visits)];
     if (view === "req") return [...head(`${g.name} 추가 전달 물량`), volVisits(visits, `${g.name} 추가 전달 물량`)];
-    if (view === "in" || view === "out") return [...head(view === "in" ? "입고" : "출고"), volMoveCard(view, ledgers, await volLedgerDetails(ledgers))];
-    if (view === "material" || view === "recovery") return [...head(VOL_RECORD[view].title), await volRecordCard(grp.id, view)];
+    if (view === "in" || view === "out") {
+      const moves = volMoveCard(view, ledgers, await volLedgerDetails(ledgers));
+      // 묵주 출고: 1) 실타래(창고) 입출고와 2) 자른실(제작 수도회) 출고를 나눠서
+      if (view === "out" && g.key === "rosary") { const t = moves.querySelector(".card__title"); if (t) t.textContent = "1) 실타래 입출고 · 출고"; return [...head("출고"), moves, volCutCard(visits)]; }
+      return [...head(view === "in" ? "입고" : "출고"), moves];
+    }
+    if (view === "recovery") return [...head(fgCfg(g.key).title), await volStageCard(grp.id, g.key)];
+    if (view === "material") return [...head(VOL_RECORD[view].title), await volRecordCard(grp.id, view)];
     // 요약
     const leaf = items.filter((i) => i.kind === "item");
     const inT = ledgers.reduce((n, l) => n + l.inTotal, 0), outT = ledgers.reduce((n, l) => n + l.outTotal, 0);
@@ -5398,7 +5404,7 @@
         tile("in", "입고", `${fmtN(inT)} ${unit}`, ledgers.length ? `대장 ${ledgers.length}개` : "대장 없음"),
         tile("out", "출고", `${fmtN(outT)} ${unit}`, `재고 ${fmtN(inT - outT)} ${unit}`),
         tile("material", "원자재 보유물량", fmtN(VOL_RECORD.material.total(mat)), mat.length ? VOL_RECORD.material.sub(mat) : "기록 없음"),
-        tile("recovery", "제품 회수물량", fmtN(VOL_RECORD.recovery.total(rec)), rec.length ? VOL_RECORD.recovery.sub(rec) : "기록 없음")
+        (() => { const t = stageSum(rec); return tile("recovery", fgCfg(g.key).title, `판매 가능 ${fmtN(t.packed - t.out)}`, rec.length ? `입고 ${fmtN(t.in)} · 검수 ${fmtN(t.checked)} · 패키징 ${fmtN(t.packed)} · 출고 ${fmtN(t.out)}` : "기록 없음"); })()
       ]),
       grp.note ? h("p", { class: "vol-pre muted", text: grp.note }) : null,
       h("section", { class: "card vol__card" }, [
@@ -5532,6 +5538,86 @@
     recovery: { title: "제품 회수물량", nameLabel: "회수처", namePh: "예: ○○성당", hint: "회수한 날마다 한 줄씩 적어 주세요. 위 숫자는 전체 합계예요.",
       total: (rows) => rows.reduce((n, r) => n + r.qty, 0), sub: (rows) => `기록 ${rows.length}건 · 합계` }
   };
+  // 완제품(묵주 회수 · 손십자가) 단계 관리: 입고 → 검수완료 → 패키징완료(바로 판매 가능) → 출고
+  const VOL_STAGE_KEYS = ["in", "checked", "packed", "out"];
+  const fgCfg = (gk) => gk === "cross"
+    ? { title: "제품 관리", labels: { in: "입고 (대건상사)", checked: "검수완료", packed: "패키징 완료", out: "출고" }, namePh: { in: "예: 대건상사", checked: "", packed: "", out: "예: 판매처·현장" } }
+    : { title: "완제품 관리", labels: { in: "회수 입고", checked: "검수완료", packed: "패키징 완료", out: "출고" }, namePh: { in: "예: ○○수녀회", checked: "", packed: "", out: "예: 판매처·현장" } };
+  const stageSum = (rows) => Object.fromEntries(VOL_STAGE_KEYS.map((k) => [k, rows.filter((r) => (r.stage || "in") === k).reduce((n, r) => n + r.qty, 0)]));
+  async function volStageCard(itemId, gk) {
+    const cfg = fgCfg(gk);
+    const box = h("section", { class: "card vol__card vol-rec vol-fg" });
+    let rows = (await api(`/volunteer/records?item=${itemId}&kind=recovery`)).records;
+    let filter = "";
+    const edit = (r, presetStage) => {
+      const err = errorLine();
+      const stage = h("select", {}, VOL_STAGE_KEYS.map((k) => h("option", { value: k, text: cfg.labels[k] })));
+      stage.value = r?.stage || presetStage || "in";
+      const date = h("input", { type: "date", value: r?.date || today(), required: true });
+      const name = h("input", { value: r?.name || "", maxlength: "80", placeholder: cfg.namePh[stage.value] || "" });
+      stage.addEventListener("change", () => { name.placeholder = cfg.namePh[stage.value] || ""; });
+      const qty = h("input", { type: "number", min: "0", inputmode: "numeric", value: r ? String(r.qty) : "", required: true, autofocus: true });
+      const note = h("input", { value: r?.note || "", maxlength: "300" });
+      const ok = h("button", { class: "btn btn--primary", type: "submit", text: r ? "저장" : "추가" });
+      const form = h("form", { class: "stack" }, [h("div", { class: "row2" }, [field("단계", stage), field("날짜", date)]), h("div", { class: "row2" }, [field("수량", qty), field("어디서·어디로 (선택)", name)]), field("메모 (선택)", note), err,
+        h("div", { class: "actions" }, [r ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
+          if (!confirm("이 기록을 지울까요?")) return;
+          rows = (await act(() => api(`/volunteer/records/${r.id}`, { method: "DELETE" }))).records; closeDialog(); draw();
+        } }) : null, ok])]);
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const body = { itemId, kind: "recovery", stage: stage.value, date: date.value, name: name.value, qty: qty.value, note: note.value };
+        busy(ok, async () => {
+          try { rows = (await api(r ? `/volunteer/records/${r.id}` : "/volunteer/records", { method: r ? "PATCH" : "POST", body })).records; closeDialog(); toast("저장했어요."); draw(); }
+          catch (ex) { showError(err, ex.message); }
+        });
+      });
+      openDialog(r ? `${cfg.title} 고치기` : `${cfg.title} 적기`, form);
+    };
+    const draw = () => {
+      const t = stageSum(rows);
+      const wait = { checked: t.in - t.checked, packed: t.checked - t.packed, sell: t.packed - t.out };
+      const step = (k, sub) => h("button", { type: "button", class: "vol-fg__step" + (filter === k ? " is-on" : ""), onclick: () => { filter = filter === k ? "" : k; draw(); } }, [h("span", { class: "muted small", text: cfg.labels[k] }), h("strong", { text: fmtN(t[k]) }), sub ? h("span", { class: "muted small", text: sub }) : null]);
+      const shown = filter ? rows.filter((r) => (r.stage || "in") === filter) : rows;
+      fill(box,
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: cfg.title }), h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => edit(null, filter) }, [icon("plus"), "적기"])]),
+        h("div", { class: "vol-fg__flow" }, [
+          step("in"), h("span", { class: "vol-fg__arrow", text: "→" }),
+          step("checked", `검수 대기 ${fmtN(Math.max(0, wait.checked))}`), h("span", { class: "vol-fg__arrow", text: "→" }),
+          step("packed", `패키징 대기 ${fmtN(Math.max(0, wait.packed))}`), h("span", { class: "vol-fg__arrow", text: "→" }),
+          step("out")
+        ]),
+        h("div", { class: "vol-fg__sell" }, [h("span", { text: "바로 판매 가능한 재고 (패키징 완료 − 출고)" }), h("strong", { class: wait.sell < 0 ? "stock-minus" : null, text: fmtN(wait.sell) })]),
+        filter ? h("p", { class: "muted small" }, [`'${cfg.labels[filter]}' 기록만 보는 중 · `, h("button", { class: "link-btn", type: "button", text: "전체 보기", onclick: () => { filter = ""; draw(); } })]) : null,
+        shown.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" }, [
+          h("thead", {}, h("tr", {}, [h("th", { text: "날짜" }), h("th", { text: "단계" }), h("th", { class: "num", text: "수량" }), h("th", { text: "어디서·어디로" }), h("th", { text: "메모" }), h("th", { text: "적은 사람" }), h("th")])),
+          h("tbody", {}, shown.map((r) => h("tr", {}, [
+            h("td", { class: "nowrap", text: shortDate(r.date) }), h("td", { class: "nowrap" }, h("span", { class: `vol-fg__tag vol-fg__tag--${r.stage || "in"}`, text: cfg.labels[r.stage || "in"] })), h("td", { class: "num", text: fmtN(r.qty) }),
+            h("td", { text: r.name }), h("td", { class: "muted small", text: r.note }), h("td", { class: "muted small", text: r.author }),
+            h("td", {}, r.mine ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => edit(r) }) : null)
+          ])))
+        ])) : h("p", { class: "muted", text: "아직 적은 기록이 없어요. '적기'를 눌러 추가해 주세요." }),
+        h("p", { class: "muted small", text: "단계마다 처리한 날에 한 줄씩 적어 주세요(예: 11/20 회수 입고 500, 11/22 검수완료 480). 위 단계 칸을 누르면 그 단계 기록만 보여요. 고치기·지우기는 직접 적은 기록만 할 수 있어요." })
+      );
+    };
+    draw();
+    return box;
+  }
+  // 출고 화면의 '자른실 출고': 제작 수도회마다 나간 자른 실(출납 대장)
+  function volCutCard(visits) {
+    const list = visits.filter((v) => v.threadQty != null).sort((a, b) => a.date.localeCompare(b.date));
+    const total = list.reduce((n, v) => n + v.threadQty, 0);
+    return h("section", { class: "card vol__card" }, [
+      h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "2) 자른실 출고" }), h("a", { class: "link-btn", href: `#/vp/${VOL_GROUPS[0].key}/req`, text: "고치기" })]),
+      h("div", { class: "vol-fg__sell" }, [h("span", { text: `자른실 출고 합계 (제작 수도회 ${list.length}곳)` }), h("strong", { text: fmtN(total) })]),
+      list.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" }, [
+        h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "번호" }), h("th", { text: "교육일" }), h("th", { text: "제작 수도회" }), h("th", { class: "num", text: "자른실" }), h("th", { class: "num", text: "십자가" })])),
+        h("tbody", {}, list.map((v, i) => h("tr", {}, [h("td", { class: "num muted", text: String(i + 1) }), h("td", { class: "nowrap", text: shortDate(v.date) }), h("td", { text: v.title.split(" · ").pop() }), h("td", { class: "num", text: fmtN(v.threadQty) }), h("td", { class: "num", text: v.crossQty != null ? fmtN(v.crossQty) : "-" })]))),
+        h("tfoot", {}, h("tr", { class: "vol-more__sum" }, [h("th", { colspan: "3", text: `합계 (${list.length}곳)` }), h("td", { class: "num", text: fmtN(total) }), h("td", { class: "num", text: fmtN(list.reduce((n, v) => n + (v.crossQty || 0), 0)) })]))
+      ])) : h("p", { class: "muted", text: "아직 자른실 출고 기록이 없어요." }),
+      h("p", { class: "muted small", text: "자른실은 제작 수도회에 보낸 실이에요. 값은 '추가 전달 물량 › 수량 입력'에서 고쳐요. 위 '1) 실타래 입출고'는 창고의 실타래(타래 단위) 입출고예요." })
+    ]);
+  }
   async function volRecordCard(itemId, kind) {
     const cfg = VOL_RECORD[kind];
     const box = h("section", { class: "card vol__card vol-rec" });
@@ -5905,7 +5991,7 @@
       const recView = volRecords.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
         h("thead", {}, h("tr", {}, ["종류", "묶음", "날짜", "원자재·회수처", "수량", "메모", "적은 사람"].map((x) => h("th", { text: x })))),
         h("tbody", {}, volRecords.map((r) => h("tr", {}, [
-          h("td", { class: "nowrap", text: r.kind === "material" ? "원자재 보유" : "제품 회수" }), h("td", { class: "nowrap", text: r.group }), h("td", { class: "nowrap", text: r.date }), h("td", { text: r.name || "-" }), h("td", { class: "num nowrap", text: fmtN(r.qty) }), h("td", { class: "muted small", text: r.note }), h("td", { class: "nowrap", text: r.author || "-" })
+          h("td", { class: "nowrap", text: r.kind === "material" ? "원자재 보유" : `완제품 · ${{ in: "입고", checked: "검수완료", packed: "패키징 완료", out: "출고" }[r.stage] || "입고"}` }), h("td", { class: "nowrap", text: r.group }), h("td", { class: "nowrap", text: r.date }), h("td", { text: r.name || "-" }), h("td", { class: "num nowrap", text: fmtN(r.qty) }), h("td", { class: "muted small", text: r.note }), h("td", { class: "nowrap", text: r.author || "-" })
         ])))
       ])) : h("div", { class: "card empty", text: "아직 봉사자가 적은 원자재·회수 기록이 없어요." });
       // 메뉴 공개: 고른 메뉴만 봉사자 화면에 보임 (단계적으로 엶)

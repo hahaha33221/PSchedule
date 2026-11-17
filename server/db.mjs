@@ -538,6 +538,7 @@ function addUnitColumns(db) {
   // 봉사자 일정 수량·프로젝트 연결: 묵주 방문처럼 프로젝트에 묶인 일정은 봉사자 '프로젝트 관리'에서 수량을 고침
   if (!has("vol_schedules", "qty")) db.exec("ALTER TABLE vol_schedules ADD COLUMN qty INTEGER");
   if (!has("vol_schedules", "project_item_id")) db.exec("ALTER TABLE vol_schedules ADD COLUMN project_item_id INTEGER");
+  if (!has("vol_records", "stage")) db.exec("ALTER TABLE vol_records ADD COLUMN stage TEXT NOT NULL DEFAULT 'in'"); // 완제품 단계: in 입고 · checked 검수완료 · packed 패키징완료 · out 출고
   if (!has("vol_schedules", "thread_qty")) db.exec("ALTER TABLE vol_schedules ADD COLUMN thread_qty INTEGER"); // 실(자른 실) 출고 수량 (출납 대장)
   if (!has("vol_schedules", "cross_qty")) db.exec("ALTER TABLE vol_schedules ADD COLUMN cross_qty INTEGER"); // 십자가 출고 수량
   if (!has("vol_schedules", "mat_by")) db.exec("ALTER TABLE vol_schedules ADD COLUMN mat_by TEXT NOT NULL DEFAULT ''");

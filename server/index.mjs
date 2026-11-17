@@ -287,8 +287,8 @@ const q = {
   delVolSchedule: db.prepare("DELETE FROM vol_schedules WHERE id = ?"),
   volRecords: db.prepare("SELECT r.*, u.name AS author FROM vol_records r LEFT JOIN users u ON u.id = r.created_by WHERE r.item_id = ? AND r.kind = ? ORDER BY r.date DESC, r.id DESC"),
   volRecord: db.prepare("SELECT * FROM vol_records WHERE id = ?"),
-  addVolRecord: db.prepare("INSERT INTO vol_records (item_id, kind, date, name, qty, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)"),
-  setVolRecord: db.prepare("UPDATE vol_records SET date = ?, name = ?, qty = ?, note = ?, updated_at = datetime('now') WHERE id = ?"),
+  addVolRecord: db.prepare("INSERT INTO vol_records (item_id, kind, date, name, qty, note, created_by, stage) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"),
+  setVolRecord: db.prepare("UPDATE vol_records SET date = ?, name = ?, qty = ?, note = ?, stage = ?, updated_at = datetime('now') WHERE id = ?"),
   delVolRecord: db.prepare("DELETE FROM vol_records WHERE id = ?"),
   volScheduleUsers: db.prepare("SELECT x.user_id FROM vol_schedule_users x JOIN users u ON u.id = x.user_id AND u.volunteer = 1 WHERE x.schedule_id = ?"),
   clearVolScheduleUsers: db.prepare("DELETE FROM vol_schedule_users WHERE schedule_id = ?"),
@@ -1194,7 +1194,8 @@ function volGroupStatus(p, g) {
     requests: requests.map((r) => ({ id: r.id, no: r.no, org: r.org, date: r.req_date, time: r.req_time, qty: r.qty })),
     monthly: [...monthly.values()].sort((a, b) => a.month.localeCompare(b.month)),
     material: { total: [...latest.values()].reduce((n, r) => n + r.qty, 0), kinds: latest.size, count: records.filter((x) => x.kind === "material").length },
-    recovery: { total: records.filter((x) => x.kind === "recovery").reduce((n, r) => n + r.qty, 0), count: records.filter((x) => x.kind === "recovery").length },
+    recovery: { total: records.filter((x) => x.kind === "recovery" && (x.stage || "in") === "in").reduce((n, r) => n + r.qty, 0), count: records.filter((x) => x.kind === "recovery").length,
+      stages: Object.fromEntries(VOL_STAGES.map((st) => [st, records.filter((x) => x.kind === "recovery" && (x.stage || "in") === st).reduce((n, r) => n + r.qty, 0)])) },
     changes
   };
 }
@@ -1210,9 +1211,13 @@ function volRecordInput(b) {
   if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
   const qty = Number(b.qty);
   if (!Number.isInteger(qty) || qty < 0 || qty > 100000000) throw bad("수량은 0 이상의 숫자로 적어 주세요.");
-  return { date: b.date, name: text(b.name, 80, "이름") || "", qty, note: text(b.note, 300, "메모") || "" };
+  const stage = b.stage === undefined ? "in" : String(b.stage);
+  if (!VOL_STAGES.includes(stage)) throw bad("단계를 확인해 주세요.");
+  return { date: b.date, name: text(b.name, 80, "이름") || "", qty, note: text(b.note, 300, "메모") || "", stage };
 }
-const volRecordOut = (r, user) => ({ id: r.id, date: r.date, name: r.name, qty: r.qty, note: r.note, author: r.author || "", mine: r.created_by === user.id, updatedAt: r.updated_at });
+// 완제품(묵주 회수 · 손십자가) 단계: 입고 → 검수완료 → 패키징완료 → 출고
+const VOL_STAGES = ["in", "checked", "packed", "out"];
+const volRecordOut = (r, user) => ({ id: r.id, date: r.date, name: r.name, qty: r.qty, note: r.note, stage: r.stage || "in", author: r.author || "", mine: r.created_by === user.id, updatedAt: r.updated_at });
 const volQtyInput = (v) => {
   if (v === "" || v === null || v === undefined) return null;
   const n = Number(v);
@@ -1578,7 +1583,7 @@ async function api(req, res, path) {
     if (path === "/api/volunteer/records" && method === "POST") {
       const b = await readJson(req);
       const g = volGroupItem(Number(b.itemId)), kind = volRecordKind(b.kind), v = volRecordInput(b);
-      q.addVolRecord.run(g.id, kind, v.date, v.name, v.qty, v.note, user.id);
+      q.addVolRecord.run(g.id, kind, v.date, v.name, v.qty, v.note, user.id, kind === "recovery" ? v.stage : "in");
       return send(res, 201, { records: q.volRecords.all(g.id, kind).map((r) => volRecordOut(r, user)) });
     }
     const vrm = path.match(/^\/api\/volunteer\/records\/(\d+)$/);
@@ -1587,7 +1592,7 @@ async function api(req, res, path) {
       if (!r) throw notFound("기록");
       volGroupItem(r.item_id);
       if (r.created_by !== user.id) return send(res, 403, { error: "직접 적은 기록만 고칠 수 있어요." });
-      if (method === "PATCH") { const v = volRecordInput(await readJson(req)); q.setVolRecord.run(v.date, v.name, v.qty, v.note, r.id); }
+      if (method === "PATCH") { const v = volRecordInput(await readJson(req)); q.setVolRecord.run(v.date, v.name, v.qty, v.note, r.kind === "recovery" ? v.stage : "in", r.id); }
       else if (method === "DELETE") q.delVolRecord.run(r.id);
       else return send(res, 405, { error: "Method not allowed" });
       return send(res, 200, { records: q.volRecords.all(r.item_id, r.kind).map((x) => volRecordOut(x, user)) });
@@ -2441,7 +2446,7 @@ async function api(req, res, path) {
     }
     // 봉사자가 적은 원자재 보유물량 · 제품 회수물량 (최근 300건)
     if (path === "/api/admin/vol-records" && method === "GET") {
-      return send(res, 200, { records: q.volRecordsAll.all().map((r) => ({ id: r.id, kind: r.kind, group: r.group_name, date: r.date, name: r.name, qty: r.qty, note: r.note, author: r.author || "", updatedAt: r.updated_at })) });
+      return send(res, 200, { records: q.volRecordsAll.all().map((r) => ({ id: r.id, kind: r.kind, stage: r.stage || "in", group: r.group_name, date: r.date, name: r.name, qty: r.qty, note: r.note, author: r.author || "", updatedAt: r.updated_at })) });
     }
     // 봉사자 메뉴 공개 범위
     if (path === "/api/admin/vol-menu" && method === "GET") return send(res, 200, { menu: volMenu(), keys: VOL_MENU_KEYS });
