@@ -1679,3 +1679,6 @@ button.gantt__name:hover { background: var(--surface-2); }
 .vwbs .gantt__track { min-height: 44px; }
 .vwbs__todaykey { display: inline-block; width: 2px; height: 12px; background: var(--danger); vertical-align: middle; }
 @media (max-width: 720px) { .vwbs .vwbs__cell { width: 250px; } .vwbs .vwbs__cell .vwbs__state { max-width: 64px; } }
+.vol-visits__bigs { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.vol-visits__big { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+.vol-visits__big strong { font-size: 22px; font-variant-numeric: tabular-nums; }
