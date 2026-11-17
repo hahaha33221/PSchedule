@@ -2511,12 +2511,15 @@
 
   /* ---------- 할 일 목록 ---------- */
   const taskFilter = { status: store.get("ps.taskStatus", "open"), who: store.get("ps.taskWho", "all"), day: "all", tag: null, q: "" };
+  // 할 일·회의·메모 화면은 내가 등록한 것만 (다른 사람 것은 오늘·대시보드에서)
+  const byMe = (x) => x.createdBy === state.user.id;
+  const mineHint = (what) => h("p", { class: "muted small mine-hint" }, [icon("user"), ` 내가 등록한 ${what}만 보여요. 다른 사람이 등록한 것은 오늘·나의 대시보드에서 볼 수 있어요.`]);
   async function pageTasks() {
     document.title = `할 일 · ${TITLE}`;
     drawMini(null);
     const box = h("div", { class: "card tasks-card" }, loading());
     const filters = h("div", { class: "filters" });
-    setMain("tasks", [h("div", { class: "page-head" }, [h("h1", { text: "할 일" }), h("button", { class: "btn btn--primary", type: "button", onclick: () => quickAdd("task") }, [icon("plus"), "할 일 추가"])]), filters, box]);
+    setMain("tasks", [h("div", { class: "page-head" }, [h("h1", { text: "할 일" }), h("button", { class: "btn btn--primary", type: "button", onclick: () => quickAdd("task") }, [icon("plus"), "할 일 추가"])]), mineHint("할 일"), filters, box]);
     let all = [];
     function drawFilters() {
       const seg = (key, opts, storeKey) => h("div", { class: "seg seg--sm" }, opts.map(([k, label]) => h("button", { type: "button", "aria-selected": String(taskFilter[key] === k), text: label, onclick: () => { taskFilter[key] = k; if (storeKey) store.set(storeKey, k); drawFilters(); drawList(); } })));
@@ -2524,12 +2527,12 @@
       tagSel.value = taskFilter.tag ? String(taskFilter.tag) : "";
       tagSel.addEventListener("change", () => { taskFilter.tag = tagSel.value ? Number(tagSel.value) : null; drawList(); });
       const search = h("label", { class: "search" }, [icon("search"), h("input", { type: "search", value: taskFilter.q, placeholder: "할 일 검색", "aria-label": "검색", oninput: (e) => { taskFilter.q = e.target.value; drawList(); } })]);
-      fill(filters, seg("status", [["open", "미완료"], ["done", "완료"], ["all", "전체"]], "ps.taskStatus"), ourToggle(() => { drawFilters(); quiet(load()); }), seg("who", [["all", "모두"], ["me", "내 담당"]], "ps.taskWho"), seg("day", [["all", "모든 날짜"], ["-1", "어제"], ["0", "오늘"], ["1", "내일"]]), tagSel, search);
+      fill(filters, seg("status", [["open", "미완료"], ["done", "완료"], ["all", "전체"]], "ps.taskStatus"), seg("day", [["all", "모든 날짜"], ["-1", "어제"], ["0", "오늘"], ["1", "내일"]]), tagSel, search);
     }
     function drawList() {
       const f = taskFilter;
       const list = all.filter((t) => (f.status === "all" || (f.status === "done" ? t.status === "done" : t.status !== "done"))
-        && (f.who === "all" || t.assigneeId === state.user.id) && (!f.tag || t.tagIds.includes(f.tag)) && (!f.q || t.title.includes(f.q)));
+        && (!f.tag || t.tagIds.includes(f.tag)) && (!f.q || t.title.includes(f.q)));
       const t = today(), tm = shiftYmd(t, 1), week = shiftYmd(t, 7);
       // 날짜로 보기: 시작일~마감일 기간에 그 날이 들어가는 할 일
       const dayKey = f.day === "all" ? null : shiftYmd(t, Number(f.day));
@@ -2550,7 +2553,7 @@
       ])) : [h("p", { class: "empty", text: "조건에 맞는 할 일이 없어요." })]));
       markPeeked();
     }
-    async function load() { const ours = ourFilter(); all = (await api("/tasks")).tasks.filter(catFilter()).filter(ours); drawList(); }
+    async function load() { all = (await api("/tasks")).tasks.filter(catFilter()).filter(byMe); drawList(); }
     page = { name: "tasks", reload: load };
     drawFilters();
     try { await load(); } catch (e) { if (e.status !== 401) box.replaceChildren(failed(e)); }
@@ -2563,7 +2566,7 @@
     const box = h("div", { class: "card mlist-card" }, loading());
     let qv = "";
     const search = h("label", { class: "search" }, [icon("search"), h("input", { type: "search", placeholder: "회의 검색", "aria-label": "회의 검색", oninput: (e) => { qv = e.target.value; draw(); } })]);
-    setMain("meetings", [h("div", { class: "page-head" }, [h("h1", { text: "회의" }), h("button", { class: "btn btn--primary", type: "button", onclick: () => editEvent(null, { kind: "meeting" }) }, [icon("plus"), "회의 추가"])]), h("div", { class: "filters" }, [ourToggle(() => render()), search]), box]);
+    setMain("meetings", [h("div", { class: "page-head" }, [h("h1", { text: "회의" }), h("button", { class: "btn btn--primary", type: "button", onclick: () => editEvent(null, { kind: "meeting" }) }, [icon("plus"), "회의 추가"])]), mineHint("회의"), h("div", { class: "filters" }, [search]), box]);
     let all = [];
     function draw() {
       const list = all.filter((e) => e.kind === "meeting" && (!qv || e.title.includes(qv)));
@@ -2578,12 +2581,12 @@
       fill(box, ...(list.length ? [
         upcoming.length ? h("div", { class: "mgroup" }, [h("div", { class: "mgroup__head" }, [h("span", { text: "다가오는 회의" }), h("span", { class: "count", text: String(upcoming.length) })]), h("ul", { class: "mrows" }, upcoming.map((e) => meetingRow(e)))]) : null,
         ...byMonth(past).map(([k, l]) => h("div", { class: "mgroup" }, [h("div", { class: "mgroup__head" }, [h("span", { text: `${Number(k.slice(0, 4))}년 ${Number(k.slice(5))}월 지난 회의` }), h("span", { class: "count", text: String(l.length) })]), h("ul", { class: "mrows" }, l.map((e) => meetingRow(e)))]))
-      ] : [h("p", { class: "empty", text: qv ? "찾는 회의가 없어요." : "아직 회의가 없어요." })]));
+      ] : [h("p", { class: "empty", text: qv ? "찾는 회의가 없어요." : "내가 등록한 회의가 없어요." })]));
       markPeeked();
     }
     async function load() {
       const t = today();
-      all = (await api(`/events?from=${shiftYmd(t, -180)}&to=${shiftYmd(t, 180)}`)).events.filter(catFilter()).filter(ourFilter());
+      all = (await api(`/events?from=${shiftYmd(t, -180)}&to=${shiftYmd(t, 180)}`)).events.filter(catFilter()).filter(byMe);
       draw();
     }
     page = { name: "meetings", reload: load };
@@ -2598,16 +2601,16 @@
     const box = h("div", { class: "memo-days" }, loading());
     const filters = h("div", { class: "filters" });
     const drawFilters = () => filters.replaceChildren(h("div", { class: "seg seg--sm" }, [["0", "전체"], ["1", "중요만"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String((importantOnly ? "1" : "0") === k), text: label, onclick: () => { importantOnly = k === "1"; store.set("ps.memoImp", k); drawFilters(); quiet(load()); } }))));
-    setMain("memos", [h("div", { class: "page-head" }, [h("h1", { text: "메모" })]), h("div", { class: "card memo-compose" }, [h("h2", { class: "card__title", text: "빠른 메모" }), quickMemo(today())]), filters, box]);
+    setMain("memos", [h("div", { class: "page-head" }, [h("h1", { text: "메모" })]), mineHint("메모"), h("div", { class: "card memo-compose" }, [h("h2", { class: "card__title", text: "빠른 메모" }), quickMemo(today())]), filters, box]);
     drawFilters();
     async function load() {
       const r = await api(`/memos${importantOnly ? "?important=1" : ""}`);
       const days = new Map();
-      for (const m of r.memos.filter(catFilter())) { if (!days.has(m.date)) days.set(m.date, []); days.get(m.date).push(m); }
+      for (const m of r.memos.filter(catFilter()).filter(byMe)) { if (!days.has(m.date)) days.set(m.date, []); days.get(m.date).push(m); }
       box.replaceChildren(...(days.size ? [...days.entries()].map(([d, l]) => h("section", { class: "card memo-day" }, [
         h("a", { class: "memo-day__date", href: `#/today/${d}` }, [h("strong", { text: dateLabel(d) }), relDay(d) ? h("span", { class: "muted", text: relDay(d) }) : null]),
         memoRows(l)
-      ])) : [h("div", { class: "card empty", text: importantOnly ? "중요 표시한 메모가 없어요." : "아직 메모가 없어요." })]));
+      ])) : [h("div", { class: "card empty", text: importantOnly ? "내가 쓴 메모 중 중요 표시한 것이 없어요." : "내가 쓴 메모가 없어요." })]));
     }
     page = { name: "memos", reload: load };
     try { await load(); } catch (e) { if (e.status !== 401) box.replaceChildren(failed(e)); }

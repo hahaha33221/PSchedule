@@ -1586,3 +1586,6 @@ button.gantt__name:hover { background: var(--surface-2); }
 .today-find__chev.is-open { transform: rotate(90deg); }
 .today-find.is-folded .card__head { margin-bottom: 0; }
 .today-find__group p { margin: 0; }
+.mine-hint { display: flex; align-items: center; gap: 4px; margin: -6px 0 0; }
+.mine-hint > .ic { display: inline-flex; }
+.mine-hint > .ic svg { width: 14px; height: 14px; }
