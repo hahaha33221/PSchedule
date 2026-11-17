@@ -464,6 +464,20 @@ function addUnitColumns(db) {
       created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    -- 봉사자 기록표: 원자재 보유물량(material) · 제품 회수물량(recovery), 묶음(묵주·손십자가)마다
+    CREATE TABLE IF NOT EXISTS vol_records (
+      id         INTEGER PRIMARY KEY,
+      item_id    INTEGER NOT NULL REFERENCES project_items(id) ON DELETE CASCADE,
+      kind       TEXT NOT NULL CHECK (kind IN ('material', 'recovery')),
+      date       TEXT NOT NULL,
+      name       TEXT NOT NULL DEFAULT '',
+      qty        INTEGER NOT NULL,
+      note       TEXT NOT NULL DEFAULT '',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS vol_records_item ON vol_records (item_id, kind, date);
     CREATE TABLE IF NOT EXISTS vol_schedule_users (
       schedule_id INTEGER NOT NULL REFERENCES vol_schedules(id) ON DELETE CASCADE,
       user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

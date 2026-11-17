@@ -1610,3 +1610,5 @@ button.gantt__name:hover { background: var(--surface-2); }
 .vol-sum__tile { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; color: inherit; text-decoration: none; }
 .vol-sum__tile strong { font-size: 22px; font-variant-numeric: tabular-nums; }
 .vol-sum__tile:hover { border-color: var(--primary); }
+.vol-rec__now { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 8px; }
+.vol-rec__now li { display: inline-flex; align-items: baseline; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 13.5px; }

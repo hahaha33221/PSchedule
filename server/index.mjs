@@ -283,6 +283,11 @@ const q = {
   setVolQty: db.prepare("UPDATE vol_schedules SET qty = ? WHERE id = ?"),
   markVolQty: db.prepare("UPDATE vol_schedules SET qty_by = ?, qty_at = datetime('now') WHERE id = ?"),
   delVolSchedule: db.prepare("DELETE FROM vol_schedules WHERE id = ?"),
+  volRecords: db.prepare("SELECT r.*, u.name AS author FROM vol_records r LEFT JOIN users u ON u.id = r.created_by WHERE r.item_id = ? AND r.kind = ? ORDER BY r.date DESC, r.id DESC"),
+  volRecord: db.prepare("SELECT * FROM vol_records WHERE id = ?"),
+  addVolRecord: db.prepare("INSERT INTO vol_records (item_id, kind, date, name, qty, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)"),
+  setVolRecord: db.prepare("UPDATE vol_records SET date = ?, name = ?, qty = ?, note = ?, updated_at = datetime('now') WHERE id = ?"),
+  delVolRecord: db.prepare("DELETE FROM vol_records WHERE id = ?"),
   volScheduleUsers: db.prepare("SELECT x.user_id FROM vol_schedule_users x JOIN users u ON u.id = x.user_id AND u.volunteer = 1 WHERE x.schedule_id = ?"),
   clearVolScheduleUsers: db.prepare("DELETE FROM vol_schedule_users WHERE schedule_id = ?"),
   addVolScheduleUser: db.prepare("INSERT OR IGNORE INTO vol_schedule_users (schedule_id, user_id) VALUES (?, ?)"),
@@ -1136,6 +1141,21 @@ function imageMime(buf) {
   return null;
 }
 const ITEM_IMAGE_MAX = 60 * 1024;
+// 봉사자에게 보이는 묶음(묵주·손십자가)인지
+function volGroupItem(id) {
+  const i = Number.isInteger(id) && q.projectItem.get(id);
+  const p = i && i.kind === "group" && VOLUNTEER_GROUPS.includes(i.name) && q.volProject.get(VOLUNTEER_PROJECT_TEAM, i.project_id);
+  if (!p || !volItems(p).shown.has(i.id)) throw notFound("묶음");
+  return i;
+}
+const volRecordKind = (k) => { if (k !== "material" && k !== "recovery") throw bad("기록 종류를 확인해 주세요."); return k; };
+function volRecordInput(b) {
+  if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
+  const qty = Number(b.qty);
+  if (!Number.isInteger(qty) || qty < 0 || qty > 100000000) throw bad("수량은 0 이상의 숫자로 적어 주세요.");
+  return { date: b.date, name: text(b.name, 80, "이름") || "", qty, note: text(b.note, 300, "메모") || "" };
+}
+const volRecordOut = (r, user) => ({ id: r.id, date: r.date, name: r.name, qty: r.qty, note: r.note, author: r.author || "", mine: r.created_by === user.id, updatedAt: r.updated_at });
 const volQtyInput = (v) => {
   if (v === "" || v === null || v === undefined) return null;
   const n = Number(v);
@@ -1421,6 +1441,28 @@ async function api(req, res, path) {
       if (method === "PATCH") { patchStockMoveFrom(m, l, await readJson(req), user); return send(res, 200, ledgerOut(l, p, user)); }
       if (method === "DELETE") { deleteStockMoveBy(m, l, user); return send(res, 200, ledgerOut(l, p, user)); }
       return send(res, 405, { error: "Method not allowed" });
+    }
+    // 원자재 보유물량 · 제품 회수물량: 묶음마다 봉사자가 직접 적는 기록 (모두 보고, 고치기·지우기는 자기가 적은 것만)
+    if (path === "/api/volunteer/records" && method === "GET") {
+      const g = volGroupItem(Number(param("item"))), kind = volRecordKind(param("kind"));
+      return send(res, 200, { records: q.volRecords.all(g.id, kind).map((r) => volRecordOut(r, user)) });
+    }
+    if (path === "/api/volunteer/records" && method === "POST") {
+      const b = await readJson(req);
+      const g = volGroupItem(Number(b.itemId)), kind = volRecordKind(b.kind), v = volRecordInput(b);
+      q.addVolRecord.run(g.id, kind, v.date, v.name, v.qty, v.note, user.id);
+      return send(res, 201, { records: q.volRecords.all(g.id, kind).map((r) => volRecordOut(r, user)) });
+    }
+    const vrm = path.match(/^\/api\/volunteer\/records\/(\d+)$/);
+    if (vrm) {
+      const r = q.volRecord.get(Number(vrm[1]));
+      if (!r) throw notFound("기록");
+      volGroupItem(r.item_id);
+      if (r.created_by !== user.id) return send(res, 403, { error: "직접 적은 기록만 고칠 수 있어요." });
+      if (method === "PATCH") { const v = volRecordInput(await readJson(req)); q.setVolRecord.run(v.date, v.name, v.qty, v.note, r.id); }
+      else if (method === "DELETE") q.delVolRecord.run(r.id);
+      else return send(res, 405, { error: "Method not allowed" });
+      return send(res, 200, { records: q.volRecords.all(r.item_id, r.kind).map((x) => volRecordOut(x, user)) });
     }
     const vtm = path.match(/^\/api\/volunteer\/trainings\/(\d+)\/done$/);
     if (vtm && method === "POST") {

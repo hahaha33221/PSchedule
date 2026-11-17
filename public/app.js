@@ -4869,7 +4869,7 @@
             h("a", { class: "side__link" + (top ? " is-active" : ""), href: `#/vp/${g.key}`, "aria-current": top ? "page" : null, title: `프로젝트 관리(${g.name})`, onclick: () => toggleNav(false) }, [icon("folder"), h("span", { class: "side__text", text: `프로젝트 관리(${g.name})` })]),
             h("button", { class: "side__toggle" + (open ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(open), "aria-label": `${g.name} 아래 메뉴 ${open ? "접기" : "펼치기"}`, onclick: () => setOpen(!open) })
           ]),
-          h("div", { class: "side__kids", hidden: !open }, [sub("wbs", "WBS", "grid"), sub("in", "입고", "db"), sub("req", `${g.name} 요청수량`, "cal"), sub("out", "출고", "db")])
+          h("div", { class: "side__kids", hidden: !open }, [sub("wbs", "WBS", "grid"), sub("req", `${g.name} 요청수량`, "cal"), sub("in", "입고", "db"), sub("out", "출고", "db"), sub("material", "원자재 보유물량", "db"), sub("recovery", "제품 회수물량", "db")])
         ]);
       };
       navBox.replaceChildren(
@@ -5170,20 +5170,24 @@
     if (view === "wbs") return [...head("WBS"), volWbs({ name: g.name }, visits)];
     if (view === "req") return [...head(`${g.name} 요청수량`), volVisits(visits, `${g.name} 요청수량`)];
     if (view === "in" || view === "out") return [...head(view === "in" ? "입고" : "출고"), volMoveCard(view, ledgers, await volLedgerDetails(ledgers))];
+    if (view === "material" || view === "recovery") return [...head(VOL_RECORD[view].title), await volRecordCard(grp.id, view)];
     // 요약
     const leaf = items.filter((i) => i.kind === "item");
     const inT = ledgers.reduce((n, l) => n + l.inTotal, 0), outT = ledgers.reduce((n, l) => n + l.outTotal, 0);
     const reqT = visits.reduce((n, v) => n + (v.qty || 0), 0), reqLeft = visits.filter((v) => v.date >= today()).reduce((n, v) => n + (v.qty || 0), 0);
     const unit = ledgers[0]?.unit || "개";
+    const [mat, rec] = await Promise.all(["material", "recovery"].map((k) => api(`/volunteer/records?item=${grp.id}&kind=${k}`).then((r) => r.records)));
     const tile = (view, label, value, sub) => h("a", { class: "card vol-sum__tile", href: `#/vp/${g.key}/${view}` }, [h("span", { class: "muted small", text: label }), h("strong", { text: value }), sub ? h("span", { class: "muted small", text: sub }) : null]);
     return [
       title(`프로젝트 관리(${g.name})`),
       h("p", { class: "muted small", text: `${d.project.name} › ${g.name} · 요약` }),
       h("div", { class: "vol-sum" }, [
         tile("wbs", "WBS 진척", "0%", "항목 준비 중"),
-        tile("in", "입고", `${fmtN(inT)} ${unit}`, ledgers.length ? `대장 ${ledgers.length}개` : "대장 없음"),
         tile("req", `${g.name} 요청수량`, `${fmtN(reqT)}`, visits.length ? `방문 ${visits.length}건 · 남음 ${fmtN(reqLeft)}` : "연결된 일정 없음"),
-        tile("out", "출고", `${fmtN(outT)} ${unit}`, `재고 ${fmtN(inT - outT)} ${unit}`)
+        tile("in", "입고", `${fmtN(inT)} ${unit}`, ledgers.length ? `대장 ${ledgers.length}개` : "대장 없음"),
+        tile("out", "출고", `${fmtN(outT)} ${unit}`, `재고 ${fmtN(inT - outT)} ${unit}`),
+        tile("material", "원자재 보유물량", fmtN(VOL_RECORD.material.total(mat)), mat.length ? VOL_RECORD.material.sub(mat) : "기록 없음"),
+        tile("recovery", "제품 회수물량", fmtN(VOL_RECORD.recovery.total(rec)), rec.length ? VOL_RECORD.recovery.sub(rec) : "기록 없음")
       ]),
       grp.note ? h("p", { class: "vol-pre muted", text: grp.note }) : null,
       h("section", { class: "card vol__card" }, [
@@ -5193,6 +5197,56 @@
         ]))) : h("p", { class: "muted", text: "아직 항목이 없어요." })
       ])
     ];
+  }
+  // 원자재 보유물량 · 제품 회수물량: 봉사자가 직접 적는 기록표
+  const latestByName = (rows) => { const m = new Map(); for (const r of rows) if (!m.has(r.name)) m.set(r.name, r); return [...m.values()]; }; // 날짜 최신순으로 옴
+  const VOL_RECORD = {
+    material: { title: "원자재 보유물량", nameLabel: "원자재", namePh: "예: 실타래", hint: "원자재마다 가장 최근에 적은 수량이 지금 보유물량이에요.",
+      total: (rows) => latestByName(rows).reduce((n, r) => n + r.qty, 0), sub: (rows) => `원자재 ${latestByName(rows).length}종 · 최근 기준` },
+    recovery: { title: "제품 회수물량", nameLabel: "회수처", namePh: "예: ○○성당", hint: "회수한 날마다 한 줄씩 적어 주세요. 위 숫자는 전체 합계예요.",
+      total: (rows) => rows.reduce((n, r) => n + r.qty, 0), sub: (rows) => `기록 ${rows.length}건 · 합계` }
+  };
+  async function volRecordCard(itemId, kind) {
+    const cfg = VOL_RECORD[kind];
+    const box = h("section", { class: "card vol__card vol-rec" });
+    let rows = (await api(`/volunteer/records?item=${itemId}&kind=${kind}`)).records;
+    const edit = (r) => {
+      const err = errorLine();
+      const date = h("input", { type: "date", value: r?.date || today(), required: true });
+      const name = h("input", { value: r?.name || "", maxlength: "80", placeholder: cfg.namePh, autofocus: true });
+      const qty = h("input", { type: "number", min: "0", inputmode: "numeric", value: r ? String(r.qty) : "", required: true });
+      const note = h("input", { value: r?.note || "", maxlength: "300" });
+      const ok = h("button", { class: "btn btn--primary", type: "submit", text: r ? "저장" : "추가" });
+      const form = h("form", { class: "stack" }, [h("div", { class: "row2" }, [field("날짜", date), field(cfg.nameLabel, name)]), h("div", { class: "row2" }, [field("수량", qty), field("메모 (선택)", note)]), err,
+        h("div", { class: "actions" }, [r ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
+          if (!confirm("이 기록을 지울까요?")) return;
+          rows = (await act(() => api(`/volunteer/records/${r.id}`, { method: "DELETE" }))).records; closeDialog(); draw();
+        } }) : null, ok])]);
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const body = { itemId, kind, date: date.value, name: name.value, qty: qty.value, note: note.value };
+        busy(ok, async () => {
+          try { rows = (await api(r ? `/volunteer/records/${r.id}` : "/volunteer/records", { method: r ? "PATCH" : "POST", body })).records; closeDialog(); toast("저장했어요."); draw(); }
+          catch (ex) { showError(err, ex.message); }
+        });
+      });
+      openDialog(r ? `${cfg.title} 고치기` : `${cfg.title} 적기`, form);
+    };
+    const draw = () => fill(box,
+      h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: cfg.title }), h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => edit(null) }, [icon("plus"), "적기"])]),
+      h("div", { class: "vol-visits__sum" }, [h("span", {}, [kind === "material" ? "지금 보유 " : "회수 합계 ", h("strong", { text: fmtN(cfg.total(rows)) })]), rows.length ? h("span", { class: "muted", text: cfg.sub(rows) }) : null]),
+      kind === "material" && rows.length ? h("ul", { class: "vol-rec__now" }, latestByName(rows).map((r) => h("li", {}, [h("span", { text: r.name || "(이름 없음)" }), h("strong", { text: fmtN(r.qty) }), h("small", { class: "muted", text: shortDate(r.date) })]))) : null,
+      rows.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" }, [
+        h("thead", {}, h("tr", {}, [h("th", { text: "날짜" }), h("th", { text: cfg.nameLabel }), h("th", { class: "num", text: "수량" }), h("th", { text: "메모" }), h("th", { text: "적은 사람" }), h("th")])),
+        h("tbody", {}, rows.map((r) => h("tr", {}, [
+          h("td", { class: "nowrap", text: shortDate(r.date) }), h("td", { text: r.name }), h("td", { class: "num", text: fmtN(r.qty) }), h("td", { class: "muted small", text: r.note }), h("td", { class: "muted small", text: r.author }),
+          h("td", {}, r.mine ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => edit(r) }) : null)
+        ])))
+      ])) : h("p", { class: "muted", text: "아직 적은 기록이 없어요. '적기'를 눌러 추가해 주세요." }),
+      h("p", { class: "muted small", text: cfg.hint + " 고치기·지우기는 직접 적은 기록만 할 수 있어요." })
+    );
+    draw();
+    return box;
   }
   function volProjects(list) {
     return [
