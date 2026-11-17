@@ -1728,3 +1728,5 @@ button.gantt__name:hover { background: var(--surface-2); }
 /* 봉사자 WBS: 주 단위 세로선·월 경계선 없이 (월 음영으로만 구분) */
 .vol-wbs .gantt__track { background-image: none; }
 .vol-wbs .gantt__row--head .gantt__month { border-left: 0; }
+.qty-diff { font-weight: 700; font-variant-numeric: tabular-nums; }
+.qty-diff.is-over { color: var(--danger); }
