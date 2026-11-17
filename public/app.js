@@ -3909,7 +3909,7 @@
     };
     const matched = g.requests.map((r) => ({ r, v: matchOf(r) }));
     const unassigned = matched.filter((x) => !x.v);
-    const kindLabel = { stock: "입출고", qty: "요청수량", edu: "교육물량", material: "원자재", recovery: "회수" };
+    const kindLabel = { stock: "입출고", qty: "요청수량", edu: "교육물량", mat: "실·십자가", material: "원자재", recovery: "회수" };
     const pastReq = g.visits.filter((v) => v.date < t).reduce((n, v) => n + (v.qty || 0), 0);
     const eduT = g.visits.reduce((n, v) => n + (v.eduQty || 0), 0);
     return h("section", { class: "card stack vstat__group" }, [
@@ -3918,6 +3918,7 @@
         g.requests.length ? tile("수업 신청", `${g.requests.length}건`, `신청 수량 ${fmtN(appT)}${unassigned.length ? ` · 일정 미배정 ${unassigned.length}건` : ""}`) : null,
         tile("요청수량 (일정)", fmtN(reqT), `방문 ${g.visits.length}건 · 남음 ${fmtN(left)}`),
         tile("교육물량", fmtN(eduT), `적은 일정 ${g.visits.filter((v) => v.eduQty != null).length}건`),
+        tile("실 · 십자가 출고", `${fmtN(g.visits.reduce((n, v) => n + (v.threadQty || 0), 0))} · ${fmtN(g.visits.reduce((n, v) => n + (v.crossQty || 0), 0))}`, "출납 대장 기준"),
         (() => { const both = g.visits.filter((v) => qtyDiff(v) != null); return tile("차액 (요청 − 교육)", diffText(both.length ? both.reduce((n, v) => n + qtyDiff(v), 0) : null), `둘 다 적힌 일정 ${both.length}건`); })(),
         tile("입고", `${fmtN(inT)} ${unit}`, g.ledgers.map((l) => l.name).join(", ") || "대장 없음"),
         tile("출고", `${fmtN(outT)} ${unit}`, `재고 ${fmtN(inT - outT)} ${unit}`),
@@ -3958,10 +3959,10 @@
       opts.compact ? null : h("details", { class: "vstat__more" }, [
         h("summary", {}, `요청수량 일정 (${g.visits.length}건)`),
         g.visits.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" }, [
-          h("thead", {}, h("tr", {}, ["번호", "날짜", "방문", "요청수량", "교육물량", "차액", "마지막 수정"].map((x) => h("th", { text: x })))),
+          h("thead", {}, h("tr", {}, ["번호", "날짜", "방문", "요청수량", "교육물량", "실 출고", "십자가 출고", "차액", "마지막 수정"].map((x) => h("th", { text: x })))),
           h("tbody", {}, g.visits.map((v, i) => h("tr", { class: v.date < t ? "is-past" : null }, [
             h("td", { class: "num muted", text: String(i + 1) }), h("td", { class: "nowrap", text: `${shortDate(v.date)}${v.startTime ? " " + v.startTime : ""}` }), h("td", { text: v.title.replace(/^묵주 교육 · /, "") + (v.place ? ` · ${v.place}` : "") }),
-            h("td", { class: "num", text: v.qty != null ? fmtN(v.qty) : "-" }), h("td", { class: "num", text: v.eduQty != null ? fmtN(v.eduQty) : "-" }), h("td", { class: "num nowrap " + diffCls(qtyDiff(v)), text: diffText(qtyDiff(v)) }),
+            h("td", { class: "num", text: v.qty != null ? fmtN(v.qty) : "-" }), h("td", { class: "num", text: v.eduQty != null ? fmtN(v.eduQty) : "-" }), h("td", { class: "num", text: v.threadQty != null ? fmtN(v.threadQty) : "-" }), h("td", { class: "num", text: v.crossQty != null ? fmtN(v.crossQty) : "-" }), h("td", { class: "num nowrap " + diffCls(qtyDiff(v)), text: diffText(qtyDiff(v)) }),
             h("td", { class: "muted small nowrap", text: [v.qtyBy ? `수량 ${v.qtyBy} ${localAt(v.qtyAt)}` : "", v.eduBy ? `교육 ${v.eduBy} ${localAt(v.eduAt)}` : ""].filter(Boolean).join(" · ") || "-" })
           ])))
         ])) : h("p", { class: "muted", text: "연결된 일정이 없어요." })
@@ -5600,7 +5601,7 @@
       const whoOf = (v) => (v.note.match(/담당:\s*([^\n]+)/) || [])[1] || "";
       // 칸 하나: 요청수량(qty) 또는 교육물량(eduQty). 고치면 바로 저장, 고친 사람 이름이 남음
       const qtyCell = (v, key, label) => {
-        const by = key === "qty" ? v.qtyBy : v.eduBy, at = key === "qty" ? v.qtyAt : v.eduAt;
+        const by = key === "qty" ? v.qtyBy : key === "eduQty" ? v.eduBy : v.matBy, at = key === "qty" ? v.qtyAt : key === "eduQty" ? v.eduAt : v.matAt;
         const input = h("input", { type: "number", min: "0", inputmode: "numeric", class: "vol-visits__qty", value: v[key] ?? "", "aria-label": `${v.title} ${label}`, placeholder: "-" });
         input.addEventListener("change", async () => {
           try {
@@ -5617,6 +5618,8 @@
         h("td", {}, [h("span", { text: v.title.split(" · ").pop() }), v.place ? h("small", { class: "muted", text: ` · ${v.place}` }) : null, whoOf(v) ? h("small", { class: "vol-visits__who muted", text: whoOf(v) }) : null]),
         qtyCell(v, "qty", "요청수량"),
         qtyCell(v, "eduQty", "교육물량"),
+        qtyCell(v, "threadQty", "실 출고"),
+        qtyCell(v, "crossQty", "십자가 출고"),
         h("td", { class: "num nowrap " + diffCls(qtyDiff(v)), text: diffText(qtyDiff(v)) })
       ]);
       const big = (label, value, sub) => h("div", { class: "vol-visits__big" }, [h("span", { class: "muted small", text: label }), h("strong", { text: value }), sub ? h("span", { class: "muted small", text: sub }) : null]);
@@ -5626,13 +5629,14 @@
           big("총 방문", `${visits.length}건`, empty ? `수량 없음 ${empty}건` : null),
           big("총 요청수량", fmtN(sum(visits)), `다녀옴 ${fmtN(sum(past))} · 남음 ${fmtN(sum(next))}`),
           big("총 교육물량", fmtN(sum(visits, "eduQty")), `적은 일정 ${visits.filter((v) => v.eduQty != null).length}건`),
+          big("실 · 십자가 출고", `${fmtN(sum(visits, "threadQty"))} · ${fmtN(sum(visits, "crossQty"))}`, (() => { const w = visits.filter((v) => v.qty != null && v.threadQty != null); return w.length ? `보낼 남은 실 ${fmtN(w.reduce((n, v) => n + v.qty - v.threadQty, 0))} (요청 − 실 출고, ${w.length}건)` : "출고 기록 없음"; })()),
           (() => { const both = visits.filter((v) => qtyDiff(v) != null), d = both.reduce((n, v) => n + qtyDiff(v), 0); return big("차액 (요청 − 교육)", diffText(both.length ? d : null), `둘 다 적힌 일정 ${both.length}건 · 덜 전달 ${both.filter((v) => qtyDiff(v) > 0).length} · 더 전달 ${both.filter((v) => qtyDiff(v) < 0).length}`); })()
         ]) : null,
         visits.length ? h("div", { class: "table-wrap" }, h("table", { class: "table vol-visits__table" }, [
-          h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "번호" }), h("th", { text: "날짜" }), h("th", { text: "방문" }), h("th", { class: "num", text: "요청수량" }), h("th", { class: "num", text: "교육물량" }), h("th", { class: "num", title: "요청수량 − 교육물량 (둘 다 있는 일정만)", text: "차액" })])),
+          h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "번호" }), h("th", { text: "날짜" }), h("th", { text: "방문" }), h("th", { class: "num", text: "요청수량" }), h("th", { class: "num", text: "교육물량" }), h("th", { class: "num", title: "출납 대장의 자른 실", text: "실 출고" }), h("th", { class: "num", text: "십자가 출고" }), h("th", { class: "num", title: "요청수량 − 교육물량 (둘 다 있는 일정만)", text: "차액" })])),
           h("tbody", {}, rows.map(row))
         ])) : h("p", { class: "muted", text: "아직 연결된 방문 일정이 없어요." }),
-        visits.length ? h("p", { class: "muted small", text: "요청수량·교육물량을 고치면 바로 저장되고, 고친 사람 이름이 함께 남아요. 교육물량은 교육 때 쓰거나 나눈 물량이에요. 차액은 요청수량 − 교육물량을 자동으로 계산해요(+는 덜 전달, −는 더 전달)." }) : null
+        visits.length ? h("p", { class: "muted small", text: "요청수량·교육물량을 고치면 바로 저장되고, 고친 사람 이름이 함께 남아요. 교육물량은 교육 때 쓰거나 나눈 물량이에요. 차액은 요청수량 − 교육물량을 자동으로 계산해요(+는 덜 전달, −는 더 전달). 실·십자가 출고는 출납 대장의 자른 실·십자가 수량이에요." }) : null
       );
     };
     draw();
@@ -5810,10 +5814,10 @@
     const rowAttrs = (fn) => ({ class: "stock-row", tabindex: "0", onclick: fn, onkeydown: (e) => { if (e.key === "Enter") fn(); } });
     const draw = () => {
       const scheduleView = schedules.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
-        h("thead", {}, h("tr", {}, ["번호", "날짜", "시간", "제목", "장소", "요청수량", "교육물량", "차액", "대상", "입력자"].map((x) => h("th", { text: x })))),
+        h("thead", {}, h("tr", {}, ["번호", "날짜", "시간", "제목", "장소", "요청수량", "교육물량", "실 출고", "십자가 출고", "차액", "대상", "입력자"].map((x) => h("th", { text: x })))),
         h("tbody", {}, schedules.map((s, i) => h("tr", rowAttrs(() => scheduleDialog(s)), [
           h("td", { class: "num muted", text: String(i + 1) }),
-          h("td", { class: "nowrap", text: volDay(s.date) }), h("td", { class: "nowrap", text: volTime(s) || "-" }), h("td", { text: s.title }), h("td", { text: s.place || "-" }), h("td", { class: "nowrap num", text: s.qty != null ? fmtN(s.qty) : "-" }), h("td", { class: "nowrap num", text: s.eduQty != null ? fmtN(s.eduQty) : "-" }), h("td", { class: "nowrap num " + diffCls(qtyDiff(s)), text: diffText(qtyDiff(s)) }),
+          h("td", { class: "nowrap", text: volDay(s.date) }), h("td", { class: "nowrap", text: volTime(s) || "-" }), h("td", { text: s.title }), h("td", { text: s.place || "-" }), h("td", { class: "nowrap num", text: s.qty != null ? fmtN(s.qty) : "-" }), h("td", { class: "nowrap num", text: s.eduQty != null ? fmtN(s.eduQty) : "-" }), h("td", { class: "nowrap num", text: s.threadQty != null ? fmtN(s.threadQty) : "-" }), h("td", { class: "nowrap num", text: s.crossQty != null ? fmtN(s.crossQty) : "-" }), h("td", { class: "nowrap num " + diffCls(qtyDiff(s)), text: diffText(qtyDiff(s)) }),
           h("td", { text: s.audience === "all" ? "전체" : s.userIds.map((id) => vols.find((u) => u.id === id)?.name).filter(Boolean).join(", ") || "지정 없음" }),
           h("td", { class: "nowrap" }, s.byVolunteer ? [s.enteredBy, " ", h("span", { class: "stock-tag", text: "봉사자" })] : s.enteredBy || "-")
         ])))

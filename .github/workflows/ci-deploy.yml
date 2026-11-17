@@ -567,6 +567,9 @@ jobs:
           # 교육물량: 요청수량과 따로 저장(보낸 것만), 고친 사람이 남고, 직원 '봉사자 현황' 변동에 보임
           curl -fs -H "$VH" -XPATCH -d '{"eduQty":40}' $B/volunteer/schedules/$RV/qty | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).schedule;if(s.eduQty!==40||s.eduBy!=="봉사자일"||s.qty!==250)process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPATCH -d '{"eduQty":-5}' $B/volunteer/schedules/$RV/qty)" = 400
+          # 실·십자가 출고(출납 대장): 따로 저장, 보낸 것만 바뀌고 고친 사람이 남음
+          curl -fs -H "$VH" -XPATCH -d '{"threadQty":30,"crossQty":28}' $B/volunteer/schedules/$RV/qty | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).schedule;if(s.threadQty!==30||s.crossQty!==28||s.matBy!=="봉사자일"||s.eduQty!==40)process.exit(1)'
+          curl -fs -H "$VH" -XPATCH -d '{"crossQty":""}' $B/volunteer/schedules/$RV/qty | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).schedule;if(s.threadQty!==30||s.crossQty!==null)process.exit(1)'
           curl -fs -H "$H" $B/admin/vol-schedules | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).schedules.find(x=>x.id==='$RV');if(!s||s.eduQty!==40)process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPATCH -d '{"qty":1}' $B/volunteer/schedules/$RV/qty)" = 404
           curl -fs -H "$H" $B/admin/vol-schedules | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).schedules.find(x=>x.title==="묵주 교육 · 다");if(s.qty!==250||s.qtyBy!=="봉사자일")process.exit(1)'

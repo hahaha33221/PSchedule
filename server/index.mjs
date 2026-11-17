@@ -282,6 +282,7 @@ const q = {
   setVolSchedule: db.prepare("UPDATE vol_schedules SET title = ?, date = ?, start_time = ?, end_time = ?, place = ?, note = ?, audience = ?, qty = ?, project_item_id = ? WHERE id = ?"),
   setVolQty: db.prepare("UPDATE vol_schedules SET qty = ? WHERE id = ?"),
   markVolQty: db.prepare("UPDATE vol_schedules SET qty_by = ?, qty_at = datetime('now') WHERE id = ?"),
+  setVolMat: db.prepare("UPDATE vol_schedules SET thread_qty = ?, cross_qty = ?, mat_by = ?, mat_at = datetime('now') WHERE id = ?"),
   setVolEdu: db.prepare("UPDATE vol_schedules SET edu_qty = ?, edu_by = ?, edu_at = datetime('now') WHERE id = ?"),
   delVolSchedule: db.prepare("DELETE FROM vol_schedules WHERE id = ?"),
   volRecords: db.prepare("SELECT r.*, u.name AS author FROM vol_records r LEFT JOIN users u ON u.id = r.created_by WHERE r.item_id = ? AND r.kind = ? ORDER BY r.date DESC, r.id DESC"),
@@ -1134,7 +1135,7 @@ function volLedgerProject(l) {
   return p && volItems(p).shown.has(l.item_id) ? p : null;
 }
 const volItemOut = (i, shown) => ({ id: i.id, parentId: shown.has(i.parent_id) ? i.parent_id : null, kind: i.kind, name: i.name, status: i.status, dueDate: i.due_date, note: i.note });
-const volScheduleOut = (s) => ({ id: s.id, title: s.title, date: s.date, startTime: s.start_time, endTime: s.end_time, place: s.place, note: s.note, qty: s.qty, qtyBy: s.qty_by, qtyAt: s.qty_at, eduQty: s.edu_qty ?? null, eduBy: s.edu_by || "", eduAt: s.edu_at || null, project: !!s.project_item_id, itemId: s.project_item_id || null });
+const volScheduleOut = (s) => ({ id: s.id, title: s.title, date: s.date, startTime: s.start_time, endTime: s.end_time, place: s.place, note: s.note, qty: s.qty, qtyBy: s.qty_by, qtyAt: s.qty_at, eduQty: s.edu_qty ?? null, eduBy: s.edu_by || "", eduAt: s.edu_at || null, threadQty: s.thread_qty ?? null, crossQty: s.cross_qty ?? null, matBy: s.mat_by || "", matAt: s.mat_at || null, project: !!s.project_item_id, itemId: s.project_item_id || null });
 // 봉사자에게 보이는 '묵주' 묶음 (방문 일정을 이 묶음에 연결)
 function rosaryGroupId() {
   for (const p of volProjectsShown()) {
@@ -1176,6 +1177,7 @@ function volGroupStatus(p, g) {
     ...ledgers.flatMap((l) => q.stockHistoryRecent.all(l.id).map((h) => ({ at: h.created_at, who: h.user_name, volunteer: !!h.by_volunteer, kind: "stock", where: l.name, ledgerId: l.id, what: h.summary }))),
     ...visits.filter((s) => s.qty_at).map((s) => ({ at: s.qty_at, who: s.qty_by, volunteer: volNames.has(s.qty_by), kind: "qty", where: s.title, what: `요청수량 ${s.qty ?? "(없음)"}` })),
     ...visits.filter((s) => s.edu_at).map((s) => ({ at: s.edu_at, who: s.edu_by, volunteer: volNames.has(s.edu_by), kind: "edu", where: s.title, what: `교육물량 ${s.edu_qty ?? "(없음)"}` })),
+    ...visits.filter((s) => s.mat_at).map((s) => ({ at: s.mat_at, who: s.mat_by, volunteer: volNames.has(s.mat_by), kind: "mat", where: s.title, what: `실 출고 ${s.thread_qty ?? "-"} · 십자가 출고 ${s.cross_qty ?? "-"}` })),
     ...records.map((r) => ({ at: r.updated_at, who: r.author || "", volunteer: true, kind: r.kind, where: r.kind === "material" ? "원자재 보유물량" : "제품 회수물량", what: `${r.date} ${r.name || ""} ${r.qty}`.trim() }))
   ].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 60);
   const latest = new Map();
@@ -1188,7 +1190,7 @@ function volGroupStatus(p, g) {
   return {
     id: g.id, name: g.name,
     ledgers: ledgers.map((l) => ({ id: l.id, name: l.name, unit: l.unit, contract: l.contract, inTotal: l.in_total, outTotal: l.out_total })),
-    visits: visits.map((s) => ({ id: s.id, date: s.date, startTime: s.start_time, title: s.title, place: s.place, qty: s.qty, qtyBy: s.qty_by, qtyAt: s.qty_at, eduQty: s.edu_qty ?? null, eduBy: s.edu_by || "", eduAt: s.edu_at || null })),
+    visits: visits.map((s) => ({ id: s.id, date: s.date, startTime: s.start_time, title: s.title, place: s.place, qty: s.qty, qtyBy: s.qty_by, qtyAt: s.qty_at, eduQty: s.edu_qty ?? null, eduBy: s.edu_by || "", eduAt: s.edu_at || null, threadQty: s.thread_qty ?? null, crossQty: s.cross_qty ?? null, matBy: s.mat_by || "", matAt: s.mat_at || null })),
     requests: requests.map((r) => ({ id: r.id, no: r.no, org: r.org, date: r.req_date, time: r.req_time, qty: r.qty })),
     monthly: [...monthly.values()].sort((a, b) => a.month.localeCompare(b.month)),
     material: { total: [...latest.values()].reduce((n, r) => n + r.qty, 0), kinds: latest.size, count: records.filter((x) => x.kind === "material").length },
@@ -1481,9 +1483,11 @@ async function api(req, res, path) {
       // 요청수량(qty)·교육물량(eduQty) 중 보낸 것만 고침
       const b = await readJson(req);
       const qty = has(b, "qty") ? volQtyInput(b.qty) : s.qty, edu = has(b, "eduQty") ? volQtyInput(b.eduQty) : s.edu_qty ?? null;
+      const th = has(b, "threadQty") ? volQtyInput(b.threadQty) : s.thread_qty ?? null, cr = has(b, "crossQty") ? volQtyInput(b.crossQty) : s.cross_qty ?? null;
       inTx(() => {
         if (qty !== s.qty) { q.setVolQty.run(qty, s.id); q.markVolQty.run(user.name, s.id); }
         if (edu !== (s.edu_qty ?? null)) q.setVolEdu.run(edu, user.name, s.id);
+        if (th !== (s.thread_qty ?? null) || cr !== (s.cross_qty ?? null)) q.setVolMat.run(th, cr, user.name, s.id);
       });
       return send(res, 200, { schedule: { ...volScheduleOut(q.volSchedule.get(s.id)), mine: s.created_by === user.id } });
     }
@@ -2398,6 +2402,7 @@ async function api(req, res, path) {
         const id = Number(q.addVolSchedule.run(...fields, user.id).lastInsertRowid);
         if (fields[7] !== null) q.markVolQty.run(user.name, id);
         if (edu !== null) q.setVolEdu.run(edu, user.name, id);
+        if (has(b2, "threadQty") || has(b2, "crossQty")) q.setVolMat.run(has(b2, "threadQty") ? volQtyInput(b2.threadQty) : null, has(b2, "crossQty") ? volQtyInput(b2.crossQty) : null, user.name, id);
         for (const u of users) q.addVolScheduleUser.run(id, u);
         return id;
       });
@@ -2415,6 +2420,10 @@ async function api(req, res, path) {
           q.setVolSchedule.run(...fields, s.id);
           if (fields[7] !== s.qty) q.markVolQty.run(user.name, s.id);
           if (has(b2, "eduQty")) { const e = volQtyInput(b2.eduQty); if (e !== (s.edu_qty ?? null)) q.setVolEdu.run(e, user.name, s.id); }
+          if (has(b2, "threadQty") || has(b2, "crossQty")) {
+            const th = has(b2, "threadQty") ? volQtyInput(b2.threadQty) : s.thread_qty ?? null, cr = has(b2, "crossQty") ? volQtyInput(b2.crossQty) : s.cross_qty ?? null;
+            if (th !== (s.thread_qty ?? null) || cr !== (s.cross_qty ?? null)) q.setVolMat.run(th, cr, user.name, s.id);
+          }
           q.clearVolScheduleUsers.run(s.id);
           for (const u of users) q.addVolScheduleUser.run(s.id, u);
         });
