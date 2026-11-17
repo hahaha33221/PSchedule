@@ -399,6 +399,16 @@ function addUnitColumns(db) {
       created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    -- 입출고 기록 사진 (영수증·현장 사진, 기록당 4장까지, 브라우저에서 줄여 올림)
+    CREATE TABLE IF NOT EXISTS stock_move_photos (
+      id         INTEGER PRIMARY KEY,
+      move_id    INTEGER NOT NULL REFERENCES stock_moves(id) ON DELETE CASCADE,
+      mime       TEXT NOT NULL,
+      data       BLOB NOT NULL,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS stock_move_photos_move ON stock_move_photos (move_id);
     CREATE TABLE IF NOT EXISTS stock_qty (
       move_id   INTEGER NOT NULL REFERENCES stock_moves(id) ON DELETE CASCADE,
       option_id INTEGER NOT NULL REFERENCES stock_options(id) ON DELETE CASCADE,
@@ -503,6 +513,7 @@ function addUnitColumns(db) {
   `);
   // '오늘' 화면에서 모아 볼 개인 검색어 (공통 검색어는 서버 코드에)
   if (!has("users", "today_keywords")) db.exec("ALTER TABLE users ADD COLUMN today_keywords TEXT NOT NULL DEFAULT '[]'");
+  if (!has("stock_moves", "issue")) db.exec("ALTER TABLE stock_moves ADD COLUMN issue TEXT NOT NULL DEFAULT ''"); // 입출고 이슈 (문제가 된 점)
   if (!has("users", "today_excludes")) db.exec("ALTER TABLE users ADD COLUMN today_excludes TEXT NOT NULL DEFAULT '[]'"); // 이름으로 모아 보기 제외어
   // 항목 수량 (관리자 전용으로 시작)
   if (!has("project_items", "qty")) db.exec("ALTER TABLE project_items ADD COLUMN qty INTEGER");

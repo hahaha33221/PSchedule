@@ -483,6 +483,21 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/admin/vol-stock-moves)" = 403
           # 수정 기록: 추가·수정 내용과 사람이 남고, 봉사자 응답에는 없음. 바뀐 것 없는 저장은 안 남음
           curl -fs -H "$H" $B/stock/$VL | node -e 'const h=JSON.parse(require("fs").readFileSync(0)).history;const e=h.find(x=>x.action==="edit");const a=h.filter(x=>x.action==="add");if(!e||e.by!=="봉사자일"||!e.summary.includes("7 → 8")||!e.at||a.length!==2||!h.some(x=>x.action==="ledger"))process.exit(1)'
+          # 기록 이슈·사진: 이슈는 고칠 때 남고, 사진은 자기 기록에만 올림(형식 검사, 4장까지), 다른 봉사자는 보기만, 직원은 보고 지움
+          curl -fs -H "$VH" -XPATCH -d '{"issue":"10개 중 2개 불량"}' $B/volunteer/stock-moves/$VM | grep -q '"issue":"10개 중 2개 불량"'
+          PNG=iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==
+          PH=$(curl -fs -H "$VH" -XPOST -d "{\"data\":\"$PNG\"}" $B/volunteer/stock-moves/$VM/photos | node -pe 'const d=JSON.parse(require("fs").readFileSync(0));const m=d.moves.find(x=>x.id==='$VM');if(m.photos.length!==1)process.exit(1);m.photos[0]')
+          test "$(curl -s -o /dev/null -w '%{content_type}' -H "$VH" $B/volunteer/stock-photos/$PH)" = "image/png"
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A9")" $B/volunteer/stock-photos/$PH)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A9")" -XDELETE $B/volunteer/stock-photos/$PH)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d "{\"data\":\"$PNG\"}" $B/volunteer/stock-moves/$SM/photos)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d '{"data":"aGVsbG8="}' $B/volunteer/stock-moves/$VM/photos)" = 400
+          for i in 1 2 3; do curl -fs -H "$VH" -XPOST -d "{\"data\":\"$PNG\"}" $B/volunteer/stock-moves/$VM/photos >/dev/null; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d "{\"data\":\"$PNG\"}" $B/volunteer/stock-moves/$VM/photos)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" $B/stock-photos/$PH)" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/stock-photos/$PH)" = 404
+          curl -fs -H "$H" -XDELETE $B/stock-photos/$PH | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.moves.find(x=>x.id==='$VM').photos.length!==3||!d.history.some(h=>h.summary.includes("사진 삭제")))process.exit(1)'
+          J="{\"type\":\"in\",\"date\":\"2030-03-03\",\"issue\":\"박스 파손\",\"qty\":{\"$VO\":1}}"; curl -fs -H "$H" -XPOST -d "$J" $B/stock/$VL/moves | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const m=d.moves.find(x=>x.id===d.newMoveId);if(!m||m.issue!=="박스 파손")process.exit(1)'
           if curl -fs -H "$VH" $B/volunteer/stock/$VL | grep -q '"history"'; then echo "봉사자 응답에 수정 기록이 있어요"; exit 1; fi
           HN=$(curl -fs -H "$H" $B/stock/$VL | node -pe 'JSON.parse(require("fs").readFileSync(0)).history.length')
           J="{\"qty\":{\"$VO\":8}}"; curl -fs -H "$VH" -XPATCH -d "$J" $B/volunteer/stock-moves/$VM >/dev/null

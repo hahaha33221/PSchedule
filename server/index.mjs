@@ -330,6 +330,12 @@ const q = {
   addStockMove: db.prepare("INSERT INTO stock_moves (ledger_id, type, date, handler, note, created_by) VALUES (?, ?, ?, ?, ?, ?)"),
   setStockMove: db.prepare("UPDATE stock_moves SET date = ?, handler = ?, note = ? WHERE id = ?"),
   delStockMove: db.prepare("DELETE FROM stock_moves WHERE id = ?"),
+  setMoveIssue: db.prepare("UPDATE stock_moves SET issue = ? WHERE id = ?"),
+  photoIdsOfLedger: db.prepare("SELECT p.id, p.move_id FROM stock_move_photos p JOIN stock_moves m ON m.id = p.move_id WHERE m.ledger_id = ? ORDER BY p.id"),
+  photoCount: db.prepare("SELECT count(*) AS n FROM stock_move_photos WHERE move_id = ?"),
+  photo: db.prepare("SELECT * FROM stock_move_photos WHERE id = ?"),
+  addPhoto: db.prepare("INSERT INTO stock_move_photos (move_id, mime, data, created_by) VALUES (?, ?, ?, ?)"),
+  delPhoto: db.prepare("DELETE FROM stock_move_photos WHERE id = ?"),
   stockQtyOfMove: db.prepare("SELECT option_id, qty FROM stock_qty WHERE move_id = ?"),
   addStockHistory: db.prepare("INSERT INTO stock_history (ledger_id, action, summary, user_id, user_name) VALUES (?, ?, ?, ?, ?)"),
   stockHistory: db.prepare("SELECT * FROM stock_history WHERE ledger_id = ? ORDER BY id DESC LIMIT 100"),
@@ -1231,12 +1237,14 @@ function ledgerOut(l, p, user) {
   const qty = new Map();
   for (const r of q.stockQtyOfLedger.all(l.id)) { if (!qty.has(r.move_id)) qty.set(r.move_id, {}); qty.get(r.move_id)[r.option_id] = r.qty; }
   const item = q.projectItem.get(l.item_id);
+  const photos = new Map();
+  for (const r of q.photoIdsOfLedger.all(l.id)) { if (!photos.has(r.move_id)) photos.set(r.move_id, []); photos.get(r.move_id).push(r.id); }
   return {
     ledger: { id: l.id, name: l.name, unit: l.unit, inLabel: l.in_label, outLabel: l.out_label, contract: l.contract, after: JSON.parse(l.after), canDelete: user.role === "admin" || p.created_by === user.id, volunteerEntry: !!volLedgerProject(l) },
     project: { id: p.id, name: p.name, unitId: p.unit_id }, itemName: item.name,
     options: q.stockOptions.all(l.id),
     moves: q.stockMoves.all(l.id).map((m) => ({
-      id: m.id, type: m.type, date: m.date, handler: m.handler, note: m.note, qty: qty.get(m.id) || {}, mine: m.created_by === user.id,
+      id: m.id, type: m.type, date: m.date, handler: m.handler, note: m.note, issue: m.issue || "", photos: photos.get(m.id) || [], qty: qty.get(m.id) || {}, mine: m.created_by === user.id,
       ...(user.volunteer ? {} : { enteredBy: (m.created_by && q.userById.get(m.created_by)?.name) || "" }) // 입력한 사람: 직원 화면만
     })),
     ...(user.volunteer ? {} : { history: q.stockHistory.all(l.id).map((h) => ({ id: h.id, action: h.action, summary: h.summary, by: h.user_name, at: h.created_at })) }) // 수정 기록: 직원 화면만
@@ -1256,14 +1264,32 @@ const qtyText = (qty, names) => [...qty].filter(([, n]) => n).map(([o, n]) => `$
 const changeText = (label, a, b) => (String(a ?? "") === String(b ?? "") ? null : `${label} ${a === "" || a == null ? "(없음)" : a} → ${b === "" || b == null ? "(없음)" : b}`);
 function addStockMoveFrom(l, b, user) {
   if (b.type !== "in" && b.type !== "out") throw bad("입고·출고를 골라 주세요.");
-  const date = text(b.date, 20, "날짜", true), handler = text(b.handler, 40, "전달자"), note = text(b.note, 500, "비고");
+  const date = text(b.date, 20, "날짜", true), handler = text(b.handler, 40, "전달자"), note = text(b.note, 500, "비고"), issue = text(b.issue, 500, "이슈");
   const rows = stockQtyInput(l.id, b.qty);
-  inTx(() => {
+  return inTx(() => {
     const id = Number(q.addStockMove.run(l.id, b.type, date, handler, note, user.id).lastInsertRowid);
     for (const [o, n] of rows) q.addStockQty.run(id, o, n);
-    logStock(l.id, "add", `${moveKind(b)} 추가 (${date}): ${qtyText(moveQty(id), optionNames(l.id))}`, user);
+    if (issue) q.setMoveIssue.run(issue, id);
+    logStock(l.id, "add", `${moveKind(b)} 추가 (${date}): ${qtyText(moveQty(id), optionNames(l.id))}${issue ? ` · 이슈: ${issue}` : ""}`, user);
+    return id;
   });
 }
+// 기록 사진: 줄여 올린 JPG·PNG·WEBP 만, 기록당 4장까지
+const MOVE_PHOTO_MAX = 4;
+function addMovePhoto(m, l, b, user) {
+  const buf = Buffer.from(String(b.data || ""), "base64");
+  if (!buf.length) throw bad("사진을 골라 주세요.");
+  if (buf.length > ITEM_IMAGE_MAX) throw bad("사진이 너무 커요.");
+  const mime = imageMime(buf);
+  if (!mime) throw bad("JPG, PNG, WEBP 사진만 올릴 수 있어요.");
+  if (q.photoCount.get(m.id).n >= MOVE_PHOTO_MAX) throw bad(`사진은 기록마다 ${MOVE_PHOTO_MAX}장까지 올릴 수 있어요.`);
+  inTx(() => { q.addPhoto.run(m.id, mime, buf, user.id); logStock(l.id, "photo", `${moveKind(m)} 사진 추가 (${m.date})`, user); });
+}
+function sendPhoto(res, ph) {
+  res.writeHead(200, { "Content-Type": ph.mime, "Content-Length": ph.data.length, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'" });
+  return res.end(Buffer.from(ph.data));
+}
+function delMovePhoto(ph, m, l, user) { inTx(() => { q.delPhoto.run(ph.id); logStock(l.id, "photo", `${moveKind(m)} 사진 삭제 (${m.date})`, user); }); }
 function deleteStockMoveBy(m, l, user) {
   inTx(() => {
     logStock(l.id, "delete", `${moveKind(m)} 삭제 (${m.date}): ${qtyText(moveQty(m.id), optionNames(l.id))}`, user);
@@ -1272,14 +1298,16 @@ function deleteStockMoveBy(m, l, user) {
 }
 function patchStockMoveFrom(m, l, b, user) {
   const date = text(has(b, "date") ? b.date : m.date, 20, "날짜", true), handler = text(has(b, "handler") ? b.handler : m.handler, 40, "전달자"), note = text(has(b, "note") ? b.note : m.note, 500, "비고");
+  const issue = text(has(b, "issue") ? b.issue : m.issue, 500, "이슈");
   const rows = has(b, "qty") ? stockQtyInput(l.id, b.qty) : null;
   inTx(() => {
     const before = moveQty(m.id), names = optionNames(l.id);
     q.setStockMove.run(date, handler, note, m.id);
+    q.setMoveIssue.run(issue, m.id);
     if (rows) { q.clearStockQty.run(m.id); for (const [o, n] of rows) q.addStockQty.run(m.id, o, n); }
     const after = moveQty(m.id);
     const changes = [
-      changeText("날짜", m.date, date), changeText("전달자", m.handler, handler), changeText("비고", m.note, note),
+      changeText("날짜", m.date, date), changeText("전달자", m.handler, handler), changeText("비고", m.note, note), changeText("이슈", m.issue || "", issue),
       ...[...new Set([...before.keys(), ...after.keys()])].map((o) => changeText(names.get(o) || "품목", before.get(o) || 0, after.get(o) || 0))
     ].filter(Boolean);
     if (changes.length) logStock(l.id, "edit", `${moveKind(m)} 수정 (${m.date}): ${changes.join(", ")}`, user);
@@ -1427,8 +1455,33 @@ async function api(req, res, path) {
       const l = q.ledger.get(Number(vstm[1]));
       const p = volLedgerProject(l);
       if (!p) throw notFound("입출고 현황");
-      if (vstm[2] && method === "POST") { addStockMoveFrom(l, await readJson(req), user); return send(res, 201, ledgerOut(l, p, user)); }
+      if (vstm[2] && method === "POST") { const newMoveId = addStockMoveFrom(l, await readJson(req), user); return send(res, 201, { ...ledgerOut(l, p, user), newMoveId }); }
       if (!vstm[2] && method === "GET") return send(res, 200, ledgerOut(l, p, user));
+      return send(res, 405, { error: "Method not allowed" });
+    }
+    // 기록 사진: 봉사자는 자기가 입력한 기록에만 올리고 지움, 보기는 그 대장을 볼 수 있으면
+    const vsmpm = path.match(/^\/api\/volunteer\/stock-moves\/(\d+)\/photos$/);
+    if (vsmpm && method === "POST") {
+      const m = q.stockMove.get(Number(vsmpm[1]));
+      const l = m && q.ledger.get(m.ledger_id);
+      const p = volLedgerProject(l);
+      if (!p) throw notFound("기록");
+      if (m.created_by !== user.id) return send(res, 403, { error: "직접 입력한 기록에만 사진을 올릴 수 있어요." });
+      addMovePhoto(m, l, await readJson(req), user);
+      return send(res, 201, ledgerOut(l, p, user));
+    }
+    const vsphm = path.match(/^\/api\/volunteer\/stock-photos\/(\d+)$/);
+    if (vsphm) {
+      const ph = q.photo.get(Number(vsphm[1]));
+      const m = ph && q.stockMove.get(ph.move_id);
+      const l = m && q.ledger.get(m.ledger_id);
+      const p = volLedgerProject(l);
+      if (!p) throw notFound("사진");
+      if (method === "GET") return sendPhoto(res, ph);
+      if (method === "DELETE") {
+        if (m.created_by !== user.id) return send(res, 403, { error: "직접 입력한 기록의 사진만 지울 수 있어요." });
+        delMovePhoto(ph, m, l, user); return send(res, 200, ledgerOut(l, p, user));
+      }
       return send(res, 405, { error: "Method not allowed" });
     }
     const vsmm = path.match(/^\/api\/volunteer\/stock-moves\/(\d+)$/);
@@ -2171,8 +2224,8 @@ async function api(req, res, path) {
     if (!p || !projectAllowed(user, p)) throw notFound("입출고 현황");
     if (stm[2]) {
       if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
-      addStockMoveFrom(l, await readJson(req), user);
-      return send(res, 201, ledgerOut(l, p, user));
+      const newMoveId = addStockMoveFrom(l, await readJson(req), user);
+      return send(res, 201, { ...ledgerOut(l, p, user), newMoveId });
     }
     if (method === "GET") return send(res, 200, ledgerOut(l, p, user));
     if (method === "PATCH") {
@@ -2199,6 +2252,27 @@ async function api(req, res, path) {
       q.delLedger.run(l.id);
       return send(res, 200, { projectId: p.id });
     }
+    return send(res, 405, { error: "Method not allowed" });
+  }
+  // 입출고 기록 사진: 그 대장을 볼 수 있는 직원이 올리고 보고 지움
+  const smpm = path.match(/^\/api\/stock-moves\/(\d+)\/photos$/);
+  if (smpm && method === "POST") {
+    const m = q.stockMove.get(Number(smpm[1]));
+    const l = m && q.ledger.get(m.ledger_id);
+    const p = l && q.project.get(q.projectItem.get(l.item_id).project_id);
+    if (!p || !projectAllowed(user, p)) throw notFound("기록");
+    addMovePhoto(m, l, await readJson(req), user);
+    return send(res, 201, ledgerOut(l, p, user));
+  }
+  const sphm = path.match(/^\/api\/stock-photos\/(\d+)$/);
+  if (sphm) {
+    const ph = q.photo.get(Number(sphm[1]));
+    const m = ph && q.stockMove.get(ph.move_id);
+    const l = m && q.ledger.get(m.ledger_id);
+    const p = l && q.project.get(q.projectItem.get(l.item_id).project_id);
+    if (!p || !projectAllowed(user, p)) throw notFound("사진");
+    if (method === "GET") return sendPhoto(res, ph);
+    if (method === "DELETE") { delMovePhoto(ph, m, l, user); return send(res, 200, ledgerOut(l, p, user)); }
     return send(res, 405, { error: "Method not allowed" });
   }
   const smm = path.match(/^\/api\/stock-moves\/(\d+)$/);

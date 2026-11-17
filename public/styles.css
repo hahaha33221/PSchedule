@@ -1641,3 +1641,14 @@ button.gantt__name:hover { background: var(--surface-2); }
   .vwbs__link { grid-column: 3; }
   .vwbs__row--head .vwbs__state, .vwbs__row--head .vwbs__link { display: none; }
 }
+/* 입출고 기록 사진·이슈 */
+.move-photos { display: flex; flex-wrap: wrap; gap: 8px; }
+.move-photos__item { position: relative; display: inline-block; }
+.move-photos__item.is-new .move-photo { outline: 2px dashed var(--primary); }
+.move-photo { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); }
+.move-photos--big { flex-direction: column; }
+.move-photo--big { width: 100%; height: auto; max-height: 70vh; object-fit: contain; }
+.move-photos__x { position: absolute; top: -6px; right: -6px; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 50%; background: var(--ink); color: var(--surface); cursor: pointer; }
+.move-photos__x svg { width: 12px; height: 12px; }
+.move-issue { color: var(--danger); }
+.move-photo-btn { gap: 4px; }

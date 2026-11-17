@@ -4648,6 +4648,19 @@
   async function pageStock(id, vol) {
     const base = vol ? `/volunteer/stock/${id}` : `/stock/${id}`;
     const moveUrl = (mid) => (vol ? `/volunteer/stock-moves/${mid}` : `/stock-moves/${mid}`);
+    const photoUrl = (pid) => (vol ? `/volunteer/stock-photos/${pid}` : `/stock-photos/${pid}`);
+    // 사진은 인증 머리말이 필요해서 받아 와 Blob 주소로 보여 줌
+    const photoCache = new Map();
+    const photoSrc = (pid) => { if (!photoCache.has(pid)) photoCache.set(pid, fetch(API + photoUrl(pid), { headers: { Authorization: "Bearer " + state.token } }).then((r) => (r.ok ? r.blob() : null)).then((b) => (b ? URL.createObjectURL(b) : null)).catch(() => null)); return photoCache.get(pid); };
+    const photoImg = (pid, cls) => { const img = h("img", { class: cls || "move-photo", alt: "기록 사진" }); photoSrc(pid).then((u) => { if (u) img.src = u; }); return img; };
+    const canEditMove = (m) => !vol || m.mine;
+    function viewPhotos(m) {
+      openDialog(`${m.type === "in" ? "입고" : "출고"} 사진 · ${m.date}`, h("div", { class: "stack" }, [
+        h("div", { class: "move-photos move-photos--big" }, m.photos.map((pid) => h("a", { href: "#", onclick: (e) => { e.preventDefault(); photoSrc(pid).then((u) => { if (u) window.open(u, "_blank", "noopener"); }); } }, photoImg(pid, "move-photo move-photo--big")))),
+        m.issue ? h("p", { class: "move-issue", text: `이슈: ${m.issue}` }) : null
+      ]));
+    }
+    const PHOTO_MAX = 4;
     const listHash = vol ? "#/vstock" : "#/stock";
     const put = (kids) => (vol ? vol.show(kids) : setMain("stock", kids));
     if (!vol) { drawMini(null); setMain("stock", loading()); }
@@ -4663,6 +4676,34 @@
       const leftOf = (oid) => data.moves.reduce((n, x) => (m && x.id === m.id ? n : n + (x.type === "in" ? qtyOf(x, oid) : -qtyOf(x, oid))), 0); // 이 기록을 뺀 재고
       const handler = h("input", { value: m?.handler ?? (vol && type === "out" ? state.user.name : ""), maxlength: "40" });
       const note = h("textarea", { rows: "2", maxlength: "500" }, m?.note || "");
+      const issue = h("textarea", { rows: "2", maxlength: "500", placeholder: "예: 10개 중 2개 불량, 박스 파손, 수량 부족" }, m?.issue || "");
+      // 사진: 고른 사진은 바로 줄여 두고 저장할 때 올림. 봉사자가 새로 넣을 때는 1장 이상
+      const needPhoto = !!vol && !m;
+      const pending = [];
+      let kept = m ? [...m.photos] : [];
+      const photoBox = h("div", { class: "move-photos" });
+      const fileIn = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
+      const pickBtn = h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => fileIn.click() }, [icon("plus"), type === "in" ? "영수증·사진 추가" : "사진 추가"]);
+      const drawPhotos = () => {
+        photoBox.replaceChildren(
+          ...kept.map((pid) => h("span", { class: "move-photos__item" }, [photoImg(pid), m && canEditMove(m) ? h("button", { class: "move-photos__x", type: "button", "aria-label": "사진 지우기", html: ICON.close, onclick: async () => {
+            if (!confirm("이 사진을 지울까요?")) return;
+            const r = await act(() => api(photoUrl(pid), { method: "DELETE" }));
+            kept = kept.filter((x) => x !== pid); data = r; drawPhotos();
+          } }) : null])),
+          ...pending.map((b, i) => h("span", { class: "move-photos__item is-new" }, [h("img", { class: "move-photo", alt: "올릴 사진", src: URL.createObjectURL(b) }), h("button", { class: "move-photos__x", type: "button", "aria-label": "고른 사진 빼기", html: ICON.close, onclick: () => { pending.splice(i, 1); drawPhotos(); } })]))
+        );
+        pickBtn.hidden = kept.length + pending.length >= PHOTO_MAX;
+      };
+      fileIn.addEventListener("change", async () => {
+        const files = [...fileIn.files]; fileIn.value = "";
+        for (const f of files) {
+          if (kept.length + pending.length >= PHOTO_MAX) { showError(err, `사진은 ${PHOTO_MAX}장까지 올릴 수 있어요.`); break; }
+          try { pending.push(await shrinkImage(f)); showError(err, ""); } catch (ex) { showError(err, ex.message); }
+        }
+        drawPhotos();
+      });
+      drawPhotos();
       const sum = h("strong");
       const inputs = data.options.map((o) => ({ o, el: h("input", { type: "number", min: "0", inputmode: "numeric", value: m?.qty[o.id] || "", "aria-label": o.name, oninput: () => drawSum() }) }));
       const drawSum = () => { sum.textContent = `합계 ${fmtN(inputs.reduce((n, x) => n + (Number(x.el.value) || 0), 0))} ${data.ledger.unit}`; };
@@ -4672,6 +4713,8 @@
         h("div", { class: "row2" }, [field(type === "in" ? "입고일" : "출고일", date), type === "out" ? field("전달자", handler) : null]),
         inputs.length ? h("div", { class: "stock-grid" }, inputs.map((x) => h("label", { class: "stock-grid__cell" }, [h("span", { class: "small", text: x.o.name }), x.el, h("span", { class: "muted stock-grid__left", text: `재고 ${fmtN(leftOf(x.o.id))}` })]))) : h("p", { class: "muted small", text: "먼저 1단계 기본 정보에서 품목 열을 추가해 주세요." }),
         sum, field("비고", note),
+        field("이슈 (문제가 된 점)", issue, "이 날짜·물량에 문제가 있었으면 적어 주세요. 나중에 모아서 업체에 보낼 수 있어요."),
+        h("div", { class: "field" }, [h("span", { class: "field__label", text: `${type === "in" ? "영수증·사진" : "출고 사진"}${needPhoto ? " (1장 이상)" : " (선택)"}` }), photoBox, h("div", {}, [pickBtn, fileIn]), h("small", { class: "muted", text: `${PHOTO_MAX}장까지, 올릴 때 자동으로 작게 줄여요.` })]),
         m?.enteredBy ? h("p", { class: "muted small", text: `입력: ${m.enteredBy}` }) : null,
         err,
         h("div", { class: "actions" }, [
@@ -4691,14 +4734,27 @@
             if (!inputs.some((x) => Number(x.el.value) > 0)) return showError(err, "수량을 하나 이상 적어 주세요.");
             const over = type === "out" ? inputs.filter((x) => Number(x.el.value) > leftOf(x.o.id)) : [];
             if (over.length && !confirm(`재고보다 많이 출고해요: ${over.map((x) => `${x.o.name} (재고 ${fmtN(leftOf(x.o.id))})`).join(", ")}\n그래도 저장할까요?`)) return;
+            if (needPhoto && !pending.length) return showError(err, type === "in" ? "영수증이나 사진을 1장 이상 올려 주세요." : "출고 사진을 1장 이상 올려 주세요.");
             const qty = Object.fromEntries(inputs.map((x) => [x.o.id, x.el.value]));
-            const body = { date: date.value, handler: handler.value, note: note.value, qty };
-            const r = await api(m ? moveUrl(m.id) : `${base}/moves`, { method: m ? "PATCH" : "POST", body: m ? body : { ...body, type } });
+            const body = { date: date.value, handler: handler.value, note: note.value, issue: issue.value, qty };
+            let r = await api(m ? moveUrl(m.id) : `${base}/moves`, { method: m ? "PATCH" : "POST", body: m ? body : { ...body, type } });
+            const mid = m ? m.id : r.newMoveId;
+            for (const b of pending) r = await api(`${moveUrl(mid)}/photos`, { method: "POST", body: { data: await blobToBase64(b) } });
             closeDialog(); apply(r);
           } catch (ex) { showError(err, ex.message); }
         });
       });
       openDialog(`${type === "in" ? "입고" : "출고"} ${m ? "고치기" : "추가"}`, form);
+    }
+    // 이슈가 있는 기록을 CSV 로 (업체에 메일로 보낼 때). 엑셀에서 수식으로 실행되지 않게 막음
+    function exportIssues() {
+      const { ledger: l, options, moves } = data;
+      const esc = (raw) => { const v = /^[=+\-@\t\r]/.test(String(raw)) ? `'${raw}` : String(raw); return /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v; };
+      const lines = [["구분", "날짜", ...options.map((o) => o.name), "합계", "전달자", "비고", "이슈", "사진 수", "입력자"]];
+      for (const m of moves.filter((x) => x.issue)) lines.push([m.type === "in" ? "입고" : "출고", m.date, ...options.map((o) => m.qty[o.id] || 0), Object.values(m.qty).reduce((a, b) => a + b, 0), m.handler, m.note, m.issue, m.photos.length, m.enteredBy || ""]);
+      const blob = new Blob(["\ufeff" + lines.map((r) => r.map(esc).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+      const a = h("a", { href: URL.createObjectURL(blob), download: `${l.name}_이슈_${today()}.csv` });
+      document.body.append(a); a.click(); a.remove();
     }
     function draw() {
       const { ledger: l, options, moves } = data;
@@ -4719,17 +4775,23 @@
           return h("tr", rowAttrs, [
             h("td", { class: "num muted", text: String(i + 1) }), h("td", { class: "nowrap", text: m.date }),
             ...options.map((o) => num(m.qty[o.id])), num(day, "stock-strong"), num(running),
-            isOut ? h("td", { text: m.handler || "-" }) : null, h("td", { class: "stock-note", text: m.note }), vol ? null : h("td", { class: "nowrap", text: m.enteredBy || "-" })
+            isOut ? h("td", { text: m.handler || "-" }) : null, h("td", { class: "stock-note", text: m.note }),
+            h("td", { class: "stock-note move-issue", text: m.issue || "" }),
+            h("td", { class: "nowrap" }, m.photos.length ? h("button", { class: "btn btn--ghost btn--sm move-photo-btn", type: "button", title: "사진 보기", onclick: (e) => { e.stopPropagation(); viewPhotos(m); } }, [icon("note"), String(m.photos.length)]) : h("span", { class: "muted", text: "-" })),
+            vol ? null : h("td", { class: "nowrap", text: m.enteredBy || "-" })
           ]);
         });
-        const colsAfter = (isOut ? 2 : 1) + (vol ? 0 : 1);
+        const colsAfter = (isOut ? 2 : 1) + 2 + (vol ? 0 : 1);
         return h("section", { class: "stock-sec" }, [
           h("div", { class: "card__head" }, [
             h("h2", { class: "card__title" }, [isOut ? "출고 현황 " : "입고 현황 ", h("span", { class: "muted small", text: isOut ? l.outLabel : l.inLabel })]),
-            h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => moveDialog(type) }, [icon("plus"), isOut ? "출고 추가" : "입고 추가"])
+            h("div", { class: "actions actions--start" }, [
+              !vol && list.some((m) => m.issue) ? h("button", { class: "btn btn--ghost btn--sm", type: "button", title: "이슈가 있는 기록만 엑셀(CSV)로", onclick: () => exportIssues() }, "이슈 내려받기") : null,
+              h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => moveDialog(type) }, [icon("plus"), isOut ? "출고 추가" : "입고 추가"])
+            ])
           ]),
           h("div", { class: "card table-wrap" }, h("table", { class: "table stock-table" }, [
-            h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "순번" }), h("th", { text: isOut ? "출고일" : "입고일" }), ...options.map((o) => h("th", { class: "num", text: o.name })), h("th", { class: "num", text: "일계" }), h("th", { class: "num", text: "누계" }), isOut ? h("th", { text: "전달자" }) : null, h("th", { text: "비고" }), vol ? null : h("th", { text: "입력자" })])),
+            h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "순번" }), h("th", { text: isOut ? "출고일" : "입고일" }), ...options.map((o) => h("th", { class: "num", text: o.name })), h("th", { class: "num", text: "일계" }), h("th", { class: "num", text: "누계" }), isOut ? h("th", { text: "전달자" }) : null, h("th", { text: "비고" }), h("th", { text: "이슈" }), h("th", { text: "사진" }), vol ? null : h("th", { text: "입력자" })])),
             h("tbody", {}, body.length ? body : h("tr", {}, h("td", { colspan: String(options.length + 4 + colsAfter), class: "muted empty", text: "아직 기록이 없어요." }))),
             h("tfoot", {}, [
               h("tr", {}, [h("th", { colspan: "2", text: "합계" }), ...options.map((o) => num(sumOf(type, o.id))), num(sumOf(type)), h("td", { colspan: String(1 + colsAfter) })]),
@@ -5440,7 +5502,9 @@
           moves.length ? h("ul", { class: "vol-moves__list" }, moves.slice(0, 5).map((m) => h("li", {}, [
             h("span", { class: "nowrap", text: m.date ? shortDate(m.date) : "-" }),
             h("strong", { class: "num", text: `${fmtN(sumOf(m))} ${l.unit}` }),
-            h("span", { class: "muted small", text: [m.handler, m.note].filter(Boolean).join(" · ") })
+            h("span", { class: "muted small", text: [m.handler, m.note].filter(Boolean).join(" · ") }),
+            m.photos?.length ? h("span", { class: "muted small", text: `사진 ${m.photos.length}` }) : null,
+            m.issue ? h("span", { class: "move-issue small", title: m.issue, text: "이슈 있음" }) : null
           ]))) : h("p", { class: "muted small", text: `아직 ${label} 기록이 없어요.` }),
           moves.length > 5 ? h("a", { class: "link-btn small", href: `#/vstock/${l.id}`, text: `${label} 기록 ${moves.length}건 모두 보기` }) : null
         ]);
