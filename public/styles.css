@@ -1725,3 +1725,8 @@ button.gantt__name:hover { background: var(--surface-2); }
 .qty-diff { font-weight: 700; font-variant-numeric: tabular-nums; }
 .qty-diff.is-over { color: var(--danger); }
 .vol-visits__table td, .vol-visits__table th { padding-left: 6px; padding-right: 6px; }
+.qty-diff.is-need { color: var(--ink); }
+.qty-diff.is-done { color: var(--c1, #2f9e44); font-weight: 600; }
+.vol-more__table td, .vol-more__table th { font-size: 13px; }
+.vol-visits__input summary { margin-top: 4px; }
+.vol-visits__input[open] > .vol-visits__bigs { margin: 8px 0; }
