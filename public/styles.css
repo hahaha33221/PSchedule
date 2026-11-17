@@ -1593,3 +1593,16 @@ button.gantt__name:hover { background: var(--surface-2); }
 .mine-hint { display: flex; align-items: center; gap: 4px; margin: -6px 0 0; }
 .mine-hint > .ic { display: inline-flex; }
 .mine-hint > .ic svg { width: 14px; height: 14px; }
+
+/* 봉사자 프로젝트 관리: WBS 틀, 입고·출고 칸 */
+.vol-wbs .gantt { max-height: none; border: 1px solid var(--line); border-radius: 10px; }
+.vol-wbs .wbs__name { width: 220px; cursor: default; }
+.vol-moves-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+.vol-moves--in .card__title { color: var(--primary); }
+.vol-moves--out .card__title { color: var(--danger); }
+.vol-moves__ledger { padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; }
+.vol-moves__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.vol-moves__head > .btn { margin-left: auto; }
+.vol-moves__list { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.vol-moves__list li { display: flex; align-items: baseline; gap: 10px; font-size: 13.5px; }
+.vol-moves__list .muted { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

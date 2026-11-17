@@ -4940,11 +4940,12 @@
       if (tab === "vprojects") {
         if (id) {
           const d = await api(`/volunteer/projects/${Number(id)}`);
-          return show(volProject(d, false, (await api("/volunteer/stock")).ledgers.filter((l) => l.projectId === d.project.id)));
+          const ls = (await api("/volunteer/stock")).ledgers.filter((l) => l.projectId === d.project.id);
+          return show(volProject(d, false, ls, await volLedgerDetails(ls)));
         }
         const { projects } = await api("/volunteer/projects");
         const { ledgers } = await api("/volunteer/stock");
-        if (projects.length === 1) return show(volProject(await api(`/volunteer/projects/${projects[0].id}`), true, ledgers)); // 하나면 바로
+        if (projects.length === 1) return show(volProject(await api(`/volunteer/projects/${projects[0].id}`), true, ledgers, await volLedgerDetails(ledgers))); // 하나면 바로
         return show(volProjects(projects));
       }
       const d = await api("/volunteer/home");
@@ -5162,7 +5163,7 @@
         ]);
       };
       fill(box,
-        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "묵주 방문 일정 · 수량" }), h("a", { class: "link-btn", href: "#/vschedule", text: "달력 보기" })]),
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "일정 관리" }), h("span", { class: "muted small", text: "묵주 방문 일정 · 수량" }), h("a", { class: "link-btn", href: "#/vschedule", text: "달력 보기" })]),
         visits.length ? h("div", { class: "vol-visits__sum" }, [
           h("span", {}, ["전체 ", h("strong", { text: fmtN(sum(visits)) })]),
           h("span", {}, ["다녀옴 ", h("strong", { text: fmtN(sum(past)) })]),
@@ -5179,7 +5180,70 @@
     draw();
     return box;
   }
-  function volProject({ project, items, visits = [] }, only, ledgers) {
+  // 대장마다 입출고 기록 (입고·출고 칸에 최근 기록을 보여 주려고)
+  const volLedgerDetails = (ls) => Promise.all(ls.map((l) => api(`/volunteer/stock/${l.id}`).catch(() => null)));
+  // WBS: 관리자 상세 프로세스와 같은 모양의 틀 (항목은 준비 중)
+  function volWbs(project, visits) {
+    const DAY = 86400000, WEEK_W = 24, t = today();
+    const dates = [t, ...visits.map((v) => v.date)].sort();
+    const mondayOf = (s) => { const d = parseYmd(s); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; };
+    const from = mondayOf(dates[0]);
+    const last = dates[dates.length - 1] > shiftYmd(t, 90) ? dates[dates.length - 1] : shiftYmd(t, 90);
+    const to = mondayOf(last); to.setDate(to.getDate() + 7);
+    const dayX = (s) => Math.round((parseYmd(s) - from) / DAY) * (WEEK_W / 7);
+    const width = (Math.round((to - from) / DAY) / 7) * WEEK_W;
+    const months = [];
+    for (const d = new Date(from.getFullYear(), from.getMonth(), 1); d < to; d.setMonth(d.getMonth() + 1)) {
+      months.push(h("span", { class: "gantt__month", style: `left:${Math.max(0, dayX(ymd(d)))}px`, text: d.getMonth() === 0 || !months.length ? `${String(d.getFullYear()).slice(2)}년 ${d.getMonth() + 1}월` : `${d.getMonth() + 1}월` }));
+    }
+    const todayLine = () => h("i", { class: "gantt__today", style: `left:${dayX(t)}px` });
+    const row = (level, code, name, sub) => h("div", { class: `gantt__row wbs-row wbs-row--${level}`, role: "row" }, [
+      h("div", { class: "gantt__name wbs__name", style: `padding-left:${8 + level * 12}px` }, [
+        h("span", { class: "wbs__chev" + (level === 0 ? " is-open" : ""), html: level === 0 ? ICON.right : "" }),
+        h("span", { class: "wbs__code", text: code }),
+        h("span", { class: "wbs__label" }, [h("span", { text: name }), sub ? h("small", { class: "muted", text: sub }) : null]),
+        h("span", { class: "wbs__pct muted", text: level === 0 ? "0%" : "-" })
+      ]),
+      h("div", { class: "gantt__track", style: `width:${width}px` }, todayLine())
+    ]);
+    const scroller = h("div", { class: "gantt vol-wbs__chart", role: "table" }, [
+      h("div", { class: "gantt__row gantt__row--head" }, [h("div", { class: "gantt__name gantt__name--head wbs__name" }, [h("span", { class: "wbs__chev" }), h("span", { class: "wbs__code", text: "WBS" }), h("span", { class: "wbs__label", text: "작업" }), h("span", { class: "wbs__pct", text: "진척" })]), h("div", { class: "gantt__track", style: `width:${width}px` }, [...months, todayLine()])]),
+      row(0, "1", project.name.includes("묵주") ? project.name : "묵주"),
+      row(1, "1.1", "단계", "준비 중")
+    ]);
+    requestAnimationFrame(() => { scroller.scrollLeft = Math.max(0, dayX(t) - 120); });
+    return h("section", { class: "card vol__card vol-wbs" }, [
+      h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "WBS" }), h("span", { class: "muted small", text: "진행 현황" })]),
+      scroller,
+      h("div", { class: "gantt__legend muted small" }, [["done", "완료"], ["doing", "진행"], ["todo", "예정"], ["hold", "보류"], ["late", "일정 지남"]].map(([k, t2]) => h("span", {}, [h("i", { class: `proc-bar--${k}` }), t2]))),
+      h("p", { class: "muted small", text: "WBS 항목은 준비 중이에요. 단계와 일정이 정해지면 여기에 진행 상황이 보여요." })
+    ]);
+  }
+  // 입고 칸·출고 칸: 대장마다 합계, 최근 기록, 입력 버튼
+  function volMoveCard(type, ledgers, details) {
+    const label = type === "in" ? "입고" : "출고";
+    const sumOf = (m) => Object.values(m.qty || {}).reduce((n, v) => n + (Number(v) || 0), 0);
+    return h("section", { class: `card vol__card vol-moves vol-moves--${type}` }, [
+      h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: label }), h("a", { class: "link-btn", href: "#/vstock", text: "전체 보기" })]),
+      ledgers.length ? h("div", { class: "stack stack--sm" }, ledgers.map((l, i) => {
+        const moves = ((details && details[i]?.moves) || []).filter((m) => m.type === type).sort((a, b) => (a.date < b.date ? 1 : -1));
+        return h("div", { class: "vol-moves__ledger" }, [
+          h("div", { class: "vol-moves__head" }, [
+            h("a", { href: `#/vstock/${l.id}` }, h("strong", { text: l.name })),
+            h("span", { class: "muted small", text: `${label} 합계 ${fmtN(type === "in" ? l.inTotal : l.outTotal)} ${l.unit} · 재고 ${fmtN(l.inTotal - l.outTotal)}` }),
+            h("a", { class: "btn btn--primary btn--sm", href: `#/vstock/${l.id}/${type}`, "aria-label": `${l.name} ${label} 입력`, text: `${label} 입력` })
+          ]),
+          moves.length ? h("ul", { class: "vol-moves__list" }, moves.slice(0, 5).map((m) => h("li", {}, [
+            h("span", { class: "nowrap", text: m.date ? shortDate(m.date) : "-" }),
+            h("strong", { class: "num", text: `${fmtN(sumOf(m))} ${l.unit}` }),
+            h("span", { class: "muted small", text: [m.handler, m.note].filter(Boolean).join(" · ") })
+          ]))) : h("p", { class: "muted small", text: `아직 ${label} 기록이 없어요.` }),
+          moves.length > 5 ? h("a", { class: "link-btn small", href: `#/vstock/${l.id}`, text: `${label} 기록 ${moves.length}건 모두 보기` }) : null
+        ]);
+      })) : h("p", { class: "muted", text: "아직 입력할 수 있는 대장이 없어요." })
+    ]);
+  }
+  function volProject({ project, items, visits = [] }, only, ledgers, details) {
     const kids = (pid) => items.filter((i) => i.parentId === pid);
     const itemRow = (i) => h("li", { class: "vol-item" }, [
       h("div", { class: "vol-item__head" }, [h("span", { text: i.name }), h("span", { class: `pj-st pj-st--${i.status}`, text: projectStatusLabel(i.status) }), i.dueDate ? h("span", { class: "muted small", text: `마감 ${shortDate(i.dueDate)}` }) : null]),
@@ -5203,11 +5267,9 @@
       h("p", { class: "muted small", text: `${project.name} › 묵주 · 항목은 읽기 전용` }),
       single?.note ? h("p", { class: "vol-pre muted", text: single.note }) : null,
       h("div", { class: "card vol__card" }, list(single ? single.id : null)),
+      volWbs(project, visits),
       volVisits(visits),
-      h("section", { class: "card vol__card vol-stock-card" }, [
-        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "입출고" }), h("a", { class: "link-btn", href: "#/vstock", text: "전체 보기" })]),
-        ledgers.length ? h("ul", { class: "vol-list" }, ledgers.map(volStockRow)) : h("p", { class: "muted", text: "아직 입력할 수 있는 대장이 없어요." })
-      ])
+      h("div", { class: "vol-moves-grid" }, [volMoveCard("in", ledgers, details), volMoveCard("out", ledgers, details)])
     ];
   }
 
