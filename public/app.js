@@ -3963,7 +3963,7 @@
       opts.compact ? null : h("details", { class: "vstat__more" }, [
         h("summary", {}, `요청수량 일정 (${g.visits.length}건)`),
         g.visits.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" }, [
-          h("thead", {}, h("tr", {}, ["번호", "날짜", "방문", "요청수량", "교육물량", "실 출고", "십자가 출고", "차액", "마지막 수정"].map((x) => h("th", { text: x })))),
+          h("thead", {}, h("tr", {}, ["번호", "날짜", "제작 수도회", "요청수량", "교육물량", "실 출고", "십자가 출고", "차액", "마지막 수정"].map((x) => h("th", { text: x })))),
           h("tbody", {}, g.visits.map((v, i) => h("tr", { class: v.date < t ? "is-past" : null }, [
             h("td", { class: "num muted", text: String(i + 1) }), h("td", { class: "nowrap", text: `${shortDate(v.date)}${v.startTime ? " " + v.startTime : ""}` }), h("td", { text: v.title.replace(/^묵주 교육 · /, "") + (v.place ? ` · ${v.place}` : "") }),
             h("td", { class: "num", text: v.qty != null ? fmtN(v.qty) : "-" }), h("td", { class: "num", text: v.eduQty != null ? fmtN(v.eduQty) : "-" }), h("td", { class: "num", text: v.threadQty != null ? fmtN(v.threadQty) : "-" }), h("td", { class: "num", text: v.crossQty != null ? fmtN(v.crossQty) : "-" }), h("td", { class: "num nowrap " + diffCls(qtyDiff(v)), text: diffText(qtyDiff(v)) }),
@@ -5584,18 +5584,42 @@
     ];
   }
   // 방문 일정·수량: 여기서 고친 수량이 달력에 그대로 보임
+  // 제목을 누르면 오름차순·내림차순 (같은 제목을 다시 누르면 방향이 바뀜)
+  function sortHead(cols, st, onChange) {
+    return h("thead", {}, h("tr", {}, cols.map(([key, label, cls, title]) => {
+      if (!key) return h("th", { class: cls || null, text: label });
+      const on = st.key === key;
+      return h("th", { class: (cls || "") + " sort-th", "aria-sort": on ? (st.dir > 0 ? "ascending" : "descending") : "none", title }, h("button", { type: "button", class: "sort-th__btn" + (on ? " is-on" : ""), onclick: () => { if (on) st.dir = -st.dir; else { st.key = key; st.dir = cls === "num" ? -1 : 1; } onChange(); } }, [label, h("span", { class: "sort-th__arrow", "aria-hidden": "true", text: on ? (st.dir > 0 ? "▲" : "▼") : "↕" })]));
+    })));
+  }
+  const sortBy = (list, st, getters) => {
+    const g = getters[st.key]; if (!g) return list;
+    return [...list].sort((a, b) => {
+      const x = g(a), y = g(b);
+      if (x == null && y == null) return 0; if (x == null) return 1; if (y == null) return -1; // 빈 값은 늘 아래
+      return (typeof x === "string" ? x.localeCompare(y, "ko") : x - y) * st.dir || a.date.localeCompare(b.date);
+    });
+  };
   function volVisits(visits, heading) {
     const box = h("section", { class: "card vol__card vol-visits" });
     let inputOpen = false; // 고친 뒤 다시 그려도 '수량 입력'이 펼친 채로
+    const moreSort = { key: "moreT", dir: -1 }, inSort = { key: "date", dir: 1 };
+    let qv = "";
+    const orgOf = (v) => v.title.split(" · ").pop();
+    const hit = (v) => !qv || `${orgOf(v)} ${v.place || ""}`.toLowerCase().replace(/\s/g, "").includes(qv.toLowerCase().replace(/\s/g, ""));
+    const getters = { org: orgOf, date: (v) => v.date, qty: (v) => v.qty, edu: (v) => v.eduQty, thread: (v) => v.threadQty, cross: (v) => v.crossQty, moreT: moreThread, moreC: moreCross, diff: qtyDiff };
+    // 검색 칸은 그대로 두고 아래만 다시 그림 (입력 중 커서가 빠지지 않게)
+    const search = h("label", { class: "search vol-visits__search" }, [icon("search"), h("input", { type: "search", placeholder: "제작 수도회·장소 검색", "aria-label": "제작 수도회·장소 검색", oninput: (e) => { qv = e.target.value.trim(); draw(); } })]);
+    const content = h("div", { class: "stack stack--sm" });
     const draw = () => {
       const sum = (rows, k = "qty") => rows.reduce((n, v) => n + (v[k] || 0), 0);
       const past = visits.filter((v) => v.date < today()), next = visits.filter((v) => v.date >= today());
       const empty = visits.filter((v) => v.qty == null).length;
       const whoOf = (v) => (v.note.match(/담당:\s*([^\n]+)/) || [])[1] || "";
-      // 칸 하나: 요청수량(qty) 또는 교육물량(eduQty). 고치면 바로 저장, 고친 사람 이름이 남음
+      // 칸 하나: 요청수량·교육물량·실·십자가 출고. 고치면 바로 저장, 고친 사람 이름이 남음
       const qtyCell = (v, key, label) => {
         const by = key === "qty" ? v.qtyBy : key === "eduQty" ? v.eduBy : v.matBy, at = key === "qty" ? v.qtyAt : key === "eduQty" ? v.eduAt : v.matAt;
-        const input = h("input", { type: "number", min: "0", inputmode: "numeric", class: "vol-visits__qty", value: v[key] ?? "", "aria-label": `${v.title} ${label}`, placeholder: "-" });
+        const input = h("input", { type: "number", min: "0", inputmode: "numeric", class: "vol-visits__qty", value: v[key] ?? "", "aria-label": `${orgOf(v)} ${label}`, placeholder: "-" });
         input.addEventListener("change", async () => {
           try {
             const r = await api(`/volunteer/schedules/${v.id}/qty`, { method: "PATCH", body: { [key]: input.value } });
@@ -5604,11 +5628,11 @@
         });
         return h("td", { class: "num" }, [input, by ? h("small", { class: "vol-visits__by muted", title: at || "", text: by }) : null]);
       };
-      const rows = [...next, ...past.reverse()];
+      const shown = visits.filter(hit);
       const row = (v, i) => h("tr", { class: v.date < today() ? "is-past" : null }, [
         h("td", { class: "num muted", text: String(i + 1) }),
         h("td", { class: "nowrap" }, [volDay(v.date), v.startTime ? h("small", { class: "muted", text: ` ${v.startTime}` }) : null]),
-        h("td", {}, [h("span", { text: v.title.split(" · ").pop() }), v.place ? h("small", { class: "muted", text: ` · ${v.place}` }) : null, whoOf(v) ? h("small", { class: "vol-visits__who muted", text: whoOf(v) }) : null]),
+        h("td", {}, [h("span", { text: orgOf(v) }), v.place ? h("small", { class: "muted", text: ` · ${v.place}` }) : null, whoOf(v) ? h("small", { class: "vol-visits__who muted", text: whoOf(v) }) : null]),
         qtyCell(v, "qty", "요청수량"),
         qtyCell(v, "eduQty", "교육물량"),
         qtyCell(v, "threadQty", "실 출고"),
@@ -5616,54 +5640,55 @@
         h("td", { class: "num nowrap " + diffCls(qtyDiff(v)), text: diffText(qtyDiff(v)) })
       ]);
       const big = (label, value, sub) => h("div", { class: "vol-visits__big" }, [h("span", { class: "muted small", text: label }), h("strong", { text: value }), sub ? h("span", { class: "muted small", text: sub }) : null]);
-      fill(box,
-        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: heading || "일정 관리" }), h("span", { class: "muted small", text: "방문 일정 · 수량" }), h("a", { class: "link-btn", href: "#/vschedule", text: "달력 보기" })]),
-        ...(() => {
-          if (!visits.length) return [];
-          const calc = visits.filter((v) => moreThread(v) != null || moreCross(v) != null);
-          const tSum = calc.reduce((n, v) => n + Math.max(0, moreThread(v) || 0), 0), cSum = calc.reduce((n, v) => n + Math.max(0, moreCross(v) || 0), 0);
-          const need = calc.filter((v) => (moreThread(v) || 0) > 0 || (moreCross(v) || 0) > 0);
-          const noRec = visits.filter((v) => v.qty != null && v.threadQty == null && v.crossQty == null);
-          const place = (v) => v.title.split(" · ").pop();
-          const cell = (d) => h("td", { class: "num nowrap " + (d == null ? "muted" : d > 0 ? "qty-diff is-need" : d < 0 ? "qty-diff is-over" : "qty-diff is-done"), text: d == null ? "-" : d > 0 ? fmtN(d) : d < 0 ? `−${fmtN(-d)} (더 보냄)` : "완료" });
-          const sorted = [...visits].sort((a, b) => (Math.max(moreThread(b) || 0, moreCross(b) || 0)) - (Math.max(moreThread(a) || 0, moreCross(a) || 0)) || a.date.localeCompare(b.date));
-          return [
-            h("div", { class: "vol-visits__bigs" }, [
-              big("추가 전달할 실", fmtN(tSum), "요청수량 − 실 출고 합계"),
-              big("추가 전달할 십자가", fmtN(cSum), "요청수량 − 십자가 출고 합계"),
-              big("더 보내야 할 수도회", `${need.length}곳`, `계산된 ${calc.length}곳 중 · 출고 기록 없음 ${noRec.length}곳`)
-            ]),
-            h("div", { class: "table-wrap" }, h("table", { class: "table vol-more__table" }, [
-              h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "번호" }), h("th", { text: "수도회(방문지)" }), h("th", { text: "교육일" }), h("th", { class: "num", text: "요청수량" }), h("th", { class: "num", text: "실 출고" }), h("th", { class: "num", text: "십자가 출고" }), h("th", { class: "num", text: "추가 전달 실" }), h("th", { class: "num", text: "추가 전달 십자가" })])),
-              h("tbody", {}, sorted.map((v, i) => h("tr", { class: v.qty == null ? "is-past" : null }, [
-                h("td", { class: "num muted", text: String(i + 1) }),
-                h("td", {}, [h("span", { text: place(v) }), v.place ? h("small", { class: "muted", text: ` · ${v.place}` }) : null]),
-                h("td", { class: "nowrap", text: shortDate(v.date) }),
-                h("td", { class: "num", text: v.qty != null ? fmtN(v.qty) : "-" }),
-                h("td", { class: "num", text: v.threadQty != null ? fmtN(v.threadQty) : "-" }),
-                h("td", { class: "num", text: v.crossQty != null ? fmtN(v.crossQty) : "-" }),
-                cell(moreThread(v)), cell(moreCross(v))
-              ])))
-            ])),
-            h("p", { class: "muted small", text: "추가 전달 물량 = 요청수량 − 실(십자가) 출고예요. 요청수량이나 출고 기록이 없으면 '-'로 보여요. 아래 '수량 입력'에서 값을 고치면 바로 다시 계산돼요." })
-          ];
-        })(),
-        visits.length ? h("details", { class: "vstat__more vol-visits__input", open: inputOpen, ontoggle: (e) => { inputOpen = e.currentTarget.open; } }, [h("summary", {}, `수량 입력 · 요청 · 교육 · 출고 (${visits.length}건)`),
+      const calc = visits.filter((v) => moreThread(v) != null || moreCross(v) != null);
+      const tSum = calc.reduce((n, v) => n + Math.max(0, moreThread(v) || 0), 0), cSum = calc.reduce((n, v) => n + Math.max(0, moreCross(v) || 0), 0);
+      const need = calc.filter((v) => (moreThread(v) || 0) > 0 || (moreCross(v) || 0) > 0);
+      const noRec = visits.filter((v) => v.qty != null && v.threadQty == null && v.crossQty == null);
+      const cell = (d) => h("td", { class: "num nowrap " + (d == null ? "muted" : d > 0 ? "qty-diff is-need" : d < 0 ? "qty-diff is-over" : "qty-diff is-done"), text: d == null ? "-" : d > 0 ? fmtN(d) : d < 0 ? `−${fmtN(-d)} (더 보냄)` : "완료" });
+      const moreRows = sortBy(shown, moreSort, getters);
+      const inRows = sortBy(shown, inSort, getters);
+      fill(content,
         h("div", { class: "vol-visits__bigs" }, [
-          big("총 방문", `${visits.length}건`, empty ? `수량 없음 ${empty}건` : null),
-          big("총 요청수량", fmtN(sum(visits)), `다녀옴 ${fmtN(sum(past))} · 남음 ${fmtN(sum(next))}`),
-          big("총 교육물량", fmtN(sum(visits, "eduQty")), `적은 일정 ${visits.filter((v) => v.eduQty != null).length}건`),
-          big("실 · 십자가 출고", `${fmtN(sum(visits, "threadQty"))} · ${fmtN(sum(visits, "crossQty"))}`, (() => { const w = visits.filter((v) => v.qty != null && v.threadQty != null); return w.length ? `보낼 남은 실 ${fmtN(w.reduce((n, v) => n + v.qty - v.threadQty, 0))} (요청 − 실 출고, ${w.length}건)` : "출고 기록 없음"; })()),
-          (() => { const both = visits.filter((v) => qtyDiff(v) != null), d = both.reduce((n, v) => n + qtyDiff(v), 0); return big("차액 (요청 − 교육)", diffText(both.length ? d : null), `둘 다 적힌 일정 ${both.length}건 · 덜 전달 ${both.filter((v) => qtyDiff(v) > 0).length} · 더 전달 ${both.filter((v) => qtyDiff(v) < 0).length}`); })()
+          big("추가 전달할 실", fmtN(tSum), "요청수량 − 실 출고 합계"),
+          big("추가 전달할 십자가", fmtN(cSum), "요청수량 − 십자가 출고 합계"),
+          big("더 보내야 할 제작 수도회", `${need.length}곳`, `계산된 ${calc.length}곳 중 · 출고 기록 없음 ${noRec.length}곳`)
         ]),
-        h("div", { class: "table-wrap" }, h("table", { class: "table vol-visits__table" }, [
-          h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "번호" }), h("th", { text: "날짜" }), h("th", { text: "방문" }), h("th", { class: "num", text: "요청수량" }), h("th", { class: "num", text: "교육물량" }), h("th", { class: "num", title: "출납 대장의 자른 실", text: "실 출고" }), h("th", { class: "num", text: "십자가 출고" }), h("th", { class: "num", title: "요청수량 − 교육물량 (둘 다 있는 일정만)", text: "차액" })])),
-          h("tbody", {}, rows.map(row))
-        ]))]) : h("p", { class: "muted", text: "아직 연결된 방문 일정이 없어요." }),
-        visits.length ? h("p", { class: "muted small", text: "요청수량·교육물량을 고치면 바로 저장되고, 고친 사람 이름이 함께 남아요. 교육물량은 교육 때 쓰거나 나눈 물량이에요. 차액은 요청수량 − 교육물량을 자동으로 계산해요(+는 덜 전달, −는 더 전달). 실·십자가 출고는 출납 대장의 자른 실·십자가 수량이에요." }) : null
+        qv ? h("p", { class: "muted small", text: `'${qv}' 검색: ${shown.length}곳` }) : null,
+        shown.length ? h("div", { class: "table-wrap" }, h("table", { class: "table vol-more__table" }, [
+          sortHead([[null, "번호", "num"], ["org", "제작 수도회"], ["date", "교육일"], ["qty", "요청수량", "num"], ["thread", "실 출고", "num"], ["cross", "십자가 출고", "num"], ["moreT", "추가 전달 실", "num", "요청수량 − 실 출고"], ["moreC", "추가 전달 십자가", "num", "요청수량 − 십자가 출고"]], moreSort, draw),
+          h("tbody", {}, moreRows.map((v, i) => h("tr", { class: v.qty == null ? "is-past" : null }, [
+            h("td", { class: "num muted", text: String(i + 1) }),
+            h("td", {}, [h("span", { text: orgOf(v) }), v.place ? h("small", { class: "muted", text: ` · ${v.place}` }) : null]),
+            h("td", { class: "nowrap", text: shortDate(v.date) }),
+            h("td", { class: "num", text: v.qty != null ? fmtN(v.qty) : "-" }),
+            h("td", { class: "num", text: v.threadQty != null ? fmtN(v.threadQty) : "-" }),
+            h("td", { class: "num", text: v.crossQty != null ? fmtN(v.crossQty) : "-" }),
+            cell(moreThread(v)), cell(moreCross(v))
+          ])))
+        ])) : h("p", { class: "muted", text: "찾는 제작 수도회가 없어요." }),
+        h("p", { class: "muted small", text: "제목을 누르면 오름차순·내림차순으로 바뀌어요. 추가 전달 물량 = 요청수량 − 실(십자가) 출고이고, 값이 없으면 '-'로 보여요. 아래 '수량 입력'에서 고치면 바로 다시 계산돼요." }),
+        h("details", { class: "vstat__more vol-visits__input", open: inputOpen, ontoggle: (e) => { inputOpen = e.currentTarget.open; } }, [h("summary", {}, `수량 입력 · 요청 · 교육 · 출고 (${shown.length}곳)`),
+          h("div", { class: "vol-visits__bigs" }, [
+            big("총 제작 수도회", `${visits.length}곳`, empty ? `요청수량 없음 ${empty}곳` : null),
+            big("총 요청수량", fmtN(sum(visits)), `지난 교육 ${fmtN(sum(past))} · 다가오는 교육 ${fmtN(sum(next))}`),
+            big("총 교육물량", fmtN(sum(visits, "eduQty")), `적은 곳 ${visits.filter((v) => v.eduQty != null).length}곳`),
+            big("실 · 십자가 출고", `${fmtN(sum(visits, "threadQty"))} · ${fmtN(sum(visits, "crossQty"))}`, "출납 대장 기준"),
+            (() => { const both = visits.filter((v) => qtyDiff(v) != null), d = both.reduce((n, v) => n + qtyDiff(v), 0); return big("차액 (요청 − 교육)", diffText(both.length ? d : null), `둘 다 적힌 곳 ${both.length}곳 · 덜 전달 ${both.filter((v) => qtyDiff(v) > 0).length} · 더 전달 ${both.filter((v) => qtyDiff(v) < 0).length}`); })()
+          ]),
+          h("div", { class: "table-wrap" }, h("table", { class: "table vol-visits__table" }, [
+            sortHead([[null, "번호", "num"], ["date", "날짜"], ["org", "제작 수도회"], ["qty", "요청수량", "num"], ["edu", "교육물량", "num"], ["thread", "실 출고", "num", "출납 대장의 자른 실"], ["cross", "십자가 출고", "num"], ["diff", "차액", "num", "요청수량 − 교육물량 (둘 다 있는 곳만)"]], inSort, draw),
+            h("tbody", {}, inRows.map(row))
+          ])),
+          h("p", { class: "muted small", text: "요청수량·교육물량·실·십자가 출고를 고치면 바로 저장되고, 고친 사람 이름이 함께 남아요. 차액은 요청수량 − 교육물량이에요(+는 덜 전달, −는 더 전달)." })
+        ])
       );
     };
-    draw();
+    fill(box,
+      h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: heading || "일정 관리" }), h("span", { class: "muted small", text: "제작 수도회 · 수량" }), h("a", { class: "link-btn", href: "#/vschedule", text: "달력 보기" })]),
+      visits.length ? search : null,
+      visits.length ? content : h("p", { class: "muted", text: "아직 연결된 제작 수도회 일정이 없어요." })
+    );
+    if (visits.length) draw();
     return box;
   }
   // 대장마다 입출고 기록 (입고·출고 칸에 최근 기록을 보여 주려고)

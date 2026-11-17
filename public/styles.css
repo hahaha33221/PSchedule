@@ -1730,3 +1730,11 @@ button.gantt__name:hover { background: var(--surface-2); }
 .vol-more__table td, .vol-more__table th { font-size: 13px; }
 .vol-visits__input summary { margin-top: 4px; }
 .vol-visits__input[open] > .vol-visits__bigs { margin: 8px 0; }
+/* 제목 눌러 정렬 */
+.sort-th { padding: 0 !important; }
+.sort-th__btn { display: inline-flex; align-items: center; gap: 4px; width: 100%; padding: 8px 6px; border: 0; background: none; color: inherit; font: inherit; font-weight: 600; cursor: pointer; white-space: nowrap; }
+th.num .sort-th__btn { justify-content: flex-end; }
+.sort-th__btn:hover { background: var(--surface-2); }
+.sort-th__arrow { font-size: 10px; color: var(--muted); }
+.sort-th__btn.is-on .sort-th__arrow { color: var(--ink); }
+.vol-visits__search { max-width: 360px; }
