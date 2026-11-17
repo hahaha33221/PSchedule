@@ -1738,3 +1738,5 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .sort-th__arrow { font-size: 10px; color: var(--muted); }
 .sort-th__btn.is-on .sort-th__arrow { color: var(--ink); }
 .vol-visits__search { max-width: 360px; }
+.vol-more__sum th, .vol-more__sum td { border-top: 2px solid var(--ink); font-weight: 700; background: var(--surface-2); font-variant-numeric: tabular-nums; }
+.vol-more__sum th { text-align: left; }

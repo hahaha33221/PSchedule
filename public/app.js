@@ -5664,7 +5664,16 @@
             h("td", { class: "num", text: v.threadQty != null ? fmtN(v.threadQty) : "-" }),
             h("td", { class: "num", text: v.crossQty != null ? fmtN(v.crossQty) : "-" }),
             cell(moreThread(v)), cell(moreCross(v))
-          ])))
+          ]))),
+          // 합계: 지금 보이는 곳(검색 반영) 기준. 추가 전달은 더 보낼 양(+)만 더함
+          h("tfoot", {}, h("tr", { class: "vol-more__sum" }, [
+            h("th", { colspan: "3", text: qv ? `합계 (검색 ${shown.length}곳)` : `합계 (${shown.length}곳)` }),
+            h("td", { class: "num", text: fmtN(sum(shown)) }),
+            h("td", { class: "num", text: fmtN(sum(shown, "threadQty")) }),
+            h("td", { class: "num", text: fmtN(sum(shown, "crossQty")) }),
+            h("td", { class: "num", text: fmtN(shown.reduce((n, v) => n + Math.max(0, moreThread(v) || 0), 0)) }),
+            h("td", { class: "num", text: fmtN(shown.reduce((n, v) => n + Math.max(0, moreCross(v) || 0), 0)) })
+          ]))
         ])) : h("p", { class: "muted", text: "찾는 제작 수도회가 없어요." }),
         h("p", { class: "muted small", text: "제목을 누르면 오름차순·내림차순으로 바뀌어요. 추가 전달 물량 = 요청수량 − 실(십자가) 출고이고, 값이 없으면 '-'로 보여요. 아래 '수량 입력'에서 고치면 바로 다시 계산돼요." }),
         h("details", { class: "vstat__more vol-visits__input", open: inputOpen, ontoggle: (e) => { inputOpen = e.currentTarget.open; } }, [h("summary", {}, `수량 입력 · 요청 · 교육 · 출고 (${shown.length}곳)`),
@@ -5677,7 +5686,13 @@
           ]),
           h("div", { class: "table-wrap" }, h("table", { class: "table vol-visits__table" }, [
             sortHead([[null, "번호", "num"], ["date", "날짜"], ["org", "제작 수도회"], ["qty", "요청수량", "num"], ["edu", "교육물량", "num"], ["thread", "실 출고", "num", "출납 대장의 자른 실"], ["cross", "십자가 출고", "num"], ["diff", "차액", "num", "요청수량 − 교육물량 (둘 다 있는 곳만)"]], inSort, draw),
-            h("tbody", {}, inRows.map(row))
+            h("tbody", {}, inRows.map(row)),
+            h("tfoot", {}, h("tr", { class: "vol-more__sum" }, [
+              h("th", { colspan: "3", text: `합계 (${shown.length}곳)` }),
+              h("td", { class: "num", text: fmtN(sum(shown)) }), h("td", { class: "num", text: fmtN(sum(shown, "eduQty")) }),
+              h("td", { class: "num", text: fmtN(sum(shown, "threadQty")) }), h("td", { class: "num", text: fmtN(sum(shown, "crossQty")) }),
+              (() => { const both = shown.filter((v) => qtyDiff(v) != null); const d = both.reduce((n, v) => n + qtyDiff(v), 0); return h("td", { class: "num nowrap " + diffCls(both.length ? d : null), text: diffText(both.length ? d : null) }); })()
+            ]))
           ])),
           h("p", { class: "muted small", text: "요청수량·교육물량·실·십자가 출고를 고치면 바로 저장되고, 고친 사람 이름이 함께 남아요. 차액은 요청수량 − 교육물량이에요(+는 덜 전달, −는 더 전달)." })
         ])
