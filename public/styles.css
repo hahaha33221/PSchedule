@@ -1725,3 +1725,6 @@ button.gantt__name:hover { background: var(--surface-2); }
 .vprog__bar { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
 .vprog__bar i { display: block; height: 100%; border-radius: inherit; background: var(--primary); }
 @media (max-width: 860px) { .vstat__dash { grid-template-columns: 1fr; } }
+/* 봉사자 WBS: 주 단위 세로선·월 경계선 없이 (월 음영으로만 구분) */
+.vol-wbs .gantt__track { background-image: none; }
+.vol-wbs .gantt__row--head .gantt__month { border-left: 0; }
