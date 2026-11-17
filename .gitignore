@@ -17,3 +17,6 @@ private/
 *.hwp
 *.hwpx
 *.pptx
+
+# 회의 녹음 받아쓰기 원본 — 커밋하지 않음
+음성 *.txt
