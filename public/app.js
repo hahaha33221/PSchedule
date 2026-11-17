@@ -5382,12 +5382,36 @@
     { name: "정산", main: "재무부 정산·결과보고", link: "판매처 재고 회수 협의", procs: [15] }
   ];
   const rosaryCounts = () => { const all = Object.values(ROSARY_PROCS); return { total: all.length, fixed: all.filter((p) => p.fixed).length }; };
+  // 봉사자 WBS 타임라인 (주 단위 칸, 월 표기 26.11, 오늘 선)
+  function volTimeline(fromYmd, toYmd) {
+    const DAY = 86400000, WEEK_W = 24, t = today();
+    const mondayOf = (x) => { const d = parseYmd(x); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; };
+    const from = mondayOf(fromYmd), to = mondayOf(toYmd); to.setDate(to.getDate() + 7);
+    const dayX = (x) => Math.round((parseYmd(x) - from) / DAY) * (WEEK_W / 7);
+    const width = (Math.round((to - from) / DAY) / 7) * WEEK_W;
+    const months = [];
+    for (const d = new Date(from.getFullYear(), from.getMonth(), 1); d < to; d.setMonth(d.getMonth() + 1)) months.push(h("span", { class: "gantt__month", style: `left:${Math.max(0, dayX(ymd(d)))}px`, text: `${String(d.getFullYear()).slice(2)}.${pad(d.getMonth() + 1)}` }));
+    const inRange = t >= ymd(from) && t < ymd(to);
+    const todayLine = () => (inRange ? h("i", { class: "gantt__today", style: `left:${dayX(t)}px`, title: `오늘 ${t}` }) : null);
+    const track = (kids) => h("div", { class: "gantt__track", style: `width:${width}px` }, [todayLine(), ...(kids || [])]);
+    const head = (nameCell) => h("div", { class: "gantt__row gantt__row--head", role: "row" }, [nameCell, h("div", { class: "gantt__track", style: `width:${width}px` }, [...months, todayLine()])]);
+    const scrollToToday = (el) => requestAnimationFrame(() => { if (inRange) el.scrollLeft = Math.max(0, dayX(t) - 160); });
+    return { track, head, scrollToToday };
+  }
   function volWbsRosary() {
     const closed = new Set(JSON.parse(store.get("ps.vwbsClosed", "[]") || "[]"));
     let jointOnly = store.get("ps.vwbsJoint", "0") === "1";
-    const box = h("section", { class: "card vol__card vwbs" });
+    const box = h("section", { class: "card vol__card vwbs vol-wbs" });
     const c = rosaryCounts();
     const tag = (cls, text) => h("span", { class: "vwbs__tag vwbs__tag--" + cls, text });
+    // 원자재 조달(2026-07)부터 WYD(2027-08)까지
+    const tl = volTimeline("2026-07-01", "2027-08-31");
+    const nameCell = (level, code, label, subs, tags, chev, onclick) => h(onclick ? "button" : "div", { class: "gantt__name wbs__name vwbs__cell", type: onclick ? "button" : null, style: `padding-left:${8 + level * 14}px`, "aria-expanded": chev == null ? null : String(chev), onclick }, [
+      h("span", { class: "wbs__chev" + (chev ? " is-open" : ""), html: chev == null ? "" : ICON.right }),
+      h("span", { class: "wbs__code", text: code }),
+      h("span", { class: "wbs__label" }, [label, ...subs.filter(Boolean).map((x) => (typeof x === "string" ? h("small", { class: "muted", text: x }) : x))]),
+      h("span", { class: "vwbs__state" }, tags.filter(Boolean))
+    ]);
     const draw = () => {
       const rows = [];
       ROSARY_MILESTONES.forEach((m, mi) => {
@@ -5396,29 +5420,27 @@
         if (jointOnly && !procs.length) return;
         const open = !closed.has(code);
         const fixedN = m.procs.filter((n) => ROSARY_PROCS[n].fixed).length;
-        rows.push(h("button", { class: "vwbs__row vwbs__row--0" + (m.first ? " is-first" : ""), type: "button", "aria-expanded": String(open), onclick: () => { open ? closed.add(code) : closed.delete(code); store.set("ps.vwbsClosed", JSON.stringify([...closed])); draw(); } }, [
-          h("span", { class: "wbs__chev" + (open ? " is-open" : ""), html: ICON.right }),
-          h("span", { class: "vwbs__code", text: code }),
-          h("span", { class: "vwbs__name" }, [h("strong", { text: m.name }), h("small", { class: "muted", text: `주요 업무: ${m.main}` })]),
-          h("span", { class: "vwbs__state" }, m.first ? tag("first", "가장 먼저 결정") : m.procs.length ? h("span", { class: "muted small", text: `확정 ${fixedN} / ${m.procs.length}` }) : null),
-          h("span", { class: "vwbs__link muted small", text: m.link })
+        const toggle = () => { open ? closed.add(code) : closed.delete(code); store.set("ps.vwbsClosed", JSON.stringify([...closed])); draw(); };
+        rows.push(h("div", { class: "gantt__row wbs-row wbs-row--0" + (m.first ? " is-first" : ""), role: "row" }, [
+          nameCell(0, code, h("span", { text: m.name }), [`주요 업무: ${m.main}`, `연계: ${m.link}`], [m.first ? tag("first", "가장 먼저 결정") : m.procs.length ? h("span", { class: "muted small", text: `확정 ${fixedN}/${m.procs.length}` }) : null], open, toggle),
+          tl.track()
         ]));
         if (!open) return;
-        if (!m.procs.length) rows.push(h("div", { class: "vwbs__row vwbs__row--1" }, [h("span", { class: "wbs__chev" }), h("span", { class: "vwbs__code", text: `${code}.1` }), h("span", { class: "vwbs__name" }, [h("span", { text: m.main }), h("small", { class: "muted", text: "판매가(20·25달러)·판매 경로(출판사·자체·SNC) 결정" })]), h("span", { class: "vwbs__state" }, tag("todo", "결정 필요")), h("span", { class: "vwbs__link muted small", text: m.link })]));
+        if (!m.procs.length) rows.push(h("div", { class: "gantt__row wbs-row wbs-row--1", role: "row" }, [nameCell(1, `${code}.1`, h("span", { text: m.main }), ["판매가(20·25달러)·판매 경로(출판사·자체·SNC) 결정", `연계: ${m.link}`], [tag("todo", "결정 필요")]), tl.track()]));
         procs.forEach((n, pi) => {
           const p = ROSARY_PROCS[n], pc = `${code}.${pi + 1}`;
-          rows.push(h("div", { class: "vwbs__row vwbs__row--1" }, [
-            h("span", { class: "wbs__chev" }),
-            h("span", { class: "vwbs__code", text: pc }),
-            h("span", { class: "vwbs__name" }, [h("span", {}, [h("span", { class: "vwbs__no", text: `공정 ${n}` }), " ", p.name]), h("small", { class: "muted", text: p.feat }), p.joint ? h("small", { class: "vwbs__joint", text: `공동 작업: ${p.joint}` }) : null]),
-            h("span", { class: "vwbs__state" }, [tag(p.fixed ? "fixed" : "open", p.fixed ? "확정" : "미정"), p.joint ? tag("joint", "공동 작업") : null]),
-            h("span", { class: "vwbs__link muted small", text: p.link })
+          rows.push(h("div", { class: "gantt__row wbs-row wbs-row--1", role: "row" }, [
+            nameCell(1, pc, h("span", {}, [h("span", { class: "vwbs__no", text: `공정 ${n} ` }), p.name]), [p.feat, p.joint ? h("small", { class: "vwbs__joint", text: `공동 작업: ${p.joint}` }) : null, `연계: ${p.link}`], [tag(p.fixed ? "fixed" : "open", p.fixed ? "확정" : "미정"), p.joint ? tag("joint", "공동 작업") : null]),
+            tl.track()
           ]));
-          (p.tasks || []).forEach((t, ti) => rows.push(h("div", { class: "vwbs__row vwbs__row--2" }, [
-            h("span", { class: "wbs__chev" }), h("span", { class: "vwbs__code", text: `${pc}.${ti + 1}` }), h("span", { class: "vwbs__name", text: t }), h("span", { class: "vwbs__state" }, tag("todo", "추가 과업")), h("span")
-          ])));
+          (p.tasks || []).forEach((tk, ti) => rows.push(h("div", { class: "gantt__row wbs-row wbs-row--2", role: "row" }, [nameCell(2, `${pc}.${ti + 1}`, h("span", { text: tk }), [], [tag("todo", "추가 과업")]), tl.track()])));
         });
       });
+      const chart = h("div", { class: "gantt vol-wbs__chart", role: "table" }, [
+        tl.head(h("div", { class: "gantt__name gantt__name--head wbs__name vwbs__cell" }, [h("span", { class: "wbs__chev" }), h("span", { class: "wbs__code", text: "WBS" }), h("span", { class: "wbs__label", text: "마일스톤 · 공정 · 과업" }), h("span", { class: "vwbs__state", text: "상태" })])),
+        ...rows
+      ]);
+      tl.scrollToToday(chart);
       fill(box,
         h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "매듭묵주 WBS" }), h("span", { class: "muted small", text: "업무 정리(안) 기준" })]),
         h("div", { class: "vwbs__sum" }, [
@@ -5430,12 +5452,9 @@
           h("div", { class: "seg seg--sm" }, [["0", "전체"], ["1", "공동 작업만"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String((jointOnly ? "1" : "0") === k), text: label, onclick: () => { jointOnly = k === "1"; store.set("ps.vwbsJoint", k); draw(); } }))),
           h("button", { class: "btn btn--ghost btn--sm", type: "button", text: closed.size ? "모두 펼치기" : "모두 접기", onclick: () => { if (closed.size) closed.clear(); else ROSARY_MILESTONES.forEach((_, i) => closed.add(String(i + 1))); store.set("ps.vwbsClosed", JSON.stringify([...closed])); draw(); } })
         ]),
-        h("div", { class: "vwbs__table", role: "table" }, [
-          h("div", { class: "vwbs__row vwbs__row--head", role: "row" }, [h("span", { class: "wbs__chev" }), h("span", { class: "vwbs__code", text: "WBS" }), h("span", { class: "vwbs__name", text: "마일스톤 · 공정 · 과업" }), h("span", { class: "vwbs__state", text: "상태" }), h("span", { class: "vwbs__link", text: "연계 업무" })]),
-          ...rows
-        ]),
-        h("div", { class: "gantt__legend muted small" }, [tag("fixed", "확정"), " 방식이 정해져 진행 중 ", tag("open", "미정"), " 방식을 정하고 과업을 새로 만들어야 함 ", tag("joint", "공동 작업"), " 봉사자와 함께하는 작업"]),
-        h("p", { class: "muted small", text: "공동 작업은 운반·기록과 봉사자 조율로 나누어 진행해요. 일정·담당은 정해지면 반영돼요." })
+        chart,
+        h("div", { class: "gantt__legend muted small" }, [tag("fixed", "확정"), " 방식이 정해져 진행 중 ", tag("open", "미정"), " 방식을 정하고 과업을 새로 만들어야 함 ", tag("joint", "공동 작업"), " 봉사자와 함께하는 작업 ", h("i", { class: "vwbs__todaykey" }), " 오늘"]),
+        h("p", { class: "muted small", text: "빨간 세로선이 오늘이에요. 공정별 일정·담당이 정해지면 막대로 보여요." })
       );
     };
     draw();
@@ -5558,9 +5577,9 @@
     const width = (Math.round((to - from) / DAY) / 7) * WEEK_W;
     const months = [];
     for (const d = new Date(from.getFullYear(), from.getMonth(), 1); d < to; d.setMonth(d.getMonth() + 1)) {
-      months.push(h("span", { class: "gantt__month", style: `left:${Math.max(0, dayX(ymd(d)))}px`, text: d.getMonth() === 0 || !months.length ? `${String(d.getFullYear()).slice(2)}년 ${d.getMonth() + 1}월` : `${d.getMonth() + 1}월` }));
+      months.push(h("span", { class: "gantt__month", style: `left:${Math.max(0, dayX(ymd(d)))}px`, text: `${String(d.getFullYear()).slice(2)}.${pad(d.getMonth() + 1)}` }));
     }
-    const todayLine = () => h("i", { class: "gantt__today", style: `left:${dayX(t)}px` });
+    const todayLine = () => h("i", { class: "gantt__today", style: `left:${dayX(t)}px`, title: `오늘 ${t}` });
     const row = (level, code, name, sub) => h("div", { class: `gantt__row wbs-row wbs-row--${level}`, role: "row" }, [
       h("div", { class: "gantt__name wbs__name", style: `padding-left:${8 + level * 12}px` }, [
         h("span", { class: "wbs__chev" + (level === 0 ? " is-open" : ""), html: level === 0 ? ICON.right : "" }),

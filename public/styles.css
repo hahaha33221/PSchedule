@@ -1667,3 +1667,15 @@ button.gantt__name:hover { background: var(--surface-2); }
 .vstat__what { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; color: var(--ink-2); }
 .vstat__more summary { cursor: pointer; font-weight: 600; font-size: 13.5px; padding: 4px 0; }
 .vstat__miss td { background: color-mix(in srgb, var(--danger) 6%, transparent); }
+/* 봉사자 WBS: 제목 줄은 다른 색, 묵주 WBS 이름 칸은 줄바꿈 허용 */
+.vol-wbs .gantt__row--head, .vol-wbs .gantt__row--head .gantt__name--head, .vol-wbs .gantt__row--head .gantt__track { background-color: var(--ink); color: var(--surface); }
+.vol-wbs .gantt__row--head .gantt__month { color: var(--surface); border-left-color: color-mix(in srgb, var(--surface) 45%, transparent); }
+.vol-wbs .gantt__row--head .wbs__code, .vol-wbs .gantt__row--head .vwbs__state { color: var(--surface); }
+.vwbs .vwbs__cell { width: 380px; align-items: flex-start; padding-top: 7px; padding-bottom: 7px; }
+.vwbs .vwbs__cell .wbs__label span, .vwbs .vwbs__cell .wbs__label small { white-space: normal; overflow: visible; }
+.vwbs .vwbs__cell .vwbs__state { flex: none; max-width: 110px; justify-content: flex-end; }
+.vwbs .wbs-row--0 > button.gantt__name { cursor: pointer; }
+.vwbs .wbs-row--0.is-first .gantt__name { box-shadow: inset 3px 0 0 var(--danger); }
+.vwbs .gantt__track { min-height: 44px; }
+.vwbs__todaykey { display: inline-block; width: 2px; height: 12px; background: var(--danger); vertical-align: middle; }
+@media (max-width: 720px) { .vwbs .vwbs__cell { width: 250px; } .vwbs .vwbs__cell .vwbs__state { max-width: 64px; } }
