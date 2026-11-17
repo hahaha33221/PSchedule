@@ -440,6 +440,9 @@ jobs:
           curl -fs -H "$H" $B/projects/$VPJ/volunteer-status | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const r=d.groups.find(g=>g.name==="묵주"),c=d.groups.find(g=>g.name==="손십자가");if(!r||r.requests.length!==2||r.requests[0].org!=="테스트수녀회"||!c||c.recovery.total!==7||!c.changes.some(x=>x.kind==="recovery"&&x.volunteer))process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/projects/$VPJ/volunteer-status)" = 404
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/projects/$VPJ/volunteer-status)" = 403
+          # 묵주 봉사자 대시보드(직원 프로젝트 목록 위): 볼 수 있는 기념품팀 프로젝트의 묵주만, 월별 집계 포함, 다른 팀 직원은 빈 목록
+          curl -fs -H "$H" $B/projects/volunteer-dashboard | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const g=d.groups.find(x=>x.projectName==="봉사자 공개 프로젝트");if(!g||g.name!=="묵주"||!Array.isArray(g.monthly)||d.groups.some(x=>x.name!=="묵주"))process.exit(1)'
+          curl -fs -H "$(bearer "$A1")" $B/projects/volunteer-dashboard | node -e 'if(JSON.parse(require("fs").readFileSync(0)).groups.some(x=>x.projectName==="봉사자 공개 프로젝트"))process.exit(1)'
           curl -fs -H "$VH" -XDELETE $B/volunteer/records/$VR | node -e 'if(JSON.parse(require("fs").readFileSync(0)).records.length)process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/projects/$VPJ)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/admin/vol-schedules)" = 403

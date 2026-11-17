@@ -338,6 +338,7 @@ const q = {
   volSchedulesOfItems: db.prepare("SELECT * FROM vol_schedules WHERE project_item_id IS NOT NULL ORDER BY date, start_time"),
   volRequestsOf: db.prepare("SELECT * FROM vol_requests WHERE item_id = ? ORDER BY req_date, req_time, no"),
   volRecordsOfItem: db.prepare("SELECT r.*, u.name AS author FROM vol_records r LEFT JOIN users u ON u.id = r.created_by WHERE r.item_id = ? ORDER BY r.date DESC, r.id DESC"),
+  stockMonthly: db.prepare("SELECT substr(m.date, 1, 7) AS month, m.type, sum(q.qty) AS total FROM stock_moves m JOIN stock_qty q ON q.move_id = m.id WHERE m.ledger_id = ? AND m.date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]*' GROUP BY month, m.type"),
   stockHistoryRecent: db.prepare("SELECT h.*, l.name AS ledger_name, coalesce(u.volunteer, 0) AS by_volunteer FROM stock_history h JOIN stock_ledgers l ON l.id = h.ledger_id LEFT JOIN users u ON u.id = h.user_id WHERE h.ledger_id = ? ORDER BY h.id DESC LIMIT 60"),
   volRecordsAll: db.prepare("SELECT r.*, u.name AS author, i.name AS group_name FROM vol_records r LEFT JOIN users u ON u.id = r.created_by JOIN project_items i ON i.id = r.item_id ORDER BY r.date DESC, r.id DESC LIMIT 300"),
   photoIdsOfLedger: db.prepare("SELECT p.id, p.move_id FROM stock_move_photos p JOIN stock_moves m ON m.id = p.move_id WHERE m.ledger_id = ? ORDER BY p.id"),
@@ -1179,11 +1180,17 @@ function volGroupStatus(p, g) {
   ].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 60);
   const latest = new Map();
   for (const r of records.filter((x) => x.kind === "material")) if (!latest.has(r.name)) latest.set(r.name, r);
+  // 월별: 입고·출고(날짜가 'YYYY-MM-' 인 기록만), 요청수량·교육물량(일정 날짜 기준)
+  const monthly = new Map();
+  const mrow = (k) => { if (!monthly.has(k)) monthly.set(k, { month: k, in: 0, out: 0, req: 0, edu: 0 }); return monthly.get(k); };
+  for (const l of ledgers) for (const r of q.stockMonthly.all(l.id)) mrow(r.month)[r.type] += r.total;
+  for (const v of visits) { const m = mrow(v.date.slice(0, 7)); m.req += v.qty || 0; m.edu += v.edu_qty || 0; }
   return {
     id: g.id, name: g.name,
     ledgers: ledgers.map((l) => ({ id: l.id, name: l.name, unit: l.unit, contract: l.contract, inTotal: l.in_total, outTotal: l.out_total })),
     visits: visits.map((s) => ({ id: s.id, date: s.date, startTime: s.start_time, title: s.title, place: s.place, qty: s.qty, qtyBy: s.qty_by, qtyAt: s.qty_at, eduQty: s.edu_qty ?? null, eduBy: s.edu_by || "", eduAt: s.edu_at || null })),
     requests: requests.map((r) => ({ id: r.id, no: r.no, org: r.org, date: r.req_date, time: r.req_time, qty: r.qty })),
+    monthly: [...monthly.values()].sort((a, b) => a.month.localeCompare(b.month)),
     material: { total: [...latest.values()].reduce((n, r) => n + r.qty, 0), kinds: latest.size, count: records.filter((x) => x.kind === "material").length },
     recovery: { total: records.filter((x) => x.kind === "recovery").reduce((n, r) => n + r.qty, 0), count: records.filter((x) => x.kind === "recovery").length },
     changes
@@ -2127,6 +2134,15 @@ async function api(req, res, path) {
     const b = await readJson(req);
     const id = Number(q.addProject.run(projectUnit(b.unitId, user), text(b.name, 80, "프로젝트 이름", true), text(b.note, 1000, "설명"), user.id).lastInsertRowid);
     return send(res, 201, projectDetail(q.project.get(id), user));
+  }
+  // 직원 프로젝트 목록 위 '묵주 봉사자 대시보드': 볼 수 있는 기념품팀 프로젝트의 묵주 묶음 현황
+  if (path === "/api/projects/volunteer-dashboard" && method === "GET") {
+    const out = [];
+    for (const p of q.projects.all()) {
+      if (!projectAllowed(user, p)) continue;
+      for (const g of volGroupsOf(p).filter((x) => x.name === VOLUNTEER_GROUP)) out.push({ projectId: p.id, projectName: p.name, ...volGroupStatus(p, g) });
+    }
+    return send(res, 200, { groups: out });
   }
   // 직원 프로젝트 '봉사자 현황': 봉사자 묶음(묵주·손십자가)마다 요청·입출고·기록 요약과 최근 변동
   const pvm = path.match(/^\/api\/projects\/(\d+)\/volunteer-status$/);

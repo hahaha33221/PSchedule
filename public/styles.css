@@ -1667,18 +1667,61 @@ button.gantt__name:hover { background: var(--surface-2); }
 .vstat__what { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; color: var(--ink-2); }
 .vstat__more summary { cursor: pointer; font-weight: 600; font-size: 13.5px; padding: 4px 0; }
 .vstat__miss td { background: color-mix(in srgb, var(--danger) 6%, transparent); }
-/* 봉사자 WBS: 제목 줄은 다른 색, 묵주 WBS 이름 칸은 줄바꿈 허용 */
+/* 봉사자 WBS: 제목 줄은 진한 색, 한 줄짜리 행, 월 음영·이번 달 표시 */
 .vol-wbs .gantt__row--head, .vol-wbs .gantt__row--head .gantt__name--head, .vol-wbs .gantt__row--head .gantt__track { background-color: var(--ink); color: var(--surface); }
-.vol-wbs .gantt__row--head .gantt__month { color: var(--surface); border-left-color: color-mix(in srgb, var(--surface) 45%, transparent); }
+.vol-wbs .gantt__row--head .gantt__month { top: 0; bottom: 0; display: flex; align-items: center; justify-content: center; padding: 0; color: var(--surface); border-left-color: color-mix(in srgb, var(--surface) 30%, transparent); }
+.vol-wbs .gantt__row--head .gantt__month.is-now { background: var(--danger); color: #fff; font-weight: 700; }
 .vol-wbs .gantt__row--head .wbs__code, .vol-wbs .gantt__row--head .vwbs__state { color: var(--surface); }
-.vwbs .vwbs__cell { width: 380px; align-items: flex-start; padding-top: 7px; padding-bottom: 7px; }
-.vwbs .vwbs__cell .wbs__label span, .vwbs .vwbs__cell .wbs__label small { white-space: normal; overflow: visible; }
-.vwbs .vwbs__cell .vwbs__state { flex: none; max-width: 110px; justify-content: flex-end; }
-.vwbs .wbs-row--0 > button.gantt__name { cursor: pointer; }
-.vwbs .wbs-row--0.is-first .gantt__name { box-shadow: inset 3px 0 0 var(--danger); }
-.vwbs .gantt__track { min-height: 44px; }
+.vol-wbs .gantt__row--head .gantt__track { min-height: 34px; }
+.vwbs .vwbs__cell { width: 340px; flex-direction: row; align-items: center; gap: 6px; min-height: 36px; padding-top: 4px; padding-bottom: 4px; }
+.vwbs .vwbs__title { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 12.5px; }
+.vwbs .vwbs__title small { font-weight: 400; }
+.vwbs .vwbs__state { flex: none; display: flex; gap: 4px; justify-content: flex-end; }
+.vwbs .wbs-row--0 .vwbs__cell { min-height: 40px; }
+.vwbs .wbs-row--0 .wbs__code { display: inline-grid; place-items: center; min-width: 22px; height: 22px; border-radius: 50%; background: var(--ink); color: var(--surface); font-weight: 700; }
+.vwbs .wbs-row--0.is-first .wbs__code { background: var(--danger); }
+.vwbs .wbs-row--1.is-open .vwbs__cell { background: var(--primary-soft); }
+.vwbs .vtl__track { min-height: 36px; }
+.vwbs .wbs-row--0 .vtl__track { min-height: 40px; }
+.vtl__band { position: absolute; top: 0; bottom: 0; pointer-events: none; }
+.vtl__band.is-odd { background: color-mix(in srgb, var(--ink) 4%, transparent); }
+.vtl__band.is-now { background: color-mix(in srgb, var(--danger) 9%, transparent); }
+.vwbs__count { font-size: 11px; color: var(--muted); white-space: nowrap; }
+.vwbs__dot { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; white-space: nowrap; color: var(--ink-2); }
+.vwbs__dot i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+.vwbs__dot--fixed i { background: var(--c1, #2f9e44); }
+.vwbs__dot--open i { background: transparent; border: 1.5px solid var(--muted); }
+.vwbs__dot--joint i { background: #f59f00; }
+.vwbs__dot--todo i { background: var(--danger); }
+.vwbs__detail { position: sticky; left: 0; width: min(100%, 760px); padding: 10px 14px 12px 52px; border-top: 1px dashed var(--line); background: var(--surface); font-size: 12.5px; }
+.vwbs__detail dl { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 4px 10px; margin: 0; }
+.vwbs__detail dt { color: var(--muted); font-weight: 600; }
+.vwbs__detail dd { margin: 0; }
+.vwbs__tasks { margin: 0; padding-left: 18px; }
+.vwbs__legend { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
 .vwbs__todaykey { display: inline-block; width: 2px; height: 12px; background: var(--danger); vertical-align: middle; }
-@media (max-width: 720px) { .vwbs .vwbs__cell { width: 250px; } .vwbs .vwbs__cell .vwbs__state { max-width: 64px; } }
+.vwbs__nowkey { display: inline-block; width: 14px; height: 10px; border-radius: 2px; background: color-mix(in srgb, var(--danger) 18%, transparent); vertical-align: middle; }
+@media (max-width: 720px) { .vwbs .vwbs__cell { width: 230px; } .vwbs .vwbs__dot { font-size: 0; gap: 0; } .vwbs__detail { padding-left: 14px; } }
 .vol-visits__bigs { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
 .vol-visits__big { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
 .vol-visits__big strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+/* 묵주 봉사자 대시보드: 월별 막대·진행률 */
+.vstat__dash { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 12px; }
+.vstat__panel { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; min-width: 0; }
+.vbars__plot { display: flex; align-items: flex-end; gap: 10px; height: 170px; padding-top: 18px; overflow-x: auto; }
+.vbars__col { flex: 1 0 64px; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; }
+.vbars__col.is-now .vbars__label { color: var(--danger); font-weight: 700; }
+.vbars__pair { flex: 1; width: 100%; display: flex; align-items: flex-end; justify-content: center; gap: 14px; border-bottom: 1px solid var(--line); }
+.vbars__bar { position: relative; width: 14px; min-height: 2px; border-radius: 4px 4px 0 0; }
+.vbars__bar em { position: absolute; bottom: 100%; left: 50%; transform: translateX(-50%); margin-bottom: 2px; font-style: normal; font-size: 10px; color: var(--ink-2); white-space: nowrap; }
+.vbars__bar--req { background: var(--primary); }
+.vbars__bar--edu { background: #f59f00; }
+.vbars__label { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.vbars__legend { display: flex; gap: 12px; }
+.vbars__legend span { display: inline-flex; align-items: center; gap: 5px; }
+.vbars__key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+.vprog { display: flex; flex-direction: column; gap: 3px; }
+.vprog__head { display: flex; justify-content: space-between; gap: 8px; font-size: 12.5px; }
+.vprog__bar { height: 8px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
+.vprog__bar i { display: block; height: 100%; border-radius: inherit; background: var(--primary); }
+@media (max-width: 860px) { .vstat__dash { grid-template-columns: 1fr; } }

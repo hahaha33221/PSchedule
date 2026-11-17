@@ -3835,13 +3835,134 @@
       unitSel.addEventListener("click", () => unitPicker(unitSel, projectFilter.unit, (id) => { projectFilter.unit = id; draw(); }, { noneLabel: "모든 팀" }));
       setMain("projects", [
         h("div", { class: "page-head" }, [h("h1", { text: "프로젝트" }), h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => projectDialog(null, (r) => go(`#/projects/${r.project.id}`)) }, [icon("plus"), "새 프로젝트"])]),
+        dashBox,
         h("div", { class: "filters" }, [unitSel]),
         sections.length ? h("div", { class: "stack" }, sections) : h("div", { class: "card empty", text: list.length ? "이 팀에는 아직 프로젝트가 없어요." : "아직 볼 수 있는 프로젝트가 없어요." })
       ]);
     };
-    page = { name: "projects", reload: async () => { list = (await api("/projects")).projects; draw(); } };
+    // 묵주 봉사자 대시보드: 기념품팀 프로젝트를 볼 수 있는 직원에게만 (봉사자가 입력·업데이트한 현황)
+    const dashBox = h("div", { class: "stack vstat vstat--dash" });
+    const loadDash = () => api("/projects/volunteer-dashboard").then((r) => fill(dashBox, ...r.groups.map((g) => volGroupSection(g, { compact: true, title: `묵주 봉사자 현황 · ${g.projectName}`, link: `#/projects/${g.projectId}/volunteer` })))).catch(() => fill(dashBox));
+    page = { name: "projects", reload: async () => { list = (await api("/projects")).projects; draw(); quiet(loadDash()); } };
     try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("projects", failed(e)); }
   }
+  // 봉사자 현황: 묶음(묵주·손십자가)마다 요약, 최근 변동, 신청과 일정 대조
+  function volunteerPanel(pid) {
+    const box = h("div", { class: "stack vstat" }, loading());
+    api(`/projects/${pid}/volunteer-status`).then((r) => fill(box, ...(r.groups.length ? r.groups.map(volGroupSection) : [h("div", { class: "card empty", text: "이 프로젝트에는 봉사자 묶음이 없어요." })]))).catch((e) => fill(box, failed(e)));
+    return box;
+  }
+  const localAt = (at) => { if (!at) return ""; const d = new Date(`${at.replace(" ", "T")}Z`); return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+  // 수도회 이름 대조 (참고용): 띄어쓰기·괄호·흔한 낱말을 빼고 앞 3글자가 겹치면 같은 곳으로 봄
+  const orgKey = (s) => { let v = String(s || "").replace(/\(.*?\)|\[.*?\]/g, "").replace(/[\s·]/g, "").replace(/^묵주교육/, ""); for (const w of ["수녀회", "수도회", "수녀원", "수녀", "회", "한국", "총원", "관구", "서울", "대구", "대전", "수원", "인천", "봉쇄"]) v = v.split(w).join(""); return v.replace(/\d+$/, ""); };
+  // 월별 막대 (요청수량·교육물량): 숫자는 막대 위에, 이번 달은 강조
+  function volMonthBars(rows) {
+    const list = rows.filter((r) => r.req || r.edu);
+    if (!list.length) return h("p", { class: "muted small", text: "아직 월별로 보여 줄 수량이 없어요." });
+    const max = Math.max(...list.map((r) => Math.max(r.req, r.edu)), 1);
+    const now = today().slice(0, 7);
+    return h("div", { class: "vbars" }, [
+      h("div", { class: "vbars__plot" }, list.map((r) => h("div", { class: "vbars__col" + (r.month === now ? " is-now" : ""), title: `${r.month} 요청 ${fmtN(r.req)} · 교육 ${fmtN(r.edu)}` }, [
+        h("div", { class: "vbars__pair" }, [
+          h("span", { class: "vbars__bar vbars__bar--req", style: `height:${Math.round((r.req / max) * 100)}%` }, h("em", { text: r.req ? fmtN(r.req) : "" })),
+          h("span", { class: "vbars__bar vbars__bar--edu", style: `height:${Math.round((r.edu / max) * 100)}%` }, h("em", { text: r.edu ? fmtN(r.edu) : "" }))
+        ]),
+        h("span", { class: "vbars__label", text: `${r.month.slice(2, 4)}.${r.month.slice(5, 7)}` })
+      ]))),
+      h("div", { class: "vbars__legend muted small" }, [h("span", {}, [h("i", { class: "vbars__key vbars__bar--req" }), "요청수량"]), h("span", {}, [h("i", { class: "vbars__key vbars__bar--edu" }), "교육물량"])])
+    ]);
+  }
+  const vProgress = (label, a, b, unit) => {
+    const pct = b ? Math.min(100, Math.round((a / b) * 100)) : 0;
+    return h("div", { class: "vprog" }, [
+      h("div", { class: "vprog__head" }, [h("span", { text: label }), h("strong", { text: b ? `${pct}%` : "-" })]),
+      h("div", { class: "vprog__bar" }, h("i", { style: `width:${pct}%` })),
+      h("span", { class: "muted small", text: `${fmtN(a)} / ${fmtN(b)}${unit ? " " + unit : ""}` })
+    ]);
+  };
+  function volGroupSection(g, opts = {}) {
+    const unit = g.ledgers[0]?.unit || "개";
+    const inT = g.ledgers.reduce((n, l) => n + l.inTotal, 0), outT = g.ledgers.reduce((n, l) => n + l.outTotal, 0);
+    const t = today();
+    const reqT = g.visits.reduce((n, v) => n + (v.qty || 0), 0), left = g.visits.filter((v) => v.date >= t).reduce((n, v) => n + (v.qty || 0), 0);
+    const appT = g.requests.reduce((n, r) => n + (r.qty || 0), 0);
+    const tile = (label, value, sub) => h("div", { class: "card vstat__tile" }, [h("span", { class: "muted small", text: label }), h("strong", { text: value }), sub ? h("span", { class: "muted small", text: sub }) : null]);
+    // 신청 ↔ 일정 대조
+    const used = new Set();
+    const matchOf = (r) => {
+      const k = orgKey(r.org); if (!k) return null;
+      let best = null;
+      for (const v of g.visits) {
+        if (used.has(v.id)) continue;
+        const vk = orgKey(v.title.replace(/^묵주 교육 · /, ""));
+        if (!vk || !(k.includes(vk.slice(0, 3)) || vk.includes(k.slice(0, 3)))) continue;
+        const dd = Math.abs((parseYmd(v.date) - parseYmd(r.date || v.date)) / 86400000);
+        if (dd <= 60 && (!best || dd < best.dd)) best = { v, dd };
+      }
+      if (best) used.add(best.v.id);
+      return best?.v || null;
+    };
+    const matched = g.requests.map((r) => ({ r, v: matchOf(r) }));
+    const unassigned = matched.filter((x) => !x.v);
+    const kindLabel = { stock: "입출고", qty: "요청수량", edu: "교육물량", material: "원자재", recovery: "회수" };
+    const pastReq = g.visits.filter((v) => v.date < t).reduce((n, v) => n + (v.qty || 0), 0);
+    const eduT = g.visits.reduce((n, v) => n + (v.eduQty || 0), 0);
+    return h("section", { class: "card stack vstat__group" }, [
+      h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: opts.title || `${g.name} · 봉사자 현황` }), opts.link ? h("a", { class: "link-btn", href: opts.link, text: "자세히 보기" }) : h("span", { class: "muted small", text: "봉사자 화면에서 입력한 값이 바로 반영돼요" })]),
+      h("div", { class: "vstat__tiles" }, [
+        g.requests.length ? tile("수업 신청", `${g.requests.length}건`, `신청 수량 ${fmtN(appT)}${unassigned.length ? ` · 일정 미배정 ${unassigned.length}건` : ""}`) : null,
+        tile("요청수량 (일정)", fmtN(reqT), `방문 ${g.visits.length}건 · 남음 ${fmtN(left)}`),
+        tile("교육물량", fmtN(eduT), `적은 일정 ${g.visits.filter((v) => v.eduQty != null).length}건`),
+        tile("입고", `${fmtN(inT)} ${unit}`, g.ledgers.map((l) => l.name).join(", ") || "대장 없음"),
+        tile("출고", `${fmtN(outT)} ${unit}`, `재고 ${fmtN(inT - outT)} ${unit}`),
+        tile("원자재 보유", fmtN(g.material.total), g.material.count ? `원자재 ${g.material.kinds}종 · 최근 기준` : "기록 없음"),
+        tile("제품 회수", fmtN(g.recovery.total), g.recovery.count ? `기록 ${g.recovery.count}건` : "기록 없음")
+      ]),
+      g.ledgers.length ? h("div", { class: "vstat__ledgers" }, g.ledgers.map((l) => h("a", { class: "stock-tag", href: `#/stock/${l.id}`, text: `${l.name} · 재고 ${fmtN(l.inTotal - l.outTotal)} ${l.unit}` }))) : null,
+      h("div", { class: "vstat__dash" }, [
+        h("div", { class: "vstat__panel" }, [h("h3", { class: "vstat__h", text: "월별 요청수량 · 교육물량" }), volMonthBars(g.monthly || [])]),
+        h("div", { class: "vstat__panel vstat__progs" }, [
+          h("h3", { class: "vstat__h", text: "진행률" }),
+          vProgress("방문 진행 (다녀온 요청수량)", pastReq, reqT),
+          vProgress("교육물량 / 요청수량", eduT, reqT),
+          ...g.ledgers.map((l) => vProgress(`${l.name} 출고 / 입고`, l.outTotal, l.inTotal, l.unit)),
+          g.requests.length ? vProgress("수업 신청 일정 배정", g.requests.length - unassigned.length, g.requests.length, "건") : null
+        ])
+      ]),
+      h("h3", { class: "vstat__h", text: "최근 변동" }),
+      g.changes.length ? h("ul", { class: "vstat__changes" }, g.changes.slice(0, opts.compact ? 6 : 20).map((c) => h("li", {}, [
+        h("span", { class: "nowrap muted small", text: localAt(c.at) }),
+        h("span", { class: "nowrap" }, [c.who || "-", c.volunteer ? h("span", { class: "stock-tag", text: "봉사자" }) : null]),
+        h("span", { class: "stock-tag vstat__kind", text: kindLabel[c.kind] || c.kind }),
+        c.ledgerId ? h("a", { href: `#/stock/${c.ledgerId}`, text: c.where }) : h("span", { text: c.where }),
+        h("span", { class: "vstat__what", text: c.what })
+      ]))) : h("p", { class: "muted", text: "아직 변동이 없어요." }),
+      !opts.compact && g.changes.length > 20 ? h("p", { class: "muted small", text: `최근 20건만 보여요 (전체 ${g.changes.length}건). 대장별 자세한 기록은 입출고 관리에서 봐요.` }) : null,
+      !opts.compact && g.requests.length ? h("details", { class: "vstat__more", open: unassigned.length > 0 }, [
+        h("summary", {}, [`수업 신청과 일정 대조 (${g.requests.length}건)`, unassigned.length ? h("span", { class: "move-issue small", text: ` · 미배정 ${unassigned.length}건` }) : null]),
+        h("p", { class: "muted small", text: "네이버폼 신청(연락처 제외)과 봉사자 일정을 수도회 이름으로 자동 대조한 참고용이에요. 합동 수업·이름이 다른 경우 틀릴 수 있어요." }),
+        h("div", { class: "table-wrap" }, h("table", { class: "table" }, [
+          h("thead", {}, h("tr", {}, ["번호", "수도회", "희망일", "신청 수량", "일정", "일정 수량"].map((x) => h("th", { text: x })))),
+          h("tbody", {}, matched.map(({ r, v }) => h("tr", { class: v ? null : "vstat__miss" }, [
+            h("td", { class: "num muted", text: r.no ?? "-" }), h("td", { text: r.org }), h("td", { class: "nowrap", text: r.date ? `${shortDate(r.date)}${r.time ? " " + r.time : ""}` : "-" }), h("td", { class: "num", text: r.qty != null ? fmtN(r.qty) : "-" }),
+            h("td", { class: "nowrap", text: v ? `${shortDate(v.date)} ${v.title.replace(/^묵주 교육 · /, "")}` : "미배정" }), h("td", { class: "num" + (v && r.qty != null && v.qty != null && v.qty !== r.qty ? " move-issue" : ""), text: v?.qty != null ? fmtN(v.qty) : "-" })
+          ])))
+        ]))
+      ]) : null,
+      opts.compact ? null : h("details", { class: "vstat__more" }, [
+        h("summary", {}, `요청수량 일정 (${g.visits.length}건)`),
+        g.visits.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" }, [
+          h("thead", {}, h("tr", {}, ["번호", "날짜", "방문", "요청수량", "교육물량", "마지막 수정"].map((x) => h("th", { text: x })))),
+          h("tbody", {}, g.visits.map((v, i) => h("tr", { class: v.date < t ? "is-past" : null }, [
+            h("td", { class: "num muted", text: String(i + 1) }), h("td", { class: "nowrap", text: `${shortDate(v.date)}${v.startTime ? " " + v.startTime : ""}` }), h("td", { text: v.title.replace(/^묵주 교육 · /, "") + (v.place ? ` · ${v.place}` : "") }),
+            h("td", { class: "num", text: v.qty != null ? fmtN(v.qty) : "-" }), h("td", { class: "num", text: v.eduQty != null ? fmtN(v.eduQty) : "-" }),
+            h("td", { class: "muted small nowrap", text: [v.qtyBy ? `수량 ${v.qtyBy} ${localAt(v.qtyAt)}` : "", v.eduBy ? `교육 ${v.eduBy} ${localAt(v.eduAt)}` : ""].filter(Boolean).join(" · ") || "-" })
+          ])))
+        ])) : h("p", { class: "muted", text: "연결된 일정이 없어요." })
+      ])
+    ]);
+  }
+
   async function pageProject(id) {
     drawMini(null);
     setMain("projects", loading());
@@ -4132,86 +4253,6 @@
           isAdmin() ? h("button", { type: "button", role: "tab", "aria-selected": "false", title: "프로젝트 전체 WBS와 PDF. 관리자만 볼 수 있어요", onclick: () => go(`#/projects/${id}/process`) }, ["상세 프로세스", " ", adminBadge()]) : null
         ]) : null,
         tab === "volunteer" ? volunteerPanel(id) : h("div", { class: "pj-areas" }, [...named.map((n) => card(n, n)), common ? card("", COMMON_NAME) : null])
-      ]);
-    }
-    // 봉사자 현황: 묶음(묵주·손십자가)마다 요약, 최근 변동, 신청과 일정 대조
-    function volunteerPanel(pid) {
-      const box = h("div", { class: "stack vstat" }, loading());
-      api(`/projects/${pid}/volunteer-status`).then((r) => fill(box, ...(r.groups.length ? r.groups.map(volGroupSection) : [h("div", { class: "card empty", text: "이 프로젝트에는 봉사자 묶음이 없어요." })]))).catch((e) => fill(box, failed(e)));
-      return box;
-    }
-    const localAt = (at) => { if (!at) return ""; const d = new Date(`${at.replace(" ", "T")}Z`); return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
-    // 수도회 이름 대조 (참고용): 띄어쓰기·괄호·흔한 낱말을 빼고 앞 3글자가 겹치면 같은 곳으로 봄
-    const orgKey = (s) => { let v = String(s || "").replace(/\(.*?\)|\[.*?\]/g, "").replace(/[\s·]/g, "").replace(/^묵주교육/, ""); for (const w of ["수녀회", "수도회", "수녀원", "수녀", "회", "한국", "총원", "관구", "서울", "대구", "대전", "수원", "인천", "봉쇄"]) v = v.split(w).join(""); return v.replace(/\d+$/, ""); };
-    function volGroupSection(g) {
-      const unit = g.ledgers[0]?.unit || "개";
-      const inT = g.ledgers.reduce((n, l) => n + l.inTotal, 0), outT = g.ledgers.reduce((n, l) => n + l.outTotal, 0);
-      const t = today();
-      const reqT = g.visits.reduce((n, v) => n + (v.qty || 0), 0), left = g.visits.filter((v) => v.date >= t).reduce((n, v) => n + (v.qty || 0), 0);
-      const appT = g.requests.reduce((n, r) => n + (r.qty || 0), 0);
-      const tile = (label, value, sub) => h("div", { class: "card vstat__tile" }, [h("span", { class: "muted small", text: label }), h("strong", { text: value }), sub ? h("span", { class: "muted small", text: sub }) : null]);
-      // 신청 ↔ 일정 대조
-      const used = new Set();
-      const matchOf = (r) => {
-        const k = orgKey(r.org); if (!k) return null;
-        let best = null;
-        for (const v of g.visits) {
-          if (used.has(v.id)) continue;
-          const vk = orgKey(v.title.replace(/^묵주 교육 · /, ""));
-          if (!vk || !(k.includes(vk.slice(0, 3)) || vk.includes(k.slice(0, 3)))) continue;
-          const dd = Math.abs((parseYmd(v.date) - parseYmd(r.date || v.date)) / 86400000);
-          if (dd <= 60 && (!best || dd < best.dd)) best = { v, dd };
-        }
-        if (best) used.add(best.v.id);
-        return best?.v || null;
-      };
-      const matched = g.requests.map((r) => ({ r, v: matchOf(r) }));
-      const unassigned = matched.filter((x) => !x.v);
-      const kindLabel = { stock: "입출고", qty: "요청수량", edu: "교육물량", material: "원자재", recovery: "회수" };
-      const eduT = g.visits.reduce((n, v) => n + (v.eduQty || 0), 0);
-      return h("section", { class: "card stack vstat__group" }, [
-        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: `${g.name} · 봉사자 현황` }), h("span", { class: "muted small", text: "봉사자 화면에서 입력한 값이 바로 반영돼요" })]),
-        h("div", { class: "vstat__tiles" }, [
-          g.requests.length ? tile("수업 신청", `${g.requests.length}건`, `신청 수량 ${fmtN(appT)}${unassigned.length ? ` · 일정 미배정 ${unassigned.length}건` : ""}`) : null,
-          tile("요청수량 (일정)", fmtN(reqT), `방문 ${g.visits.length}건 · 남음 ${fmtN(left)}`),
-          tile("교육물량", fmtN(eduT), `적은 일정 ${g.visits.filter((v) => v.eduQty != null).length}건`),
-          tile("입고", `${fmtN(inT)} ${unit}`, g.ledgers.map((l) => l.name).join(", ") || "대장 없음"),
-          tile("출고", `${fmtN(outT)} ${unit}`, `재고 ${fmtN(inT - outT)} ${unit}`),
-          tile("원자재 보유", fmtN(g.material.total), g.material.count ? `원자재 ${g.material.kinds}종 · 최근 기준` : "기록 없음"),
-          tile("제품 회수", fmtN(g.recovery.total), g.recovery.count ? `기록 ${g.recovery.count}건` : "기록 없음")
-        ]),
-        g.ledgers.length ? h("div", { class: "vstat__ledgers" }, g.ledgers.map((l) => h("a", { class: "stock-tag", href: `#/stock/${l.id}`, text: `${l.name} · 재고 ${fmtN(l.inTotal - l.outTotal)} ${l.unit}` }))) : null,
-        h("h3", { class: "vstat__h", text: "최근 변동" }),
-        g.changes.length ? h("ul", { class: "vstat__changes" }, g.changes.slice(0, 20).map((c) => h("li", {}, [
-          h("span", { class: "nowrap muted small", text: localAt(c.at) }),
-          h("span", { class: "nowrap" }, [c.who || "-", c.volunteer ? h("span", { class: "stock-tag", text: "봉사자" }) : null]),
-          h("span", { class: "stock-tag vstat__kind", text: kindLabel[c.kind] || c.kind }),
-          c.ledgerId ? h("a", { href: `#/stock/${c.ledgerId}`, text: c.where }) : h("span", { text: c.where }),
-          h("span", { class: "vstat__what", text: c.what })
-        ]))) : h("p", { class: "muted", text: "아직 변동이 없어요." }),
-        g.changes.length > 20 ? h("p", { class: "muted small", text: `최근 20건만 보여요 (전체 ${g.changes.length}건). 대장별 자세한 기록은 입출고 관리에서 봐요.` }) : null,
-        g.requests.length ? h("details", { class: "vstat__more", open: unassigned.length > 0 }, [
-          h("summary", {}, [`수업 신청과 일정 대조 (${g.requests.length}건)`, unassigned.length ? h("span", { class: "move-issue small", text: ` · 미배정 ${unassigned.length}건` }) : null]),
-          h("p", { class: "muted small", text: "네이버폼 신청(연락처 제외)과 봉사자 일정을 수도회 이름으로 자동 대조한 참고용이에요. 합동 수업·이름이 다른 경우 틀릴 수 있어요." }),
-          h("div", { class: "table-wrap" }, h("table", { class: "table" }, [
-            h("thead", {}, h("tr", {}, ["번호", "수도회", "희망일", "신청 수량", "일정", "일정 수량"].map((x) => h("th", { text: x })))),
-            h("tbody", {}, matched.map(({ r, v }) => h("tr", { class: v ? null : "vstat__miss" }, [
-              h("td", { class: "num muted", text: r.no ?? "-" }), h("td", { text: r.org }), h("td", { class: "nowrap", text: r.date ? `${shortDate(r.date)}${r.time ? " " + r.time : ""}` : "-" }), h("td", { class: "num", text: r.qty != null ? fmtN(r.qty) : "-" }),
-              h("td", { class: "nowrap", text: v ? `${shortDate(v.date)} ${v.title.replace(/^묵주 교육 · /, "")}` : "미배정" }), h("td", { class: "num" + (v && r.qty != null && v.qty != null && v.qty !== r.qty ? " move-issue" : ""), text: v?.qty != null ? fmtN(v.qty) : "-" })
-            ])))
-          ]))
-        ]) : null,
-        h("details", { class: "vstat__more" }, [
-          h("summary", {}, `요청수량 일정 (${g.visits.length}건)`),
-          g.visits.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" }, [
-            h("thead", {}, h("tr", {}, ["번호", "날짜", "방문", "요청수량", "교육물량", "마지막 수정"].map((x) => h("th", { text: x })))),
-            h("tbody", {}, g.visits.map((v, i) => h("tr", { class: v.date < t ? "is-past" : null }, [
-              h("td", { class: "num muted", text: String(i + 1) }), h("td", { class: "nowrap", text: `${shortDate(v.date)}${v.startTime ? " " + v.startTime : ""}` }), h("td", { text: v.title.replace(/^묵주 교육 · /, "") + (v.place ? ` · ${v.place}` : "") }),
-              h("td", { class: "num", text: v.qty != null ? fmtN(v.qty) : "-" }), h("td", { class: "num", text: v.eduQty != null ? fmtN(v.eduQty) : "-" }),
-              h("td", { class: "muted small nowrap", text: [v.qtyBy ? `수량 ${v.qtyBy} ${localAt(v.qtyAt)}` : "", v.eduBy ? `교육 ${v.eduBy} ${localAt(v.eduAt)}` : ""].filter(Boolean).join(" · ") || "-" })
-            ])))
-          ])) : h("p", { class: "muted", text: "연결된 일정이 없어요." })
-        ])
       ]);
     }
     page = { name: "projects", reload: async () => { const [d, r] = await Promise.all([api(`/projects/${id}`), isAdmin() ? api(`/projects/${id}/processes`) : { processes: [] }]); procs = r.processes; apply(d); } };
@@ -5392,11 +5433,19 @@
     const from = mondayOf(fromYmd), to = mondayOf(toYmd); to.setDate(to.getDate() + 7);
     const dayX = (x) => Math.round((parseYmd(x) - from) / DAY) * (WEEK_W / 7);
     const width = (Math.round((to - from) / DAY) / 7) * WEEK_W;
-    const months = [];
-    for (const d = new Date(from.getFullYear(), from.getMonth(), 1); d < to; d.setMonth(d.getMonth() + 1)) months.push(h("span", { class: "gantt__month", style: `left:${Math.max(0, dayX(ymd(d)))}px`, text: `${String(d.getFullYear()).slice(2)}.${pad(d.getMonth() + 1)}` }));
+    const months = [], bands = [];
+    const curMonth = t.slice(0, 7);
+    for (const d = new Date(from.getFullYear(), from.getMonth(), 1), i = { n: 0 }; d < to; d.setMonth(d.getMonth() + 1), i.n++) {
+      const x0 = Math.max(0, dayX(ymd(d))), nx = new Date(d.getFullYear(), d.getMonth() + 1, 1), x1 = Math.min(width, dayX(ymd(nx)));
+      const key = ymd(d).slice(0, 7);
+      months.push(h("span", { class: "gantt__month" + (key === curMonth ? " is-now" : ""), style: `left:${x0}px;width:${x1 - x0}px`, text: `${String(d.getFullYear()).slice(2)}.${pad(d.getMonth() + 1)}` }));
+      bands.push({ x0, w: x1 - x0, odd: i.n % 2 === 1, now: key === curMonth });
+    }
     const inRange = t >= ymd(from) && t < ymd(to);
     const todayLine = () => (inRange ? h("i", { class: "gantt__today", style: `left:${dayX(t)}px`, title: `오늘 ${t}` }) : null);
-    const track = (kids) => h("div", { class: "gantt__track", style: `width:${width}px` }, [todayLine(), ...(kids || [])]);
+    // 월마다 옅은 음영, 이번 달은 따로 표시 (막대가 없어도 시간이 읽히게)
+    const bandEls = () => bands.map((b) => h("span", { class: "vtl__band" + (b.odd ? " is-odd" : "") + (b.now ? " is-now" : ""), style: `left:${b.x0}px;width:${b.w}px` }));
+    const track = (kids) => h("div", { class: "gantt__track vtl__track", style: `width:${width}px` }, [...bandEls(), todayLine(), ...(kids || [])]);
     const head = (nameCell) => h("div", { class: "gantt__row gantt__row--head", role: "row" }, [nameCell, h("div", { class: "gantt__track", style: `width:${width}px` }, [...months, todayLine()])]);
     const scrollToToday = (el) => requestAnimationFrame(() => { if (inRange) el.scrollLeft = Math.max(0, dayX(t) - 160); });
     return { track, head, scrollToToday };
@@ -5409,12 +5458,16 @@
     const tag = (cls, text) => h("span", { class: "vwbs__tag vwbs__tag--" + cls, text });
     // 원자재 조달(2026-07)부터 WYD(2027-08)까지
     const tl = volTimeline("2026-07-01", "2027-08-31");
-    const nameCell = (level, code, label, subs, tags, chev, onclick) => h(onclick ? "button" : "div", { class: "gantt__name wbs__name vwbs__cell", type: onclick ? "button" : null, style: `padding-left:${8 + level * 14}px`, "aria-expanded": chev == null ? null : String(chev), onclick }, [
+    const openProc = new Set(JSON.parse(store.get("ps.vwbsOpenProc", "[]") || "[]"));
+    const saveOpen = () => store.set("ps.vwbsOpenProc", JSON.stringify([...openProc]));
+    // 한 줄짜리 이름 칸: 번호 · 이름 · 상태 점. 자세한 내용은 줄을 눌러 펼침
+    const nameCell = (level, code, label, tags, chev, onclick, extraCls) => h(onclick ? "button" : "div", { class: `gantt__name wbs__name vwbs__cell${extraCls ? " " + extraCls : ""}`, type: onclick ? "button" : null, style: `padding-left:${10 + level * 16}px`, "aria-expanded": chev == null ? null : String(chev), onclick }, [
       h("span", { class: "wbs__chev" + (chev ? " is-open" : ""), html: chev == null ? "" : ICON.right }),
       h("span", { class: "wbs__code", text: code }),
-      h("span", { class: "wbs__label" }, [label, ...subs.filter(Boolean).map((x) => (typeof x === "string" ? h("small", { class: "muted", text: x }) : x))]),
+      h("span", { class: "vwbs__title", title: typeof label === "string" ? label : null, text: typeof label === "string" ? label : "" }, typeof label === "string" ? null : label),
       h("span", { class: "vwbs__state" }, tags.filter(Boolean))
     ]);
+    const dot = (kind, text) => h("span", { class: `vwbs__dot vwbs__dot--${kind}`, title: text }, [h("i"), text]);
     const draw = () => {
       const rows = [];
       ROSARY_MILESTONES.forEach((m, mi) => {
@@ -5424,23 +5477,32 @@
         const open = !closed.has(code);
         const fixedN = m.procs.filter((n) => ROSARY_PROCS[n].fixed).length;
         const toggle = () => { open ? closed.add(code) : closed.delete(code); store.set("ps.vwbsClosed", JSON.stringify([...closed])); draw(); };
-        rows.push(h("div", { class: "gantt__row wbs-row wbs-row--0" + (m.first ? " is-first" : ""), role: "row" }, [
-          nameCell(0, code, h("span", { text: m.name }), [`주요 업무: ${m.main}`, `연계: ${m.link}`], [m.first ? tag("first", "가장 먼저 결정") : m.procs.length ? h("span", { class: "muted small", text: `확정 ${fixedN}/${m.procs.length}` }) : null], open, toggle),
+        rows.push(h("div", { class: "gantt__row wbs-row wbs-row--0" + (m.first ? " is-first" : ""), role: "row", title: `주요 업무: ${m.main} · 연계: ${m.link}` }, [
+          nameCell(0, code, h("span", {}, [h("strong", { text: m.name }), h("small", { class: "muted", text: `  ${m.main}` })]), [m.first ? tag("first", "먼저 결정") : m.procs.length ? h("span", { class: "vwbs__count", text: `확정 ${fixedN}/${m.procs.length}` }) : null], open, toggle),
           tl.track()
         ]));
         if (!open) return;
-        if (!m.procs.length) rows.push(h("div", { class: "gantt__row wbs-row wbs-row--1", role: "row" }, [nameCell(1, `${code}.1`, h("span", { text: m.main }), ["판매가(20·25달러)·판매 경로(출판사·자체·SNC) 결정", `연계: ${m.link}`], [tag("todo", "결정 필요")]), tl.track()]));
+        if (!m.procs.length) rows.push(h("div", { class: "gantt__row wbs-row wbs-row--1", role: "row" }, [nameCell(1, `${code}.1`, `${m.main} — 판매가(20·25달러)·판매 경로 결정`, [dot("todo", "결정 필요")]), tl.track()]));
         procs.forEach((n, pi) => {
-          const p = ROSARY_PROCS[n], pc = `${code}.${pi + 1}`;
-          rows.push(h("div", { class: "gantt__row wbs-row wbs-row--1", role: "row" }, [
-            nameCell(1, pc, h("span", {}, [h("span", { class: "vwbs__no", text: `공정 ${n} ` }), p.name]), [p.feat, p.joint ? h("small", { class: "vwbs__joint", text: `공동 작업: ${p.joint}` }) : null, `연계: ${p.link}`], [tag(p.fixed ? "fixed" : "open", p.fixed ? "확정" : "미정"), p.joint ? tag("joint", "공동 작업") : null]),
+          const p = ROSARY_PROCS[n], pc = `${code}.${pi + 1}`, isOpen = openProc.has(n);
+          const flip = () => { isOpen ? openProc.delete(n) : openProc.add(n); saveOpen(); draw(); };
+          rows.push(h("div", { class: "gantt__row wbs-row wbs-row--1" + (isOpen ? " is-open" : ""), role: "row" }, [
+            nameCell(1, pc, `공정 ${n} · ${p.name}`, [p.joint ? dot("joint", "공동") : null, dot(p.fixed ? "fixed" : "open", p.fixed ? "확정" : "미정")], isOpen, flip),
             tl.track()
           ]));
-          (p.tasks || []).forEach((tk, ti) => rows.push(h("div", { class: "gantt__row wbs-row wbs-row--2", role: "row" }, [nameCell(2, `${pc}.${ti + 1}`, h("span", { text: tk }), [], [tag("todo", "추가 과업")]), tl.track()])));
+          if (isOpen) rows.push(h("div", { class: "vwbs__detail", role: "row" }, [
+            h("dl", {}, [
+              h("dt", { text: "업무 특성" }), h("dd", { text: p.feat }),
+              p.joint ? h("dt", { text: "공동 작업" }) : null, p.joint ? h("dd", { class: "vwbs__joint", text: p.joint }) : null,
+              h("dt", { text: "연계 업무" }), h("dd", { text: p.link }),
+              p.tasks?.length ? h("dt", { text: "추가 과업" }) : null,
+              p.tasks?.length ? h("dd", {}, h("ol", { class: "vwbs__tasks" }, p.tasks.map((tk) => h("li", { text: tk })))) : null
+            ])
+          ]));
         });
       });
       const chart = h("div", { class: "gantt vol-wbs__chart", role: "table" }, [
-        tl.head(h("div", { class: "gantt__name gantt__name--head wbs__name vwbs__cell" }, [h("span", { class: "wbs__chev" }), h("span", { class: "wbs__code", text: "WBS" }), h("span", { class: "wbs__label", text: "마일스톤 · 공정 · 과업" }), h("span", { class: "vwbs__state", text: "상태" })])),
+        tl.head(h("div", { class: "gantt__name gantt__name--head wbs__name vwbs__cell" }, [h("span", { class: "wbs__chev" }), h("span", { class: "wbs__code", text: "WBS" }), h("span", { class: "vwbs__title", text: "마일스톤 · 공정 (눌러서 자세히)" }), h("span", { class: "vwbs__state", text: "상태" })])),
         ...rows
       ]);
       tl.scrollToToday(chart);
@@ -5456,8 +5518,8 @@
           h("button", { class: "btn btn--ghost btn--sm", type: "button", text: closed.size ? "모두 펼치기" : "모두 접기", onclick: () => { if (closed.size) closed.clear(); else ROSARY_MILESTONES.forEach((_, i) => closed.add(String(i + 1))); store.set("ps.vwbsClosed", JSON.stringify([...closed])); draw(); } })
         ]),
         chart,
-        h("div", { class: "gantt__legend muted small" }, [tag("fixed", "확정"), " 방식이 정해져 진행 중 ", tag("open", "미정"), " 방식을 정하고 과업을 새로 만들어야 함 ", tag("joint", "공동 작업"), " 봉사자와 함께하는 작업 ", h("i", { class: "vwbs__todaykey" }), " 오늘"]),
-        h("p", { class: "muted small", text: "빨간 세로선이 오늘이에요. 공정별 일정·담당이 정해지면 막대로 보여요." })
+        h("div", { class: "vwbs__legend muted small" }, [dot("fixed", "확정 (진행 중)"), dot("open", "미정 (방식 결정 필요)"), dot("joint", "공동 작업 (봉사자와 함께)"), h("span", {}, [h("i", { class: "vwbs__todaykey" }), " 오늘"]), h("span", {}, [h("i", { class: "vwbs__nowkey" }), " 이번 달"])]),
+        h("p", { class: "muted small", text: "공정 줄을 누르면 업무 특성·연계 업무·추가 과업이 펼쳐져요. 공정별 일정이 정해지면 막대로 보여요." })
       );
     };
     draw();
