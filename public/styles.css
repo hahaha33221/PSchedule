@@ -1565,6 +1565,10 @@ button.gantt__name:hover { background: var(--surface-2); }
 .today-find__chip { display: inline-flex; align-items: center; gap: 4px; padding: 3px 6px 3px 10px; border-radius: 999px; background: var(--surface-2); font-size: 13px; font-weight: 600; }
 .today-find__chip small { padding-right: 4px; color: var(--muted); font-weight: 500; }
 .today-find__chip.is-mine { background: var(--primary-soft); color: var(--primary); }
+.today-find__chip.is-ex { gap: 3px; background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+.today-find__day { display: inline-flex; align-items: center; gap: 2px; margin-left: 8px; }
+.today-find__date { min-width: 96px; text-align: center; font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.today-find__date.is-today { color: var(--primary); }
 .today-find input.today-find__add { width: 140px; flex: none; height: 28px; padding: 3px 10px; border-radius: 999px; font-size: 13px; }
 .today-find__groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 16px; }
 .today-find__group h3 { margin: 0 0 4px; font-size: 13.5px; }

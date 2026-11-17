@@ -1987,13 +1987,30 @@
     const memoBox = h("div", { class: "card today-memos" }, [h("h2", { class: "card__title", text: "메모" }), quickMemo(day), memoList]);
     // 이름으로 모아 보기: 공통 검색어 + 내 검색어, 그날 걸린 일정·할 일·메모
     const findBox = h("section", { class: "card today-find" }, loading());
+    let findDay = day; // 이 칸만 앞뒤 날짜로 옮겨 볼 수 있음 (아래 일정은 그대로)
+    let findSeq = 0;
     async function loadFind() {
-      const r = await api(`/today-search?date=${day}`);
-      const save = async (mine) => { await act(() => api("/today-keywords", { method: "PUT", body: { keywords: mine } })); quiet(loadFind()); };
+      const seq = ++findSeq;
+      const r = await api(`/today-search?date=${findDay}`);
+      if (seq !== findSeq) return; // 날짜를 빨리 넘길 때 늦게 온 응답은 버림
+      const put = async (body) => { await act(() => api("/today-keywords", { method: "PUT", body })); quiet(loadFind()); };
+      const save = (mine) => put({ keywords: mine });
+      const saveEx = (ex) => put({ excludes: ex });
+      const moveDay = (d) => { findDay = d; quiet(loadFind()); };
       const me = state.user.name;
       const hasMe = r.common.includes(me) || r.mine.includes(me);
       const add = h("input", { class: "today-find__add", maxlength: "30", placeholder: "검색어 추가", "aria-label": "검색어 추가" });
       add.addEventListener("keydown", (e) => { if (e.key === "Enter" && add.value.trim()) { e.preventDefault(); save([...r.mine, add.value.trim()]); } });
+      const exAdd = h("input", { class: "today-find__add today-find__add--ex", maxlength: "30", placeholder: "제외어 추가", "aria-label": "제외어 추가" });
+      exAdd.addEventListener("keydown", (e) => { if (e.key === "Enter" && exAdd.value.trim()) { e.preventDefault(); saveEx([...r.excludes, exAdd.value.trim()]); } });
+      const exChip = (k) => h("span", { class: "today-find__chip is-ex" }, [h("span", { "aria-hidden": "true", text: "−" }), k, h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": `제외어 ${k} 빼기`, html: ICON.close, onclick: () => saveEx(r.excludes.filter((x) => x !== k)) })]);
+      const t0 = today();
+      const dayNav = h("div", { class: "today-find__day" }, [
+        h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "전날", title: "전날", html: ICON.left, onclick: () => moveDay(shiftYmd(findDay, -1)) }),
+        h("span", { class: "today-find__date" + (findDay === t0 ? " is-today" : ""), text: dateLabel(findDay) }),
+        h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "다음 날", title: "다음 날", html: ICON.right, onclick: () => moveDay(shiftYmd(findDay, 1)) }),
+        findDay !== t0 ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "오늘", onclick: () => moveDay(t0) }) : null
+      ]);
       const chip = (k, mine) => h("span", { class: "today-find__chip" + (mine ? " is-mine" : "") }, [k, mine ? h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": `${k} 빼기`, html: ICON.close, onclick: () => save(r.mine.filter((x) => x !== k)) }) : h("small", { text: "공통" })]);
       const row = (x) => {
         const key = x.ext ? `ext:${x.id}` : x.type === "task" ? `task:${x.id}` : x.type === "memo" ? (x.meetingId ? `event:${x.meetingId}` : `day:${x.date}`) : `event:${x.id}`;
@@ -2018,12 +2035,14 @@
       fill(findBox,
         h("div", { class: "card__head" }, [
           toggle,
+          open ? dayNav : null,
           open && !hasMe ? h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => save([...r.mine, me]) }, [icon("search"), `내 이름(${me})으로 찾기`]) : null
         ]),
         open ? h("div", { class: "today-find__chips" }, [...r.common.map((k) => chip(k, false)), ...r.mine.map((k) => chip(k, true)), add]) : null,
+        open ? h("div", { class: "today-find__chips today-find__chips--ex" }, [h("span", { class: "muted small", text: "제외" }), ...r.excludes.map(exChip), exAdd, r.excludes.length ? null : h("span", { class: "muted small", text: "이 말이 들어간 것은 결과에서 빼요" })]) : null,
         open ? h("div", { class: "today-find__groups" }, r.groups.map((g) => h("div", { class: "today-find__group" }, [
-          h("h3", {}, [g.keyword, h("span", { class: "muted small", text: ` ${g.results.length}건` })]),
-          g.results.length ? h("ul", { class: "today-find__list" }, g.results.map((x) => row({ ...x, keyword: g.keyword }))) : h("p", { class: "muted small", text: "이 날 걸린 것이 없어요." })
+          h("h3", {}, [g.keyword, h("span", { class: "muted small", text: ` ${g.results.length}건${g.excluded ? ` (제외 ${g.excluded})` : ""}` })]),
+          g.results.length ? h("ul", { class: "today-find__list" }, g.results.map((x) => row({ ...x, keyword: g.keyword }))) : h("p", { class: "muted small", text: g.excluded ? "제외어로 모두 빠졌어요." : "이 날 걸린 것이 없어요." })
         ]))) : null,
         open && r.groups.some((g) => g.results.some((x) => x.field && x.field !== "제목")) ? h("p", { class: "muted small today-find__legend" }, [h("span", { class: "today-find__plus", text: "+" }), " 제목이 아닌 내용(설명·안건·메모 등)에서 찾은 것"]) : null
       );

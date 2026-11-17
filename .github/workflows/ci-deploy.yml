@@ -365,6 +365,13 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"keywords":["1","2","3","4","5","6","7","8","9","10","11"]}' $B/today-keywords)" = 400
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" "$B/today-search?date=bad")" = 400
           curl -fs -H "$H" -XPUT -d '{"keywords":[]}' $B/today-keywords >/dev/null
+          # 제외어: 걸린 항목은 모든 묶음에서 빠지고, 검색어는 그대로 남음
+          curl -fs -H "$H" -XPOST -d '{"kind":"meeting","title":"권구택 취소 회의","startDate":"2030-07-01"}' $B/events >/dev/null
+          curl -fs -H "$H" -XPUT -d '{"excludes":["취소"]}' $B/today-keywords | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.excludes.join()!=="취소")process.exit(1)'
+          curl -fs -H "$H" "$B/today-search?date=2030-07-01" | node -e 'const g=JSON.parse(require("fs").readFileSync(0)).groups.find(x=>x.keyword==="권구택");if(g.results.some(r=>r.title.includes("취소"))||g.excluded!==1||!g.results.some(r=>r.title==="권구택 보고"))process.exit(1)'
+          curl -fs -H "$(bearer "$A1")" "$B/today-search?date=2030-07-01" | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.excludes.length)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"excludes":["1","2","3","4","5","6","7","8","9","10","11"]}' $B/today-keywords)" = 400
+          curl -fs -H "$H" -XPUT -d '{"excludes":[]}' $B/today-keywords >/dev/null
           # 공지 공개 범위: 권한마다 목록·안 읽음 수·본문이 다르고, 봉사자는 읽기만
           VH0="$(bearer "$A8")"
           NA=$(curl -fs -H "$H" -XPOST -d '{"title":"전체공지","body":"가","audience":"all"}' $B/notices | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')

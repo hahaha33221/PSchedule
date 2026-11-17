@@ -972,7 +972,10 @@ function snippet(text, re) {
 }
 // '오늘' 화면에 모든 직원이 함께 보는 검색어
 const TODAY_COMMON_KEYWORDS = ["이재호", "운영총괄부", "권구택"];
-const todayKeywordsOf = (userId) => { try { const v = JSON.parse(db.prepare("SELECT today_keywords FROM users WHERE id = ?").get(userId)?.today_keywords || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } };
+const todayListOf = (userId, col) => { try { const v = JSON.parse(db.prepare(`SELECT ${col} FROM users WHERE id = ?`).get(userId)?.[col] || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } };
+const todayKeywordsOf = (userId) => todayListOf(userId, "today_keywords");
+const todayExcludesOf = (userId) => todayListOf(userId, "today_excludes");
+const searchKey = (r) => `${r.type}:${r.id}`;
 // day 를 주면 그날에 걸친 것만 (일정은 시작~끝, 할 일은 마감일, 메모는 날짜)
 function runSearch(q, kind, v, day) {
   const re = searchPattern(q);
@@ -1860,16 +1863,29 @@ async function api(req, res, path) {
   if (path === "/api/today-search" && method === "GET") {
     const day = param("date");
     if (!isDate(day)) throw bad("날짜를 확인해 주세요.");
-    const mine = todayKeywordsOf(user.id);
+    const mine = todayKeywordsOf(user.id), excludes = todayExcludesOf(user.id);
     const words = [...new Set([...TODAY_COMMON_KEYWORDS, ...mine])];
-    return send(res, 200, { common: TODAY_COMMON_KEYWORDS, mine, groups: words.map((k) => ({ keyword: k, results: runSearch(k, "all", V, day).results })) });
+    // 제외어: 같은 방식으로 찾아서 걸린 항목은 모든 묶음에서 뺌
+    const drop = new Set(excludes.flatMap((x) => runSearch(x, "all", V, day).results.map(searchKey)));
+    return send(res, 200, { common: TODAY_COMMON_KEYWORDS, mine, excludes, groups: words.map((k) => {
+      const all = runSearch(k, "all", V, day).results;
+      const results = all.filter((r) => !drop.has(searchKey(r)));
+      return { keyword: k, results, excluded: all.length - results.length };
+    }) });
   }
   if (path === "/api/today-keywords" && method === "PUT") {
     const b = await readJson(req);
-    if (!Array.isArray(b.keywords) || b.keywords.length > 10) throw bad("검색어는 10개까지 정할 수 있어요.");
-    const list = [...new Set(b.keywords.map((k) => text(k, 30, "검색어", true)))].filter((k) => !TODAY_COMMON_KEYWORDS.includes(k));
-    db.prepare("UPDATE users SET today_keywords = ? WHERE id = ?").run(JSON.stringify(list), user.id);
-    return send(res, 200, { common: TODAY_COMMON_KEYWORDS, mine: list });
+    if (b.keywords !== undefined) {
+      if (!Array.isArray(b.keywords) || b.keywords.length > 10) throw bad("검색어는 10개까지 정할 수 있어요.");
+      const list = [...new Set(b.keywords.map((k) => text(k, 30, "검색어", true)))].filter((k) => !TODAY_COMMON_KEYWORDS.includes(k));
+      db.prepare("UPDATE users SET today_keywords = ? WHERE id = ?").run(JSON.stringify(list), user.id);
+    }
+    if (b.excludes !== undefined) {
+      if (!Array.isArray(b.excludes) || b.excludes.length > 10) throw bad("제외어는 10개까지 정할 수 있어요.");
+      const list = [...new Set(b.excludes.map((k) => text(k, 30, "제외어", true)))];
+      db.prepare("UPDATE users SET today_excludes = ? WHERE id = ?").run(JSON.stringify(list), user.id);
+    }
+    return send(res, 200, { common: TODAY_COMMON_KEYWORDS, mine: todayKeywordsOf(user.id), excludes: todayExcludesOf(user.id) });
   }
   if (path === "/api/search" && method === "GET") {
     const qv = String(param("q") || "").slice(0, 100);

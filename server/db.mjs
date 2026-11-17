@@ -489,6 +489,7 @@ function addUnitColumns(db) {
   `);
   // '오늘' 화면에서 모아 볼 개인 검색어 (공통 검색어는 서버 코드에)
   if (!has("users", "today_keywords")) db.exec("ALTER TABLE users ADD COLUMN today_keywords TEXT NOT NULL DEFAULT '[]'");
+  if (!has("users", "today_excludes")) db.exec("ALTER TABLE users ADD COLUMN today_excludes TEXT NOT NULL DEFAULT '[]'"); // 이름으로 모아 보기 제외어
   // 항목 수량 (관리자 전용으로 시작)
   if (!has("project_items", "qty")) db.exec("ALTER TABLE project_items ADD COLUMN qty INTEGER");
   // 협력업체 관련 체크 (항목·상세 프로세스, 관리자 전용으로 시작)
