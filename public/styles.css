@@ -1753,3 +1753,24 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .vol-fg__tag--packed { background: color-mix(in srgb, var(--c1, #2f9e44) 18%, transparent); }
 .vol-fg__tag--out { background: color-mix(in srgb, #f59f00 22%, transparent); }
 @media (max-width: 720px) { .vol-fg__flow { grid-template-columns: 1fr 1fr; } .vol-fg__arrow { display: none; } }
+/* 오늘: 회의실 예약 현황 (회의실 = 열, 시간 = 행) */
+.rooms { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.rooms .card__head { gap: 10px; }
+.rooms__scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
+.rooms__grid { display: grid; min-width: max-content; }
+.rooms__axiswrap, .rooms__col { display: flex; flex-direction: column; border-left: 1px solid var(--line-2); }
+.rooms__axiswrap { border-left: 0; position: sticky; left: 0; z-index: 3; background: var(--surface); }
+.rooms__name { height: 44px; display: flex; flex-direction: column; justify-content: center; padding: 0 10px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
+.rooms__name strong { font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rooms__allday { height: 30px; display: flex; gap: 4px; align-items: center; padding: 0 4px; overflow-x: auto; border-bottom: 1px solid var(--line-2); }
+.rooms__chip { flex: none; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 8px; border: 0; border-radius: 999px; font: inherit; font-size: 11px; cursor: pointer; background: color-mix(in srgb, var(--c) 20%, var(--surface)); }
+.rooms__axis { position: relative; }
+.rooms__axis span { position: absolute; right: 6px; transform: translateY(-50%); font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.rooms__axis span:first-child { transform: none; }
+.rooms__body { position: relative; }
+.rooms__line { position: absolute; left: 0; right: 0; border-top: 1px solid var(--line-2); }
+.rooms__now { position: absolute; left: 0; right: 0; height: 2px; background: var(--danger); z-index: 2; }
+.rooms__ev { position: absolute; z-index: 1; display: flex; flex-direction: column; gap: 1px; padding: 3px 6px; overflow: hidden; border: 0; border-left: 3px solid var(--c); border-radius: 6px; background: color-mix(in srgb, var(--c) 18%, var(--surface)); color: var(--ink); font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; }
+.rooms__ev strong { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rooms__ev span { color: var(--ink-2); white-space: nowrap; }
+.rooms__ev.is-ext { border-left-style: dashed; }

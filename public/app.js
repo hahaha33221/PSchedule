@@ -2057,7 +2057,76 @@
       );
       markPeeked();
     }
-    setMain("today", [quickbar, findBox, h("div", { class: "today-grid" }, [timelineBox, h("div", { class: "today-side" }, [tasksBox, memoBox])])]);
+    // 회의실 예약 현황: 회의실(관리자 등록)마다 시간대별로 어떤 일정이 잡혀 있는지
+    const roomBox = h("section", { class: "card rooms" });
+    let roomEvents = [];
+    function roomsDialog() {
+      const ta = h("textarea", { rows: "8", maxlength: "1200", placeholder: "한 줄에 하나씩\nA604호\nA301호\n영성센터 B동 401호" }, (state.rooms || []).join("\n"));
+      const err = errorLine();
+      const ok = h("button", { class: "btn btn--primary", type: "submit", text: "저장" });
+      const form = h("form", { class: "stack" }, [
+        h("p", { class: "muted small", text: "일정의 장소 칸에 이 이름이 들어 있으면 그 회의실 예약으로 보여요. 띄어쓰기는 무시해요. 30개까지예요." }),
+        field("회의실 목록", ta), err, h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])
+      ]);
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        busy(ok, async () => {
+          try { const r = await api("/admin/rooms", { method: "PUT", body: { rooms: ta.value.split("\n").map((x) => x.trim()).filter(Boolean) } }); state.rooms = r.rooms; closeDialog(); toast("회의실 목록을 저장했어요."); drawRooms(roomEvents); }
+          catch (ex) { showError(err, ex.message); }
+        });
+      });
+      openDialog("회의실 관리", form, { admin: true });
+    }
+    function drawRooms(events) {
+      roomEvents = events;
+      const rooms = state.rooms || [];
+      const squash = (x) => String(x || "").replace(/\s/g, "").toLowerCase();
+      const roomOf = (e) => { const loc = squash(e.location); if (!loc) return null; let best = null; for (const r of rooms) if (loc.includes(squash(r)) && (!best || r.length > best.length)) best = r; return best; };
+      const byRoom = new Map(rooms.map((r) => [r, []]));
+      for (const e of events) { const r = roomOf(e); if (r) byRoom.get(r).push(e); }
+      const timed = [...byRoom.values()].flat().filter((e) => e.startTime && e.startDate === day);
+      const startH = Math.min(8, ...timed.map((e) => Math.floor(minutes(e.startTime) / 60)));
+      const endH = Math.max(20, ...timed.map((e) => Math.ceil(minutes(e.endTime && e.endTime > e.startTime ? e.endTime : e.startTime) / 60) + (e.endTime && e.endTime > e.startTime ? 0 : 1)));
+      const RH = 40, H = (endH - startH) * RH;
+      const nowTop = day === today() ? (() => { const n = new Date(), m = n.getHours() * 60 + n.getMinutes(); return m >= startH * 60 && m <= endH * 60 ? ((m - startH * 60) / 60) * RH : null; })() : null;
+      const used = [...byRoom.values()].reduce((n, l) => n + l.length, 0);
+      const head = h("div", { class: "card__head" }, [
+        h("h2", { class: "card__title", text: "회의실 예약 현황" }),
+        h("span", { class: "muted small", text: rooms.length ? `${dateLabel(day)} · 예약 ${used}건` : "" }),
+        isAdmin() ? h("button", { class: "btn btn--ghost btn--sm btn--admin", type: "button", title: "관리자 전용", onclick: roomsDialog }, [icon("lock"), "회의실 관리"]) : null
+      ]);
+      if (!rooms.length) return fill(roomBox, head, h("p", { class: "muted", text: isAdmin() ? "아직 등록한 회의실이 없어요. '회의실 관리'에서 회의실 이름을 넣어 주세요." : "아직 등록된 회의실이 없어요. 관리자가 등록하면 여기에 보여요." }));
+      const axis = h("div", { class: "rooms__axis", style: `height:${H}px` }, Array.from({ length: endH - startH }, (_, i) => h("span", { style: `top:${i * RH}px`, text: `${pad(startH + i)}:00` })));
+      const col = (r) => {
+        const list = byRoom.get(r);
+        const allDay = list.filter((e) => !e.startTime || e.startDate !== day);
+        const items = list.filter((e) => e.startTime && e.startDate === day).map((e) => { const s0 = minutes(e.startTime); const en = e.endTime && e.endTime > e.startTime ? minutes(e.endTime) : s0 + 60; return { e, s: s0, en, lane: 0 }; }).sort((a, b) => a.s - b.s);
+        for (const it of items) { const busyL = new Set(items.filter((x) => x !== it && x.s < it.en && x.en > it.s && items.indexOf(x) < items.indexOf(it)).map((x) => x.lane)); while (busyL.has(it.lane)) it.lane++; }
+        const lanes = Math.max(1, ...items.map((x) => x.lane + 1));
+        const body = h("div", { class: "rooms__body", style: `height:${H}px` }, [
+          ...Array.from({ length: endH - startH }, (_, i) => h("i", { class: "rooms__line", style: `top:${i * RH}px` })),
+          nowTop != null ? h("i", { class: "rooms__now", style: `top:${nowTop}px` }) : null,
+          ...items.map((it) => h("button", {
+            type: "button", class: `rooms__ev c${evColor(it.e)}` + (it.e.ext ? " is-ext" : ""), "data-peek": evKey(it.e), onclick: () => openEv(it.e),
+            title: `${it.e.title} · ${timeRange(it.e)}${it.e.location ? " · " + it.e.location : ""}`,
+            style: `top:${((it.s - startH * 60) / 60) * RH}px;height:${Math.max(22, ((it.en - it.s) / 60) * RH - 2)}px;left:calc(100% * ${it.lane / lanes} + 2px);width:calc(100% / ${lanes} - 4px)`
+          }, [h("strong", { text: it.e.title }), h("span", { text: timeRange(it.e).replace(/^[^·]*·\s*/, "") })]))
+        ]);
+        return h("div", { class: "rooms__col" }, [
+          h("div", { class: "rooms__name" }, [h("strong", { text: r }), h("span", { class: "muted small", text: list.length ? `${list.length}건` : "비어 있음" })]),
+          allDay.length ? h("div", { class: "rooms__allday" }, allDay.map((e) => h("button", { type: "button", class: `rooms__chip c${evColor(e)}`, onclick: () => openEv(e), text: `종일 · ${e.title}` }))) : h("div", { class: "rooms__allday" }),
+          body
+        ]);
+      };
+      fill(roomBox, head,
+        h("div", { class: "rooms__scroll" }, h("div", { class: "rooms__grid", style: `grid-template-columns:52px repeat(${rooms.length}, minmax(130px, 1fr))` }, [
+          h("div", { class: "rooms__axiswrap" }, [h("div", { class: "rooms__name rooms__name--blank" }), h("div", { class: "rooms__allday" }), axis]),
+          ...rooms.map(col)
+        ])),
+        h("p", { class: "muted small", text: "일정의 장소 칸에 회의실 이름이 들어 있으면 여기에 보여요. 눌러서 자세히 보거나 고칠 수 있어요." })
+      );
+    }
+    setMain("today", [quickbar, findBox, roomBox, h("div", { class: "today-grid" }, [timelineBox, h("div", { class: "today-side" }, [tasksBox, memoBox])])]);
 
     async function load() {
       quiet(loadFind().catch((e) => { if (e.status !== 401) fill(findBox, failed(e)); }));
@@ -2067,6 +2136,8 @@
       const inCat = catFilter();
       const events = dedupeImported(allEvents(ev).filter((e) => showEv(e) && inCat(e)));
       drawTimeline(events);
+      // 회의실 예약은 분류 거르기와 관계없이 그날 보이는 일정 전부로
+      drawRooms(dedupeImported(allEvents(ev).filter(showEv)));
       drawTasks(tk.tasks.filter(inCat));
       memoList.replaceChildren(memoRows(mm.memos.filter(inCat), { empty: "이 날 남긴 메모가 없어요." }));
       markPeeked();
@@ -2818,7 +2889,7 @@
 
   async function reloadTeam() {
     const me = await api("/me");
-    state.user = me.user; state.team = me.team; state.units = me.units || []; state.tags = me.tags; state.categories = me.categories || []; state.calendars = me.calendars || [];
+    state.user = me.user; state.team = me.team; state.units = me.units || []; state.tags = me.tags; state.categories = me.categories || []; state.calendars = me.calendars || []; state.rooms = me.rooms || [];
   }
 
   function showIssued(title, p) {
@@ -6065,7 +6136,7 @@
   async function boot() {
     app.replaceChildren(h("div", { class: "loading loading--full", text: "불러오는 중…" }));
     const r = await api("/me");
-    state.user = r.user; state.team = r.team; state.units = r.units || []; state.tags = r.tags; state.calendars = r.calendars || []; state.unreadNotices = r.unreadNotices || 0;
+    state.user = r.user; state.team = r.team; state.units = r.units || []; state.tags = r.tags; state.calendars = r.calendars || []; state.rooms = r.rooms || []; state.unreadNotices = r.unreadNotices || 0;
     setCategories(r.categories);
     layout.main = null;
     render();

@@ -525,6 +525,10 @@ jobs:
           curl -fs -H "$H" -XPUT -d '{"menu":["in","out","req","nope"]}' $B/admin/vol-menu | grep -q '"menu":\["req","in","out"\]'
           curl -fs -H "$VH" $B/volunteer/menu | grep -q '"menu":\["req","in","out"\]'
           curl -fs -H "$H" -XPUT -d '{"menu":["home","notices","in","out"]}' $B/admin/vol-menu >/dev/null
+          # 회의실 목록: 관리자만 등록, 같은 이름은 하나로, 직원은 /api/me 로 받음
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPUT -d '{"rooms":["A604호"]}' $B/admin/rooms)" = 403
+          curl -fs -H "$H" -XPUT -d '{"rooms":["A604호"," A301호 ","A604호",""]}' $B/admin/rooms | grep -q '"rooms":\["A604호","A301호"\]'
+          curl -fs -H "$(bearer "$A1")" $B/me | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.rooms.join()!=="A604호,A301호")process.exit(1)'
           if curl -fs -H "$VH" $B/volunteer/stock/$VL | grep -q '"history"'; then echo "봉사자 응답에 수정 기록이 있어요"; exit 1; fi
           HN=$(curl -fs -H "$H" $B/stock/$VL | node -pe 'JSON.parse(require("fs").readFileSync(0)).history.length')
           J="{\"qty\":{\"$VO\":8}}"; curl -fs -H "$VH" -XPATCH -d "$J" $B/volunteer/stock-moves/$VM >/dev/null

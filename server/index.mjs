@@ -1342,6 +1342,8 @@ function inspectInput(v, label) {
 // 봉사자에게 보일 메뉴 (관리자가 단계적으로 엶). 저장 안 했으면 입고·출고 중심
 const VOL_MENU_KEYS = ["home", "schedule", "training", "notices", "wbs", "req", "in", "out", "material", "recovery"];
 const VOL_MENU_DEFAULT = ["home", "notices", "in", "out"];
+// 회의실 목록 (관리자가 등록). 일정 장소 글자에 이름이 들어 있으면 그 회의실 예약으로 봄
+const meetingRooms = () => { try { const v = JSON.parse(q.setting.get("meeting_rooms")?.value || "[]"); return Array.isArray(v) ? v.filter((x) => typeof x === "string") : []; } catch { return []; } };
 const volMenu = () => { try { const v = JSON.parse(q.setting.get("vol_menu")?.value || "null"); return Array.isArray(v) ? v.filter((k) => VOL_MENU_KEYS.includes(k)) : VOL_MENU_DEFAULT; } catch { return VOL_MENU_DEFAULT; } };
 // 기록 사진: 줄여 올린 JPG·PNG·WEBP 만, 기록당 4장까지
 const MOVE_PHOTO_MAX = 4;
@@ -1631,7 +1633,7 @@ async function api(req, res, path) {
 
   // 화면을 그리는 데 늘 필요한 것: 나, 팀원, 태그, 분류
   if (path === "/api/me" && method === "GET") {
-    return send(res, 200, { user: publicUser(user), team: teamOut(), units: unitsOut(), tags: q.tags.all(), categories: categoriesOut(), calendars: calendarsPublic(), unreadNotices: unreadOf(user) });
+    return send(res, 200, { user: publicUser(user), team: teamOut(), units: unitsOut(), tags: q.tags.all(), categories: categoriesOut(), calendars: calendarsPublic(), rooms: meetingRooms(), unreadNotices: unreadOf(user) });
   }
 
   // 비밀번호 변경 (본인)
@@ -2447,6 +2449,15 @@ async function api(req, res, path) {
     // 봉사자가 적은 원자재 보유물량 · 제품 회수물량 (최근 300건)
     if (path === "/api/admin/vol-records" && method === "GET") {
       return send(res, 200, { records: q.volRecordsAll.all().map((r) => ({ id: r.id, kind: r.kind, stage: r.stage || "in", group: r.group_name, date: r.date, name: r.name, qty: r.qty, note: r.note, author: r.author || "", updatedAt: r.updated_at })) });
+    }
+    // 회의실 목록: 한 줄에 하나, 30자·30개까지, 같은 이름은 하나로
+    if (path === "/api/admin/rooms" && method === "PUT") {
+      const b = await readJson(req);
+      if (!Array.isArray(b.rooms) || b.rooms.length > 30) throw bad("회의실은 30개까지 등록할 수 있어요.");
+      const rooms = [...new Set(b.rooms.map((x) => text(x, 30, "회의실 이름")).filter(Boolean))];
+      q.setSetting.run("meeting_rooms", JSON.stringify(rooms));
+      console.log(`[admin] ${user.login} → 회의실 목록 ${rooms.length}개`);
+      return send(res, 200, { rooms });
     }
     // 봉사자 메뉴 공개 범위
     if (path === "/api/admin/vol-menu" && method === "GET") return send(res, 200, { menu: volMenu(), keys: VOL_MENU_KEYS });
