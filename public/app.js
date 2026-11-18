@@ -4894,7 +4894,7 @@
     page = { name: "stock", reload: async () => { list = (await api("/stock")).ledgers; draw(); } };
     try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("stock", failed(e)); }
   }
-  // vol 이 있으면 봉사자 화면: 기록 입력만 (대장 고치기·지우기 없음, 자기 기록만 수정), 그리는 곳도 봉사자 화면
+  // vol 이 있으면 봉사자 화면: 기록 입력과 고치기·지우기 (대장은 못 바꿈, 누가 적은 기록이든 고침, 수정 기록에 남음), 그리는 곳도 봉사자 화면
   async function pageStock(id, vol) {
     const base = vol ? `/volunteer/stock/${id}` : `/stock/${id}`;
     const moveUrl = (mid) => (vol ? `/volunteer/stock-moves/${mid}` : `/stock-moves/${mid}`);
@@ -4903,7 +4903,7 @@
     const photoCache = new Map();
     const photoSrc = (pid) => { if (!photoCache.has(pid)) photoCache.set(pid, fetch(API + photoUrl(pid), { headers: { Authorization: "Bearer " + state.token } }).then((r) => (r.ok ? r.blob() : null)).then((b) => (b ? URL.createObjectURL(b) : null)).catch(() => null)); return photoCache.get(pid); };
     const photoImg = (pid, cls) => { const img = h("img", { class: cls || "move-photo", alt: "기록 사진" }); photoSrc(pid).then((u) => { if (u) img.src = u; }); return img; };
-    const canEditMove = (m) => !vol || m.mine;
+    const canEditMove = () => true; // 봉사자도 누가 적은 기록이든 고침 (수정 기록에 고친 사람이 남음)
     function viewPhotos(m) {
       openDialog(`${m.type === "in" ? "입고" : "출고"} 사진 · ${m.date}`, h("div", { class: "stack" }, [
         h("div", { class: "move-photos move-photos--big" }, m.photos.map((pid) => h("a", { href: "#", onclick: (e) => { e.preventDefault(); photoSrc(pid).then((u) => { if (u) window.open(u, "_blank", "noopener"); }); } }, photoImg(pid, "move-photo move-photo--big")))),
@@ -5031,7 +5031,7 @@
         const body = list.map((m, i) => {
           const day = Object.values(m.qty).reduce((a, b) => a + b, 0);
           running += day;
-          const rowAttrs = !vol || m.mine ? { class: "stock-row", tabindex: "0", title: "눌러서 고치기", onclick: () => moveDialog(type, m), onkeydown: (e) => { if (e.key === "Enter") moveDialog(type, m); } } : {};
+          const rowAttrs = canEditMove(m) ? { class: "stock-row", tabindex: "0", title: "눌러서 고치기", onclick: () => moveDialog(type, m), onkeydown: (e) => { if (e.key === "Enter") moveDialog(type, m); } } : {};
           return h("tr", rowAttrs, [
             h("td", { class: "num muted", text: String(i + 1) }), h("td", { class: "nowrap", text: m.date }),
             ...options.map((o) => num(m.qty[o.id])), num(day, "stock-strong"), num(running),
@@ -5039,10 +5039,10 @@
             isOut ? null : h("td", { class: "nowrap", text: m.inspectOk != null || m.inspectBad != null ? `합격 ${fmtN(m.inspectOk || 0)} · 불량 ${fmtN(m.inspectBad || 0)}` : "-" }),
             h("td", { class: "stock-note move-issue", text: m.issue || "" }),
             h("td", { class: "nowrap" }, m.photos.length ? h("button", { class: "btn btn--ghost btn--sm move-photo-btn", type: "button", title: "사진 보기", onclick: (e) => { e.stopPropagation(); viewPhotos(m); } }, [icon("note"), String(m.photos.length)]) : h("span", { class: "muted", text: "-" })),
-            vol ? null : h("td", { class: "nowrap", text: m.enteredBy || "-" })
+            vol ? h("td", { class: "nowrap" }, h("button", { class: "btn btn--ghost btn--sm", type: "button", "aria-label": `${m.date} ${isOut ? "출고" : "입고"} 고치기`, onclick: (e) => { e.stopPropagation(); moveDialog(type, m); } }, "고치기")) : h("td", { class: "nowrap", text: m.enteredBy || "-" })
           ]);
         });
-        const colsAfter = (isOut ? 2 : 2) + 2 + (vol ? 0 : 1);
+        const colsAfter = (isOut ? 2 : 2) + 2 + 1;
         return h("section", { class: "stock-sec" }, [
           h("div", { class: "card__head" }, [
             h("h2", { class: "card__title" }, [isOut ? "출고 현황 " : "입고 현황 ", h("span", { class: "muted small", text: isOut ? l.outLabel : l.inLabel })]),
@@ -5052,7 +5052,7 @@
             ])
           ]),
           h("div", { class: "card table-wrap" }, h("table", { class: "table stock-table" }, [
-            h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "순번" }), h("th", { text: isOut ? "출고일" : "입고일" }), ...options.map((o) => h("th", { class: "num", text: o.name })), h("th", { class: "num", text: "일계" }), h("th", { class: "num", text: "누계" }), isOut ? h("th", { text: "전달자" }) : null, h("th", { text: "비고" }), isOut ? null : h("th", { text: "검수" }), h("th", { text: "이슈" }), h("th", { text: "사진" }), vol ? null : h("th", { text: "입력자" })])),
+            h("thead", {}, h("tr", {}, [h("th", { class: "num", text: "순번" }), h("th", { text: isOut ? "출고일" : "입고일" }), ...options.map((o) => h("th", { class: "num", text: o.name })), h("th", { class: "num", text: "일계" }), h("th", { class: "num", text: "누계" }), isOut ? h("th", { text: "전달자" }) : null, h("th", { text: "비고" }), isOut ? null : h("th", { text: "검수" }), h("th", { text: "이슈" }), h("th", { text: "사진" }), h("th", { text: vol ? "고치기" : "입력자" })])),
             h("tbody", {}, body.length ? body : h("tr", {}, h("td", { colspan: String(options.length + 4 + colsAfter), class: "muted empty", text: "아직 기록이 없어요." }))),
             h("tfoot", {}, [
               h("tr", {}, [h("th", { colspan: "2", text: "합계" }), ...options.map((o) => num(sumOf(type, o.id))), num(sumOf(type)), h("td", { colspan: String(1 + colsAfter) })]),
@@ -5131,7 +5131,7 @@
           l.contract ? stat("계약", l.contract) : null, stat("입고", inAll), l.contract ? stat("미입고", l.contract - inAll) : null, stat("출고", outAll), stat("창고 재고", stock, stock < 0)
         ]),
         h("ol", { class: "stock-steps", "aria-label": "진행 단계" }, STOCK_STEPS.map((s, i) => h("li", {}, h("button", { class: "stock-step" + (s.id === step ? " is-active" : "") + (done[s.id] ? " is-done" : ""), type: "button", "aria-current": s.id === step ? "step" : null, onclick: () => pick(s.id) }, [stepNum(i, done[s.id]), h("span", { class: "stock-step__label", text: s.label })])))),
-        h("div", { class: "card stock-guide" }, [h("span", { class: "stock-guide__count", text: `${at + 1} / ${STOCK_STEPS.length}단계` }), h("h2", { text: cur.title }), h("p", { text: cur.hint }), vol && (step === "in" || step === "out") ? h("p", { class: "muted small", text: "직접 입력한 기록만 고칠 수 있어요. 다른 기록을 고쳐야 하면 담당 직원에게 알려 주세요." }) : null, !vol && l.volunteerEntry && (step === "in" || step === "out") ? h("p", { class: "muted small", text: "이 대장은 봉사자가 입력해요. 직원은 확인하고, 필요하면 기록을 눌러 고칠 수 있어요." }) : null]),
+        h("div", { class: "card stock-guide" }, [h("span", { class: "stock-guide__count", text: `${at + 1} / ${STOCK_STEPS.length}단계` }), h("h2", { text: cur.title }), h("p", { text: cur.hint }), vol && (step === "in" || step === "out") ? h("p", { class: "muted small", text: "기록 줄의 '고치기'를 누르면 고치거나 지울 수 있어요. 누가 언제 무엇을 고쳤는지 직원 화면 수정 기록에 남아요." }) : null, !vol && l.volunteerEntry && (step === "in" || step === "out") ? h("p", { class: "muted small", text: "이 대장은 봉사자가 입력해요. 직원은 확인하고, 필요하면 기록을 눌러 고칠 수 있어요." }) : null]),
         panel,
         h("div", { class: "stock-nav" }, [
           prev ? h("button", { class: "btn btn--ghost", type: "button", text: `이전: ${prev.label}`, onclick: () => pick(prev.id) }) : null,
@@ -5145,6 +5145,17 @@
     }
     if (vol) {
       if (vol.open) { step = vol.open; store.set(`ps.stockStep.${id}`, step); }
+      // 프로젝트 화면의 '고치기'로 오면 그 기록 고치기 창을 바로 엶
+      if (vol.editId) {
+        const r = await api(base); const em = r.moves.find((x) => x.id === vol.editId);
+        if (em) { step = em.type; store.set(`ps.stockStep.${id}`, step); }
+        apply(r);
+        if (vol.isCurrent()) {
+          history.replaceState(null, "", `#/vstock/${id}`);
+          if (em) moveDialog(em.type, em); else toast("그 기록을 찾을 수 없어요. 이미 지워졌을 수 있어요.");
+        }
+        return;
+      }
       apply(await api(base));
       if (vol.open && vol.isCurrent()) {
         history.replaceState(null, "", `#/vstock/${id}`); // 새로고침해도 입력 창이 다시 열리지 않게
@@ -5272,8 +5283,8 @@
       }
       if (tab === "vstock") {
         if (id) {
-          const open = location.hash.split("/")[3];
-          return pageStock(Number(id), { show, open: open === "in" || open === "out" ? open : null, isCurrent: () => seq === volSeq });
+          const [, , , open, editId] = location.hash.split("/");
+          return pageStock(Number(id), { show, open: open === "in" || open === "out" ? open : null, editId: open === "edit" ? Number(editId) || null : null, isCurrent: () => seq === volSeq });
         }
         const { ledgers } = await api("/volunteer/stock");
         document.title = `입출고 · ${TITLE}`;
@@ -5974,7 +5985,8 @@
             h("span", { class: "muted small", text: [m.handler, m.note].filter(Boolean).join(" · ") }),
             m.photos?.length ? h("span", { class: "muted small", text: `사진 ${m.photos.length}` }) : null,
             m.inspectBad ? h("span", { class: "move-issue small", text: `불량 ${fmtN(m.inspectBad)}` }) : null,
-            m.issue ? h("span", { class: "move-issue small", title: m.issue, text: "이슈 있음" }) : null
+            m.issue ? h("span", { class: "move-issue small", title: m.issue, text: "이슈 있음" }) : null,
+            h("a", { class: "link-btn small vol-moves__edit", href: `#/vstock/${l.id}/edit/${m.id}`, "aria-label": `${m.date} ${label} 고치기`, text: "고치기" })
           ]))) : h("p", { class: "muted small", text: `아직 ${label} 기록이 없어요.` }),
           moves.length > 5 ? h("a", { class: "link-btn small", href: `#/vstock/${l.id}`, text: `${label} 기록 ${moves.length}건 모두 보기` }) : null
         ]);

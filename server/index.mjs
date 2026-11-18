@@ -1623,14 +1623,13 @@ async function api(req, res, path) {
       if (!vstm[2] && method === "GET") return send(res, 200, ledgerOut(l, p, user));
       return send(res, 405, { error: "Method not allowed" });
     }
-    // 기록 사진: 봉사자는 자기가 입력한 기록에만 올리고 지움, 보기는 그 대장을 볼 수 있으면
+    // 기록 사진·고치기·지우기: 봉사자는 그 대장을 볼 수 있으면 누가 적은 기록이든 (수정 기록에 고친 사람이 남음)
     const vsmpm = path.match(/^\/api\/volunteer\/stock-moves\/(\d+)\/photos$/);
     if (vsmpm && method === "POST") {
       const m = q.stockMove.get(Number(vsmpm[1]));
       const l = m && q.ledger.get(m.ledger_id);
       const p = volLedgerProject(l);
       if (!p) throw notFound("기록");
-      if (m.created_by !== user.id) return send(res, 403, { error: "직접 입력한 기록에만 사진을 올릴 수 있어요." });
       addMovePhoto(m, l, await readJson(req), user);
       return send(res, 201, ledgerOut(l, p, user));
     }
@@ -1643,7 +1642,6 @@ async function api(req, res, path) {
       if (!p) throw notFound("사진");
       if (method === "GET") return sendPhoto(res, ph);
       if (method === "DELETE") {
-        if (m.created_by !== user.id) return send(res, 403, { error: "직접 입력한 기록의 사진만 지울 수 있어요." });
         delMovePhoto(ph, m, l, user); return send(res, 200, ledgerOut(l, p, user));
       }
       return send(res, 405, { error: "Method not allowed" });
@@ -1654,7 +1652,6 @@ async function api(req, res, path) {
       const l = m && q.ledger.get(m.ledger_id);
       const p = volLedgerProject(l);
       if (!p) throw notFound("기록");
-      if (m.created_by !== user.id) return send(res, 403, { error: "직접 입력한 기록만 고칠 수 있어요." });
       if (method === "PATCH") { patchStockMoveFrom(m, l, await readJson(req), user); return send(res, 200, ledgerOut(l, p, user)); }
       if (method === "DELETE") { deleteStockMoveBy(m, l, user); return send(res, 200, ledgerOut(l, p, user)); }
       return send(res, 405, { error: "Method not allowed" });

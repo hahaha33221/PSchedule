@@ -1606,6 +1606,7 @@ button.gantt__name:hover { background: var(--surface-2); }
 .vol-moves__list { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
 .vol-moves__list li { display: flex; align-items: baseline; gap: 10px; font-size: 13.5px; }
 .vol-moves__list .muted { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.vol-moves__list .vol-moves__edit { margin-left: auto; flex-shrink: 0; }
 .vol-sum { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 12px; }
 .vol-sum__tile { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; color: inherit; text-decoration: none; }
 .vol-sum__tile strong { font-size: 22px; font-variant-numeric: tabular-nums; }
