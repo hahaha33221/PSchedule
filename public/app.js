@@ -921,6 +921,7 @@
       link("volunteers", "봉사자 일정", "cal", null, active === "volunteers" && !sub),
       link("volunteers/training", "기본 교육", "check", null, active === "volunteers" && sub === "training"),
       link("volunteers/stock", "입출고 입력", "db", null, active === "volunteers" && sub === "stock"),
+      link("board", "게시판", "chat", null, active === "board"),
       part("공통 관리"),
       link("cats", "분류 관리", "folder", manageCategories),
       link("cals", "구글 캘린더 연결", "cal", manageCalendars),
@@ -5148,7 +5149,7 @@
     layout.main = null;
     const seq = ++volSeq;
     const { name, id } = route();
-    const tab = ["vschedule", "vtraining", "vstock", "vprojects", "vp", "vnotices"].includes(name) ? name : "vhome";
+    const tab = ["vschedule", "vtraining", "vstock", "vprojects", "vp", "vnotices", "vboard"].includes(name) ? name : "vhome";
     const vpView = tab === "vp" ? location.hash.split("/")[3] || "" : null; // 요약 / wbs / in / req / out
     document.title = `봉사자 · ${TITLE}`;
     // 왼쪽 메뉴: 직원 화면과 같은 틀 (묵주 아래에 입출고를 접고 펴기)
@@ -5184,6 +5185,7 @@
         volOn("schedule") ? link("vschedule", "일정", "cal") : null,
         volOn("training") ? link("vtraining", "기본 교육", "check") : null,
         ...VOL_GROUPS.map(groupNav),
+        link("vboard", "게시판", "chat"),
         volOn("notices") ? link("vnotices", "공지", "bell", false, null, state.unreadNotices) : null
       ].filter(Boolean));
     };
@@ -5226,6 +5228,7 @@
       const keyOf = { vschedule: "schedule", vtraining: "training", vnotices: "notices" }[tab];
       if (state.volMenu && keyOf && !volOn(keyOf)) return closedMsg();
       if (state.volMenu && tab === "vp" && vpView && !volOn(vpView)) return closedMsg();
+      if (tab === "vboard") { document.title = `게시판 · ${TITLE}`; return show(id ? await boardPostView("#/vboard", Number(id)) : await boardList("#/vboard")); }
       if (tab === "vnotices") {
         const setBadge = (r) => { if (seq === volSeq) { state.unreadNotices = r.unreadNotices; drawVolNav(); } };
         if (id) {
@@ -5983,6 +5986,88 @@
     ];
   }
 
+  /* ---------- 게시판 (봉사자·관리자): 요청·건의·자유, 비밀글은 쓴 사람과 관리자만 ---------- */
+  const BOARD_CAT = { request: "요청", suggest: "건의", free: "자유" };
+  let boardCat = "";
+  function boardEditDialog(base, post, onSaved) {
+    const err = errorLine();
+    const cat = h("select", {}, Object.entries(BOARD_CAT).map(([k, t]) => h("option", { value: k, text: t })));
+    cat.value = post?.category || "free";
+    const title = h("input", { value: post?.title || "", maxlength: "100", autofocus: true, placeholder: "제목" });
+    const body = h("textarea", { rows: "8", maxlength: "5000", placeholder: "자유롭게 적어 주세요" }, post?.body || "");
+    const secret = h("input", { type: "checkbox", checked: !!post?.secret });
+    const ok = h("button", { class: "btn btn--primary", type: "submit", text: post ? "저장" : "올리기" });
+    const form = h("form", { class: "stack" }, [
+      h("div", { class: "row2" }, [field("분류", cat), h("div", { class: "field" }, [h("span", { class: "field__label", text: "비밀글" }), h("label", { class: "check" }, [secret, h("span", { text: "비밀글로 쓰기 (나와 관리자만 볼 수 있어요)" })])])]),
+      field("제목", title), field("내용", body), err,
+      h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])
+    ]);
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      busy(ok, async () => {
+        try { const r = await api(post ? `/board/${post.id}` : "/board", { method: post ? "PATCH" : "POST", body: { category: cat.value, title: title.value, body: body.value, secret: secret.checked } }); closeDialog(); toast(post ? "고쳤어요." : "글을 올렸어요."); onSaved(post ? post.id : r.id); }
+        catch (ex) { showError(err, ex.message); }
+      });
+    });
+    openDialog(post ? "글 고치기" : "글쓰기", form);
+  }
+  // base: 봉사자는 '#/vboard', 관리자는 '#/board'
+  async function boardList(base) {
+    const r = await api("/board");
+    const list = r.posts.filter((p) => !boardCat || p.category === boardCat);
+    const box = h("div", { class: "stack" });
+    const draw = () => fill(box,
+      h("div", { class: "page-head" }, [h("h1", { class: base === "#/vboard" ? "vol__hello" : null, text: "게시판" }), h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => boardEditDialog(base, null, (id) => go(`${base}/${id}`)) }, [icon("plus"), "글쓰기"])]),
+      h("p", { class: "muted small", text: "요청·건의·자유롭게 의견을 남겨 주세요. 비밀글은 쓴 사람과 관리자만 볼 수 있어요." }),
+      h("div", { class: "seg seg--sm" }, [["", "전체"], ...Object.entries(BOARD_CAT)].map(([k, t]) => h("button", { type: "button", "aria-selected": String(boardCat === k), text: t, onclick: () => { boardCat = k; render(); } }))),
+      list.length ? h("ul", { class: "notice-list" }, list.map((p) => h("li", {}, h("a", { class: "card notice-item board-item" + (p.canSee ? "" : " is-locked"), href: p.canSee ? `${base}/${p.id}` : null, "aria-disabled": p.canSee ? null : "true" }, [
+        h("div", { class: "notice-item__title" }, [h("span", { class: "stock-tag", text: BOARD_CAT[p.category] }), p.secret ? h("span", { class: "board-lock", title: "비밀글", text: "🔒" }) : null, h("strong", { text: p.title })]),
+        h("div", { class: "notice-item__meta muted" }, [p.author ? h("span", { text: p.author }) : null, h("span", { text: dayOf(p.createdAt) }), p.comments && p.canSee ? h("span", { class: "with-icon" }, [icon("chat"), String(p.comments)]) : null])
+      ])))) : h("div", { class: "card empty", text: "아직 글이 없어요. 첫 글을 남겨 주세요." })
+    );
+    draw();
+    return box;
+  }
+  async function boardPostView(base, id) {
+    const r = await api(`/board/${id}`);
+    const p = r.post;
+    const box = h("div", { class: "stack" });
+    const reload = async () => fill(box, ...(await boardPostView(base, id)).childNodes);
+    const cIn = h("textarea", { rows: "2", maxlength: "1000", placeholder: "댓글 달기" });
+    const cOk = h("button", { class: "btn btn--primary btn--sm", type: "button", text: "댓글 달기", onclick: () => busy(cOk, async () => { if (!cIn.value.trim()) return; await act(() => api(`/board/${id}/comments`, { method: "POST", body: { body: cIn.value } })); await reload(); }) });
+    fill(box,
+      h("a", { class: "back-link", href: base }, [icon("left"), "게시판"]),
+      h("article", { class: "card notice-view stack" }, [
+        h("div", { class: "notice-item__title" }, [h("span", { class: "stock-tag", text: BOARD_CAT[p.category] }), p.secret ? h("span", { class: "board-lock", text: "🔒 비밀글" }) : null]),
+        h("h1", { text: p.title }),
+        h("div", { class: "muted notice-item__meta" }, [h("span", { text: p.author || "-" }), h("span", { text: dayOf(p.createdAt) }), p.updatedAt !== p.createdAt ? h("span", { text: "수정됨" }) : null]),
+        h("div", { class: "prose", text: p.body }),
+        p.canEdit ? h("div", { class: "actions actions--start" }, [
+          h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => boardEditDialog(base, p, () => quiet(reload())) }),
+          h("button", { class: "btn btn--ghost btn--sm btn--danger-text", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 글을 지울까요? 댓글도 함께 지워져요.")) return; await act(() => api(`/board/${id}`, { method: "DELETE" })); go(base); } })
+        ]) : null
+      ]),
+      h("section", { class: "card stack", style: "padding:14px 16px" }, [
+        h("h2", { class: "card__title", text: `댓글 ${r.comments.length}` }),
+        r.comments.length ? h("ul", { class: "comments" }, r.comments.map((c) => h("li", { class: "comment" }, [
+          h("div", { class: "comment__head muted small" }, [h("strong", { text: c.author || "-" }), c.admin ? h("span", { class: "stock-tag", text: "관리자" }) : null, h("span", { text: dayOf(c.createdAt) }),
+            c.canDelete ? h("button", { class: "link-btn", type: "button", text: "지우기", onclick: async () => { if (!confirm("댓글을 지울까요?")) return; await act(() => api(`/board-comments/${c.id}`, { method: "DELETE" })); await reload(); } }) : null]),
+          h("p", { class: "comment__body", text: c.body })
+        ]))) : h("p", { class: "muted small", text: "아직 댓글이 없어요." }),
+        cIn, h("div", { class: "actions actions--start" }, cOk)
+      ])
+    );
+    return box;
+  }
+  async function pageBoard(id) {
+    if (!isAdmin()) return go("#/today");
+    document.title = `게시판 · ${TITLE}`;
+    drawMini(null);
+    setMain("board", loading());
+    page = { name: "board", reload: async () => setMain("board", h("div", { class: "narrow" }, id ? await boardPostView("#/board", Number(id)) : await boardList("#/board"))) };
+    try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("board", failed(e)); }
+  }
+
   /* ---------- 봉사자 관리 (관리자): 일정·기본 교육 등록, 이수 현황 ---------- */
   async function pageVolAdmin() {
     if (!isAdmin()) return go("#/today");
@@ -6254,6 +6339,7 @@
     if (name === "notices") return pageNotices();
     if (name === "members") return pageMembers();
     if (name === "volunteers") return pageVolAdmin();
+    if (name === "board") return pageBoard(id);
     if (name === "org") return pageOrg();
     if (name === "stock" && id) return pageStock(Number(id));
     if (name === "stock") return pageStocks();

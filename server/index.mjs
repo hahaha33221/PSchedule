@@ -334,6 +334,15 @@ const q = {
   setStockMove: db.prepare("UPDATE stock_moves SET date = ?, handler = ?, note = ? WHERE id = ?"),
   delStockMove: db.prepare("DELETE FROM stock_moves WHERE id = ?"),
   setMoveIssue: db.prepare("UPDATE stock_moves SET issue = ? WHERE id = ?"),
+  boardPosts: db.prepare("SELECT b.*, u.name AS author, (SELECT count(*) FROM board_comments c WHERE c.post_id = b.id) AS comments FROM board_posts b LEFT JOIN users u ON u.id = b.created_by ORDER BY b.id DESC"),
+  boardPost: db.prepare("SELECT b.*, u.name AS author FROM board_posts b LEFT JOIN users u ON u.id = b.created_by WHERE b.id = ?"),
+  addBoardPost: db.prepare("INSERT INTO board_posts (category, title, body, secret, created_by) VALUES (?, ?, ?, ?, ?)"),
+  setBoardPost: db.prepare("UPDATE board_posts SET category = ?, title = ?, body = ?, secret = ?, updated_at = datetime('now') WHERE id = ?"),
+  delBoardPost: db.prepare("DELETE FROM board_posts WHERE id = ?"),
+  boardComments: db.prepare("SELECT c.*, u.name AS author, u.role AS author_role FROM board_comments c LEFT JOIN users u ON u.id = c.created_by WHERE c.post_id = ? ORDER BY c.id"),
+  boardComment: db.prepare("SELECT * FROM board_comments WHERE id = ?"),
+  addBoardComment: db.prepare("INSERT INTO board_comments (post_id, body, created_by) VALUES (?, ?, ?)"),
+  delBoardComment: db.prepare("DELETE FROM board_comments WHERE id = ?"),
   inspections: db.prepare("SELECT x.*, u.name AS author, i.name AS group_name, (SELECT group_concat(p.id) FROM inspection_photos p WHERE p.inspection_id = x.id) AS photo_ids FROM inspections x JOIN project_items i ON i.id = x.item_id LEFT JOIN users u ON u.id = x.created_by ORDER BY x.date DESC, x.id DESC"),
   inspection: db.prepare("SELECT * FROM inspections WHERE id = ?"),
   addInspection: db.prepare("INSERT INTO inspections (item_id, stage, date, source, checked_qty, sampled, sample_qty, defects, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
@@ -1208,6 +1217,49 @@ function volGroupStatus(p, g) {
     changes
   };
 }
+// 게시판: 봉사자·관리자만. 비밀글은 쓴 사람과 관리자만 내용을 봄 (다른 사람에게는 '비밀글입니다'만)
+const BOARD_CATS = ["request", "suggest", "free"];
+const boardCan = (user) => user.volunteer || user.role === "admin";
+const boardSees = (user, b) => !b.secret || b.created_by === user.id || user.role === "admin";
+const boardPostOut = (b, user) => {
+  const see = boardSees(user, b);
+  return { id: b.id, category: b.category, secret: !!b.secret, title: see ? b.title : "비밀글입니다", body: see ? b.body : "", author: see ? b.author || "" : "", mine: b.created_by === user.id, canSee: see, canEdit: b.created_by === user.id || user.role === "admin", comments: b.comments ?? 0, createdAt: b.created_at, updatedAt: b.updated_at };
+};
+function boardInput(b) {
+  const category = BOARD_CATS.includes(b.category) ? b.category : "free";
+  return [category, text(b.title, 100, "제목", true), text(b.body, 5000, "내용") || "", b.secret ? 1 : 0];
+}
+// 봉사자 입구와 관리자 쪽에서 같이 씀. 처리했으면 true
+async function boardRoute(req, res, user, path, method) {
+  if (path === "/api/board" && method === "GET") { send(res, 200, { posts: q.boardPosts.all().map((b) => boardPostOut(b, user)) }); return true; }
+  if (path === "/api/board" && method === "POST") { const id = Number(q.addBoardPost.run(...boardInput(await readJson(req)), user.id).lastInsertRowid); send(res, 201, { id }); return true; }
+  const m = path.match(/^\/api\/board\/(\d+)(\/comments)?$/);
+  const cm = path.match(/^\/api\/board-comments\/(\d+)$/);
+  if (m) {
+    const b = q.boardPost.get(Number(m[1]));
+    if (!b) throw notFound("글");
+    const see = boardSees(user, b);
+    if (m[2]) {
+      if (method !== "POST") { send(res, 405, { error: "Method not allowed" }); return true; }
+      if (!see) { send(res, 403, { error: "비밀글에는 댓글을 달 수 없어요." }); return true; }
+      q.addBoardComment.run(b.id, text((await readJson(req)).body, 1000, "댓글", true), user.id);
+    } else if (method === "PATCH" || method === "DELETE") {
+      if (b.created_by !== user.id && user.role !== "admin") { send(res, 403, { error: "쓴 사람과 관리자만 고치거나 지울 수 있어요." }); return true; }
+      if (method === "DELETE") { q.delBoardPost.run(b.id); send(res, 200, { ok: true }); return true; }
+      q.setBoardPost.run(...boardInput(await readJson(req)), b.id);
+    } else if (method !== "GET") { send(res, 405, { error: "Method not allowed" }); return true; }
+    const fresh = { ...q.boardPost.get(b.id), comments: 0 };
+    send(res, 200, { post: boardPostOut(fresh, user), comments: see ? q.boardComments.all(b.id).map((c) => ({ id: c.id, body: c.body, author: c.author || "", admin: c.author_role === "admin", mine: c.created_by === user.id, canDelete: c.created_by === user.id || user.role === "admin", createdAt: c.created_at })) : [] });
+    return true;
+  }
+  if (cm && method === "DELETE") {
+    const c = q.boardComment.get(Number(cm[1]));
+    if (!c) throw notFound("댓글");
+    if (c.created_by !== user.id && user.role !== "admin") { send(res, 403, { error: "쓴 사람과 관리자만 지울 수 있어요." }); return true; }
+    q.delBoardComment.run(c.id); send(res, 200, { ok: true }); return true;
+  }
+  return false;
+}
 // 검수 (관리자 전용으로 먼저): 단계 1·2·3, 불량 유형별 수량, 샘플링, 사진 4장
 const DEFECT_TYPES = ["색상 차이", "굵기", "길이", "매듭", "파손·오염", "기타"];
 const inspGroups = () => volProjectsShown().flatMap((p) => volGroupsOf(p).map((g) => ({ id: g.id, name: g.name })));
@@ -1650,9 +1702,15 @@ async function api(req, res, path) {
       q.readNotice.run(user.id, n.id);
       return send(res, 200, { notice: { id: n.id, title: n.title, body: n.body, pinned: !!n.pinned, createdAt: n.created_at }, unreadNotices: unreadOf(user) });
     }
+    if ((path === "/api/board" || path.startsWith("/api/board/") || path.startsWith("/api/board-comments/")) && await boardRoute(req, res, user, path, method)) return;
     if (!((path === "/api/logout" || path === "/api/password") && method === "POST")) return send(res, 403, { error: "봉사자 계정으로는 볼 수 없어요." });
   }
   const isAdmin = user.role === "admin";
+  // 게시판: 직원은 쓰지 않음 (봉사자·관리자만)
+  if (path === "/api/board" || path.startsWith("/api/board/") || path.startsWith("/api/board-comments/")) {
+    if (!boardCan(user)) return send(res, 403, { error: "게시판은 봉사자와 관리자만 써요." });
+    if (await boardRoute(req, res, user, path, method)) return;
+  }
   // 보이는 범위 조건 값 (?scope=mine 이면 관리자도 멤버처럼)
   const V = viewer(user, url.searchParams.get("scope") === "mine");
 

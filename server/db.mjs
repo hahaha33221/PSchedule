@@ -401,6 +401,24 @@ function addUnitColumns(db) {
     );
     -- 입출고 기록 사진 (영수증·현장 사진, 기록당 4장까지, 브라우저에서 줄여 올림)
     -- 검수 기록 (1차 수도회 자체 · 2차 외부 봉사자 · 3차 부서 봉사자), 불량 유형별 수량은 JSON, 업체 클레임 근거용
+    -- 게시판 (봉사자·관리자): 요청·건의·자유, 비밀글은 쓴 사람과 관리자만
+    CREATE TABLE IF NOT EXISTS board_posts (
+      id         INTEGER PRIMARY KEY,
+      category   TEXT NOT NULL DEFAULT 'free' CHECK (category IN ('request', 'suggest', 'free')),
+      title      TEXT NOT NULL,
+      body       TEXT NOT NULL DEFAULT '',
+      secret     INTEGER NOT NULL DEFAULT 0,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS board_comments (
+      id         INTEGER PRIMARY KEY,
+      post_id    INTEGER NOT NULL REFERENCES board_posts(id) ON DELETE CASCADE,
+      body       TEXT NOT NULL,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE TABLE IF NOT EXISTS inspections (
       id          INTEGER PRIMARY KEY,
       item_id     INTEGER NOT NULL REFERENCES project_items(id) ON DELETE CASCADE,

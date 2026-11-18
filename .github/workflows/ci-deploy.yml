@@ -443,6 +443,20 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/admin/inspections)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/admin/inspections)" = 403
           curl -fs -H "$H" -XDELETE $B/admin/inspections/$IN | node -e 'if(JSON.parse(require("fs").readFileSync(0)).inspections.some(i=>i.id==='$IN'))process.exit(1)'
+          # 게시판: 봉사자·관리자만(직원 403), 비밀글은 쓴 사람과 관리자만 내용을 봄, 고치기·지우기는 쓴 사람과 관리자
+          BP=$(curl -fs -H "$VH" -XPOST -d '{"category":"suggest","title":"공개 건의","body":"내용"}' $B/board | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+          BS=$(curl -fs -H "$VH" -XPOST -d '{"category":"request","title":"비밀 요청","body":"비밀 내용","secret":true}' $B/board | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+          curl -fs -H "$(bearer "$A9")" $B/board | node -e 'const p=JSON.parse(require("fs").readFileSync(0)).posts;const s=p.find(x=>x.id==='$BS');if(!s||s.title!=="비밀글입니다"||s.body||s.canSee||!p.some(x=>x.title==="공개 건의"))process.exit(1)'
+          curl -fs -H "$(bearer "$A9")" $B/board/$BS | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.post.body||d.comments.length)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A9")" -XPOST -d '{"body":"x"}' $B/board/$BS/comments)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A9")" -XDELETE $B/board/$BP)" = 403
+          curl -fs -H "$VH" $B/board/$BS | grep -q '"body":"비밀 내용"'
+          curl -fs -H "$H" $B/board/$BS | grep -q '"body":"비밀 내용"'
+          curl -fs -H "$H" -XPOST -d '{"body":"관리자 답변"}' $B/board/$BS/comments | node -e 'const c=JSON.parse(require("fs").readFileSync(0)).comments;if(!c.some(x=>x.admin&&x.body==="관리자 답변"))process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/board)" = 403
+          curl -fs -H "$VH" -XPATCH -d '{"category":"free","title":"고친 제목","body":"x"}' $B/board/$BP | grep -q '"title":"고친 제목"'
+          curl -fs -H "$H" -XDELETE $B/board/$BP >/dev/null; curl -fs -H "$VH" -XDELETE $B/board/$BS >/dev/null
+          curl -fs -H "$VH" $B/board | node -e 'if(JSON.parse(require("fs").readFileSync(0)).posts.length)process.exit(1)'
           # 수업 신청 넣기(연락처처럼 보이면 거절, 다시 넣으면 통째로 바뀜)와 직원 프로젝트 '봉사자 현황'(묶음별 요약·변동·신청)
           printf '{"project":"봉사자 공개 프로젝트","group":"묵주","rows":[{"no":1,"org":"테스트수녀회","date":"2030-03-05","time":"14:00","qty":300},{"no":2,"org":"다른수녀회","date":"2030-03-09","qty":50}]}' > /tmp/ps/req.json
           ADM vol-request-import --dry < /tmp/ps/req.json | grep -q '미리보기.*2건.*합계 350'

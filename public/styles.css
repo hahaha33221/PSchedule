@@ -1775,3 +1775,5 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .rooms__ev span { color: var(--ink-2); white-space: nowrap; }
 .rooms__ev.is-ext { border-left-style: dashed; }
 .insp-defects { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
+.board-item.is-locked { opacity: .7; cursor: default; }
+.board-lock { font-size: 12px; }
