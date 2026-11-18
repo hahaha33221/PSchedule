@@ -5470,7 +5470,7 @@
       title(`프로젝트 관리(${g.name})`),
       h("p", { class: "muted small", text: `${d.project.name} › ${g.name} · 요약` }),
       h("div", { class: "vol-sum" }, [
-        g.key === "rosary" ? tile("wbs", "WBS 공정", `확정 ${rosaryCounts().fixed} / ${rosaryCounts().total}`, `마일스톤 ${ROSARY_MILESTONES.length}단계 · 먼저: 판매 방식 결정`) : tile("wbs", "WBS 진척", "0%", "항목 준비 중"),
+        g.key === "rosary" ? tile("wbs", "WBS 공정", `확정 ${rosaryCounts().fixed} / ${rosaryCounts().total}`, `마일스톤 ${ROSARY_MILESTONES.length}단계`) : tile("wbs", "WBS 진척", "0%", "항목 준비 중"),
         tile("req", "추가 전달 물량", `실 ${fmtN(visits.reduce((n, v) => n + Math.max(0, moreThread(v) || 0), 0))} · 십자가 ${fmtN(visits.reduce((n, v) => n + Math.max(0, moreCross(v) || 0), 0))}`, visits.length ? `요청수량 ${fmtN(reqT)} · 방문 ${visits.length}건` : "연결된 일정 없음"),
         tile("in", "입고", `${fmtN(inT)} ${unit}`, ledgers.length ? `대장 ${ledgers.length}개` : "대장 없음"),
         tile("out", "출고", `${fmtN(outT)} ${unit}`, `재고 ${fmtN(inT - outT)} ${unit}`),
@@ -5507,7 +5507,6 @@
   const ROSARY_MILESTONES = [
     { name: "원자재 조달", main: "입고·운반·계약 기록", link: "업체 협의", procs: [1, 2, 3] },
     { name: "제작·검수(교육)", main: "수도회 제작·1차 검수 안내", link: "2차 검수(공동 작업)", procs: [4, 5, 6, 7, 8, 9] },
-    { name: "판매 방식 결정", main: "판매가·경로 결정 자료", link: "조건 확인·기적의 패", procs: [], first: true },
     { name: "보관", main: "창고·입출고 작업·대장", link: "출판사 직송 협의", procs: [11] },
     { name: "패키지", main: "디자인·문구·업체 협의", link: "포장 작업(공동 작업)", procs: [10, 12] },
     { name: "판매", main: "판매처·현장 인력 협의", link: "배분·출고·실적 집계", procs: [13, 14] },
@@ -5584,11 +5583,6 @@
       tl.scrollToToday(chart);
       fill(box,
         h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "매듭묵주 WBS" }), h("span", { class: "muted small", text: "업무 정리(안) 기준" })]),
-        h("div", { class: "vwbs__sum" }, [
-          h("span", {}, ["마일스톤 ", h("strong", { text: String(ROSARY_MILESTONES.length) }), "단계"]),
-          h("span", {}, ["공정 ", h("strong", { text: String(c.total) }), "개 (확정 ", h("strong", { text: String(c.fixed) }), " · 미정 ", h("strong", { text: String(c.total - c.fixed) }), ")"]),
-          h("span", { class: "vwbs__firstnote" }, ["가장 먼저 정할 단계: ", h("strong", { text: "3. 판매 방식 결정" })])
-        ]),
         h("div", { class: "vwbs__tools" }, [
           h("div", { class: "seg seg--sm" }, [["0", "전체"], ["1", "공동 작업만"]].map(([k, label]) => h("button", { type: "button", "aria-selected": String((jointOnly ? "1" : "0") === k), text: label, onclick: () => { jointOnly = k === "1"; store.set("ps.vwbsJoint", k); draw(); } }))),
           h("button", { class: "btn btn--ghost btn--sm", type: "button", text: closed.size ? "모두 펼치기" : "모두 접기", onclick: () => { if (closed.size) closed.clear(); else ROSARY_MILESTONES.forEach((_, i) => closed.add(String(i + 1))); store.set("ps.vwbsClosed", JSON.stringify([...closed])); draw(); } })
