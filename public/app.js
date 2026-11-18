@@ -3881,10 +3881,23 @@
     itemImageUrl(i).then((u) => { if (u) img.src = u; else img.remove(); });
     return img;
   }
+  // 사진 열기: createImageBitmap 이 못 열면 <img> 로 한 번 더 (사파리는 HEIC 도 열림). 둘 다 안 되면 null
+  async function decodeImage(file) {
+    try { return await createImageBitmap(file); } catch { /* 아래에서 다시 시도 */ }
+    const url = URL.createObjectURL(file);
+    try {
+      const img = new Image(); img.src = url; await img.decode();
+      return await createImageBitmap(img).catch(() => img);
+    } catch { return null; } finally { setTimeout(() => URL.revokeObjectURL(url), 10000); }
+  }
   // 올리기 전에 브라우저에서 줄이기: 긴 변 최대 900px, JPEG 로 46KB 안쪽이 될 때까지 화질·크기를 낮춤
   async function shrinkImage(file) {
-    if (!/^image\/(jpeg|png|webp|gif|heic|heif)$/i.test(file.type) && !/\.(jpe?g|png|webp)$/i.test(file.name)) throw new Error("이미지 파일을 골라 주세요.");
-    const bmp = await createImageBitmap(file);
+    const heic = /^image\/hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name);
+    if (!heic && !/^image\/(jpeg|png|webp|gif)$/i.test(file.type) && !/\.(jpe?g|png|webp|gif)$/i.test(file.name)) throw new Error("이미지 파일을 골라 주세요.");
+    const bmp = await decodeImage(file);
+    if (!bmp) throw new Error(heic
+      ? "이 브라우저는 HEIC 사진(아이폰·갤럭시 고효율 사진)을 열지 못해요. 사진을 JPG로 저장해 올리거나, 화면을 캡처해서 올려 주세요."
+      : "사진을 열지 못했어요. 다른 사진을 고르거나 화면을 캡처해서 올려 주세요.");
     let scale = Math.min(1, 900 / Math.max(bmp.width, bmp.height));
     for (let round = 0; round < 6; round++) {
       const c = document.createElement("canvas");
@@ -4920,9 +4933,10 @@
       // 사진: 고른 사진은 바로 줄여 두고 저장할 때 올림. 봉사자가 새로 넣을 때는 1장 이상
       const needPhoto = !!vol && !m;
       const pending = [];
+      let savedId = null; // 이 창에서 저장을 마친 기록 번호
       let kept = m ? [...m.photos] : [];
       const photoBox = h("div", { class: "move-photos" });
-      const fileIn = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
+      const fileIn = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp", multiple: true, hidden: true });
       const pickBtn = h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => fileIn.click() }, [icon("plus"), type === "in" ? "영수증·사진 추가" : "사진 추가"]);
       const drawPhotos = () => {
         photoBox.replaceChildren(
@@ -4975,13 +4989,18 @@
             if (!inputs.some((x) => Number(x.el.value) > 0)) return showError(err, "수량을 하나 이상 적어 주세요.");
             const over = type === "out" ? inputs.filter((x) => Number(x.el.value) > leftOf(x.o.id)) : [];
             if (over.length && !confirm(`재고보다 많이 출고해요: ${over.map((x) => `${x.o.name} (재고 ${fmtN(leftOf(x.o.id))})`).join(", ")}\n그래도 저장할까요?`)) return;
-            if (needPhoto && !pending.length) return showError(err, type === "in" ? "영수증이나 사진을 1장 이상 올려 주세요." : "출고 사진을 1장 이상 올려 주세요.");
+            if (needPhoto && !savedId && !pending.length) return showError(err, type === "in" ? "영수증이나 사진을 1장 이상 올려 주세요." : "출고 사진을 1장 이상 올려 주세요.");
             const qty = Object.fromEntries(inputs.map((x) => [x.o.id, x.el.value]));
             const body = { date: date.value, handler: handler.value, note: note.value, issue: issue.value, qty, ...(type === "in" ? { inspectOk: insOk.value, inspectBad: insBad.value } : {}) };
-            let r = await api(m ? moveUrl(m.id) : `${base}/moves`, { method: m ? "PATCH" : "POST", body: m ? body : { ...body, type } });
-            const mid = m ? m.id : r.newMoveId;
-            for (const b of pending) r = await api(`${moveUrl(mid)}/photos`, { method: "POST", body: { data: await blobToBase64(b) } });
-            closeDialog(); apply(r);
+            // 기록이 한 번 저장되면 (사진 올리기가 실패해도) 다시 누를 때는 기록을 또 만들지 않고 그 기록에 사진만 올림
+            let r = savedId ? null : await api(m ? moveUrl(m.id) : `${base}/moves`, { method: m ? "PATCH" : "POST", body: m ? body : { ...body, type } });
+            if (r) { savedId = m ? m.id : r.newMoveId; apply(r); }
+            while (pending.length) {
+              try { r = await api(`${moveUrl(savedId)}/photos`, { method: "POST", body: { data: await blobToBase64(pending[0]) } }); }
+              catch (ex) { drawPhotos(); return showError(err, `기록은 저장했어요. 사진을 올리지 못했어요: ${ex.message} 다시 '${ok.textContent}'를 누르면 남은 사진만 올려요.`); }
+              pending.shift(); apply(r);
+            }
+            closeDialog();
           } catch (ex) { showError(err, ex.message); }
         });
       });
@@ -5795,6 +5814,12 @@
     // 검색 칸은 그대로 두고 아래만 다시 그림 (입력 중 커서가 빠지지 않게)
     const search = h("label", { class: "search vol-visits__search" }, [icon("search"), h("input", { type: "search", placeholder: "제작 수도회·장소 검색", "aria-label": "제작 수도회·장소 검색", oninput: (e) => { qv = e.target.value.trim(); draw(); } })]);
     const content = h("div", { class: "stack stack--sm" });
+    // 한 칸을 저장한 뒤 다른 수량 칸에 입력 중이면 표를 바로 다시 그리지 않음 (입력 값·커서·휴대폰 키보드가 사라지지 않게).
+    // 수량 칸 밖으로 나가면 그때 한 번 다시 그림
+    let drawLater = false;
+    const typing = () => { const el = document.activeElement; return !!el && el.classList?.contains("vol-visits__qty") && content.contains(el); };
+    const redraw = () => { if (typing()) drawLater = true; else { drawLater = false; draw(); } };
+    content.addEventListener("focusout", () => setTimeout(() => { if (drawLater && !typing()) { drawLater = false; draw(); } }, 0));
     const draw = () => {
       const sum = (rows, k = "qty") => rows.reduce((n, v) => n + (v[k] || 0), 0);
       const past = visits.filter((v) => v.date < today()), next = visits.filter((v) => v.date >= today());
@@ -5807,7 +5832,7 @@
         input.addEventListener("change", async () => {
           try {
             const r = await api(`/volunteer/schedules/${v.id}/qty`, { method: "PATCH", body: { [key]: input.value } });
-            Object.assign(v, r.schedule); toast(`${label}을 저장했어요.`); draw();
+            Object.assign(v, r.schedule); toast(`${label}을 저장했어요.`); redraw();
           } catch (ex) { toast(ex.message); input.value = v[key] ?? ""; }
         });
         return h("td", { class: "num" }, [input, by ? h("small", { class: "vol-visits__by muted", title: at || "", text: by }) : null]);
@@ -6221,7 +6246,7 @@
       const note = h("textarea", { rows: "2", maxlength: "500" }, x?.note || "");
       const pending = []; let kept = x ? [...x.photos] : [];
       const photoBox = h("div", { class: "move-photos" });
-      const fileIn = h("input", { type: "file", accept: "image/*", multiple: true, hidden: true });
+      const fileIn = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp", multiple: true, hidden: true });
       const drawPhotos = () => photoBox.replaceChildren(
         ...kept.map((pid) => h("span", { class: "move-photos__item" }, [inspImg(pid), h("button", { class: "move-photos__x", type: "button", "aria-label": "사진 지우기", html: ICON.close, onclick: async () => { if (!confirm("이 사진을 지울까요?")) return; insp.inspections = (await act(() => api(`/admin/inspection-photos/${pid}`, { method: "DELETE" }))).inspections; kept = kept.filter((p) => p !== pid); drawPhotos(); } })])),
         ...pending.map((b, i) => h("span", { class: "move-photos__item is-new" }, [h("img", { class: "move-photo", alt: "올릴 사진", src: URL.createObjectURL(b) }), h("button", { class: "move-photos__x", type: "button", "aria-label": "빼기", html: ICON.close, onclick: () => { pending.splice(i, 1); drawPhotos(); } })]))
