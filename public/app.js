@@ -2065,7 +2065,7 @@
       const err = errorLine();
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: "저장" });
       const form = h("form", { class: "stack" }, [
-        h("p", { class: "muted small", text: "일정의 장소 칸에 이 이름이 들어 있으면 그 회의실 예약으로 보여요. 띄어쓰기는 무시해요. 30개까지예요." }),
+        h("p", { class: "muted small", text: "회의실은 일정 제목의 [A602] 같은 표기로 자동으로 잡혀요. 여기에 적은 회의실은 이 순서대로 맨 앞에, 예약이 없는 날에도 보여요. 30개까지예요." }),
         field("회의실 목록", ta), err, h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])
       ]);
       form.addEventListener("submit", (e) => {
@@ -2079,11 +2079,34 @@
     }
     function drawRooms(events) {
       roomEvents = events;
-      const rooms = state.rooms || [];
+      // 회의실 = 제목의 대괄호 표기 ([A602] 회의, [A311, A301] …). 'A311호'·'a301' 은 A311·A301 로, 알파벳 없는 '501' 은 그날 하나뿐인 A501 같은 곳으로
       const squash = (x) => String(x || "").replace(/\s/g, "").toLowerCase();
-      const roomOf = (e) => { const loc = squash(e.location); if (!loc) return null; let best = null; for (const r of rooms) if (loc.includes(squash(r)) && (!best || r.length > best.length)) best = r; return best; };
+      const codesOf = (e) => {
+        const out = [];
+        for (const m of String(e.title || "").matchAll(/\[([^\]]+)\]/g)) {
+          let letter = "";
+          for (const tok of m[1].split(/[,/·]|\bor\b/i)) {
+            const c = tok.match(/([A-Za-z])\s*-?\s*(\d{3})/) || tok.match(/^\s*(\d{3})\s*호?\s*$/);
+            if (!c) continue;
+            if (c.length === 3) { letter = c[1].toUpperCase(); out.push(letter + c[2]); } else out.push(letter ? letter + c[1] : c[1]);
+          }
+        }
+        return [...new Set(out)];
+      };
+      const evCodes = events.map((e) => ({ e, codes: codesOf(e) }));
+      const lettered = new Set(evCodes.flatMap((x) => x.codes).filter((c) => /^[A-Z]/.test(c)));
+      const fix = (c) => { if (/^[A-Z]/.test(c)) return c; const m = [...lettered].filter((x) => x.endsWith(c)); return m.length === 1 ? m[0] : c; };
+      // 관리자 목록은 순서·늘 보일 회의실용 (예약이 없어도 보임), 그 뒤에 그날 표기된 회의실
+      const listed = (state.rooms || []).map((r) => { const c = codesOf({ title: `[${r}]` })[0]; return c ? fix(c) : r; });
+      const found = [...new Set(evCodes.flatMap((x) => x.codes.map(fix)))].filter((c) => !listed.includes(c)).sort();
+      const rooms = [...new Set([...listed, ...found])];
       const byRoom = new Map(rooms.map((r) => [r, []]));
-      for (const e of events) { const r = roomOf(e); if (r) byRoom.get(r).push(e); }
+      for (const { e, codes } of evCodes) {
+        const hit = codes.map(fix);
+        // 대괄호가 없으면 관리자 목록 이름이 장소 칸에 들어 있는지 봄 (예전 방식)
+        if (!hit.length) { const loc = squash(e.location); const r = loc && (state.rooms || []).find((x) => loc.includes(squash(x))); if (r) hit.push(listed[(state.rooms || []).indexOf(r)]); }
+        for (const r of new Set(hit)) byRoom.get(r)?.push(e);
+      }
       const timed = [...byRoom.values()].flat().filter((e) => e.startTime && e.startDate === day);
       const startH = Math.min(8, ...timed.map((e) => Math.floor(minutes(e.startTime) / 60)));
       const endH = Math.max(20, ...timed.map((e) => Math.ceil(minutes(e.endTime && e.endTime > e.startTime ? e.endTime : e.startTime) / 60) + (e.endTime && e.endTime > e.startTime ? 0 : 1)));
@@ -2095,7 +2118,7 @@
         h("span", { class: "muted small", text: rooms.length ? `${dateLabel(day)} · 예약 ${used}건` : "" }),
         isAdmin() ? h("button", { class: "btn btn--ghost btn--sm btn--admin", type: "button", title: "관리자 전용", onclick: roomsDialog }, [icon("lock"), "회의실 관리"]) : null
       ]);
-      if (!rooms.length) return fill(roomBox, head, h("p", { class: "muted", text: isAdmin() ? "아직 등록한 회의실이 없어요. '회의실 관리'에서 회의실 이름을 넣어 주세요." : "아직 등록된 회의실이 없어요. 관리자가 등록하면 여기에 보여요." }));
+      if (!rooms.length) return fill(roomBox, head, h("p", { class: "muted", text: "이 날은 회의실 예약이 없어요. 일정 제목 앞에 [A602]처럼 회의실을 적으면 여기에 보여요." }));
       const axis = h("div", { class: "rooms__axis", style: `height:${H}px` }, Array.from({ length: endH - startH }, (_, i) => h("span", { style: `top:${i * RH}px`, text: `${pad(startH + i)}:00` })));
       const col = (r) => {
         const list = byRoom.get(r);
@@ -2123,7 +2146,7 @@
           h("div", { class: "rooms__axiswrap" }, [h("div", { class: "rooms__name rooms__name--blank" }), h("div", { class: "rooms__allday" }), axis]),
           ...rooms.map(col)
         ])),
-        h("p", { class: "muted small", text: "일정의 장소 칸에 회의실 이름이 들어 있으면 여기에 보여요. 눌러서 자세히 보거나 고칠 수 있어요." })
+        h("p", { class: "muted small", text: "일정 제목 앞의 [A602]·[B204] 같은 표기로 회의실을 잡아요. 눌러서 자세히 보거나 고칠 수 있어요." })
       );
     }
     setMain("today", [quickbar, findBox, roomBox, h("div", { class: "today-grid" }, [timelineBox, h("div", { class: "today-side" }, [tasksBox, memoBox])])]);
