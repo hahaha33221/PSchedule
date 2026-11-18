@@ -400,6 +400,31 @@ function addUnitColumns(db) {
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
     -- 입출고 기록 사진 (영수증·현장 사진, 기록당 4장까지, 브라우저에서 줄여 올림)
+    -- 검수 기록 (1차 수도회 자체 · 2차 외부 봉사자 · 3차 부서 봉사자), 불량 유형별 수량은 JSON, 업체 클레임 근거용
+    CREATE TABLE IF NOT EXISTS inspections (
+      id          INTEGER PRIMARY KEY,
+      item_id     INTEGER NOT NULL REFERENCES project_items(id) ON DELETE CASCADE,
+      stage       INTEGER NOT NULL CHECK (stage IN (1, 2, 3)),
+      date        TEXT NOT NULL,
+      source      TEXT NOT NULL DEFAULT '',
+      checked_qty INTEGER NOT NULL DEFAULT 0,
+      sampled     INTEGER NOT NULL DEFAULT 0,
+      sample_qty  INTEGER,
+      defects     TEXT NOT NULL DEFAULT '{}',
+      note        TEXT NOT NULL DEFAULT '',
+      created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS inspections_date ON inspections (date);
+    CREATE TABLE IF NOT EXISTS inspection_photos (
+      id            INTEGER PRIMARY KEY,
+      inspection_id INTEGER NOT NULL REFERENCES inspections(id) ON DELETE CASCADE,
+      mime          TEXT NOT NULL,
+      data          BLOB NOT NULL,
+      created_by    INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE TABLE IF NOT EXISTS stock_move_photos (
       id         INTEGER PRIMARY KEY,
       move_id    INTEGER NOT NULL REFERENCES stock_moves(id) ON DELETE CASCADE,

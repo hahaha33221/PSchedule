@@ -334,6 +334,15 @@ const q = {
   setStockMove: db.prepare("UPDATE stock_moves SET date = ?, handler = ?, note = ? WHERE id = ?"),
   delStockMove: db.prepare("DELETE FROM stock_moves WHERE id = ?"),
   setMoveIssue: db.prepare("UPDATE stock_moves SET issue = ? WHERE id = ?"),
+  inspections: db.prepare("SELECT x.*, u.name AS author, i.name AS group_name, (SELECT group_concat(p.id) FROM inspection_photos p WHERE p.inspection_id = x.id) AS photo_ids FROM inspections x JOIN project_items i ON i.id = x.item_id LEFT JOIN users u ON u.id = x.created_by ORDER BY x.date DESC, x.id DESC"),
+  inspection: db.prepare("SELECT * FROM inspections WHERE id = ?"),
+  addInspection: db.prepare("INSERT INTO inspections (item_id, stage, date, source, checked_qty, sampled, sample_qty, defects, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"),
+  setInspection: db.prepare("UPDATE inspections SET item_id = ?, stage = ?, date = ?, source = ?, checked_qty = ?, sampled = ?, sample_qty = ?, defects = ?, note = ?, updated_at = datetime('now') WHERE id = ?"),
+  delInspection: db.prepare("DELETE FROM inspections WHERE id = ?"),
+  inspPhoto: db.prepare("SELECT * FROM inspection_photos WHERE id = ?"),
+  inspPhotoCount: db.prepare("SELECT count(*) AS n FROM inspection_photos WHERE inspection_id = ?"),
+  addInspPhoto: db.prepare("INSERT INTO inspection_photos (inspection_id, mime, data, created_by) VALUES (?, ?, ?, ?)"),
+  delInspPhoto: db.prepare("DELETE FROM inspection_photos WHERE id = ?"),
   setMoveInspect: db.prepare("UPDATE stock_moves SET inspect_ok = ?, inspect_bad = ? WHERE id = ?"),
   // 직원 프로젝트 '봉사자 현황': 묶음별 일정·신청·기록·변동
   volSchedulesOfItems: db.prepare("SELECT * FROM vol_schedules WHERE project_item_id IS NOT NULL ORDER BY date, start_time"),
@@ -1199,6 +1208,27 @@ function volGroupStatus(p, g) {
     changes
   };
 }
+// 검수 (관리자 전용으로 먼저): 단계 1·2·3, 불량 유형별 수량, 샘플링, 사진 4장
+const DEFECT_TYPES = ["색상 차이", "굵기", "길이", "매듭", "파손·오염", "기타"];
+const inspGroups = () => volProjectsShown().flatMap((p) => volGroupsOf(p).map((g) => ({ id: g.id, name: g.name })));
+function inspectionInput(b) {
+  const groups = inspGroups();
+  const itemId = Number(b.itemId);
+  if (!groups.some((g) => g.id === itemId)) throw bad("묶음(묵주·손십자가)을 골라 주세요.");
+  const stage = Number(b.stage);
+  if (![1, 2, 3].includes(stage)) throw bad("검수 단계를 골라 주세요.");
+  if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
+  const n = (v, label, opt) => { if ((v === "" || v == null) && opt) return null; const x = Number(v); if (!Number.isInteger(x) || x < 0 || x > 100000000) throw bad(`${label}을 0 이상의 숫자로 적어 주세요.`); return x; };
+  const checked = n(b.checkedQty, "검수 수량");
+  const defects = {};
+  for (const [k, v] of Object.entries(b.defects || {})) { if (!DEFECT_TYPES.includes(k)) throw bad("불량 유형을 확인해 주세요."); const x = n(v, `${k} 불량 수량`, true); if (x) defects[k] = x; }
+  const sampled = b.sampled ? 1 : 0;
+  return [itemId, stage, b.date, text(b.source, 80, "대상") || "", checked, sampled, sampled ? n(b.sampleQty, "샘플 수량", true) : null, JSON.stringify(defects), text(b.note, 500, "메모") || ""];
+}
+const inspectionOut = (x) => {
+  const defects = JSON.parse(x.defects || "{}");
+  return { id: x.id, itemId: x.item_id, group: x.group_name, stage: x.stage, date: x.date, source: x.source, checkedQty: x.checked_qty, sampled: !!x.sampled, sampleQty: x.sample_qty, defects, defectTotal: Object.values(defects).reduce((a, b) => a + b, 0), note: x.note, author: x.author || "", photos: x.photo_ids ? String(x.photo_ids).split(",").map(Number) : [], updatedAt: x.updated_at };
+};
 // 봉사자에게 보이는 묶음(묵주·손십자가)인지
 function volGroupItem(id) {
   const i = Number.isInteger(id) && q.projectItem.get(id);
@@ -2447,6 +2477,37 @@ async function api(req, res, path) {
       return send(res, 200, { moves: q.volStockMoves.all().map((m) => ({ id: m.id, type: m.type, date: m.date, note: m.note, handler: m.handler, issue: m.issue || "", photos: m.photos, inspectOk: m.inspect_ok ?? null, inspectBad: m.inspect_bad ?? null, createdAt: m.created_at, enteredBy: m.author, ledgerId: m.ledger_id, ledgerName: m.ledger_name, unit: m.unit, total: m.total })) });
     }
     // 봉사자가 적은 원자재 보유물량 · 제품 회수물량 (최근 300건)
+    if (path === "/api/admin/inspections" && method === "GET") return send(res, 200, { groups: inspGroups(), types: DEFECT_TYPES, inspections: q.inspections.all().map(inspectionOut) });
+    if (path === "/api/admin/inspections" && method === "POST") {
+      const id = Number(q.addInspection.run(...inspectionInput(await readJson(req)), user.id).lastInsertRowid);
+      return send(res, 201, { id, inspections: q.inspections.all().map(inspectionOut) });
+    }
+    const iam = path.match(/^\/api\/admin\/inspections\/(\d+)(\/photos)?$/);
+    if (iam) {
+      const x = q.inspection.get(Number(iam[1]));
+      if (!x) throw notFound("검수 기록");
+      if (iam[2]) {
+        if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
+        const b = await readJson(req), buf = Buffer.from(String(b.data || ""), "base64");
+        if (!buf.length || buf.length > ITEM_IMAGE_MAX) throw bad("사진을 확인해 주세요.");
+        const mime = imageMime(buf);
+        if (!mime) throw bad("JPG, PNG, WEBP 사진만 올릴 수 있어요.");
+        if (q.inspPhotoCount.get(x.id).n >= 4) throw bad("사진은 기록마다 4장까지 올릴 수 있어요.");
+        q.addInspPhoto.run(x.id, mime, buf, user.id);
+        return send(res, 201, { inspections: q.inspections.all().map(inspectionOut) });
+      }
+      if (method === "PATCH") { q.setInspection.run(...inspectionInput(await readJson(req)), x.id); return send(res, 200, { inspections: q.inspections.all().map(inspectionOut) }); }
+      if (method === "DELETE") { q.delInspection.run(x.id); return send(res, 200, { inspections: q.inspections.all().map(inspectionOut) }); }
+      return send(res, 405, { error: "Method not allowed" });
+    }
+    const ipm = path.match(/^\/api\/admin\/inspection-photos\/(\d+)$/);
+    if (ipm) {
+      const ph = q.inspPhoto.get(Number(ipm[1]));
+      if (!ph) throw notFound("사진");
+      if (method === "GET") return sendPhoto(res, ph);
+      if (method === "DELETE") { q.delInspPhoto.run(ph.id); return send(res, 200, { inspections: q.inspections.all().map(inspectionOut) }); }
+      return send(res, 405, { error: "Method not allowed" });
+    }
     if (path === "/api/admin/vol-records" && method === "GET") {
       return send(res, 200, { records: q.volRecordsAll.all().map((r) => ({ id: r.id, kind: r.kind, stage: r.stage || "in", group: r.group_name, date: r.date, name: r.name, qty: r.qty, note: r.note, author: r.author || "", updatedAt: r.updated_at })) });
     }

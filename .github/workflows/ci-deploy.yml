@@ -433,6 +433,16 @@ jobs:
           J="{\"itemId\":$CG,\"kind\":\"recovery\",\"stage\":\"sold\",\"date\":\"2030-03-02\",\"qty\":1}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d "$J" $B/volunteer/records)" = 400
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" "$B/volunteer/records?item=$VG&kind=material")" = 404
           curl -fs -H "$H" $B/admin/vol-records | node -e 'const r=JSON.parse(require("fs").readFileSync(0)).records;if(!r.some(x=>x.kind==="recovery"&&x.qty===7&&x.group==="손십자가"))process.exit(1)'
+          # 검수 기록(관리자 전용): 단계·불량 유형별 수량·샘플링·사진, 잘못된 값 거절, 직원·봉사자는 막힘
+          J="{\"itemId\":$VG,\"stage\":3,\"date\":\"2030-04-01\",\"source\":\"대건상사 입고\",\"checkedQty\":100,\"sampled\":true,\"sampleQty\":20,\"defects\":{\"색상 차이\":2,\"굵기\":1}}"
+          IN=$(curl -fs -H "$H" -XPOST -d "$J" $B/admin/inspections | node -pe 'const d=JSON.parse(require("fs").readFileSync(0));const x=d.inspections.find(i=>i.id===d.id);if(x.defectTotal!==3||!x.sampled||x.sampleQty!==20||x.stage!==3||x.group!=="묵주")process.exit(1);d.id')
+          J="{\"itemId\":$VG,\"stage\":4,\"date\":\"2030-04-01\",\"checkedQty\":1}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d "$J" $B/admin/inspections)" = 400
+          J="{\"itemId\":$OTH,\"stage\":1,\"date\":\"2030-04-01\",\"checkedQty\":1}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d "$J" $B/admin/inspections)" = 400
+          J="{\"itemId\":$VG,\"stage\":1,\"date\":\"2030-04-01\",\"checkedQty\":1,\"defects\":{\"없는유형\":1}}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d "$J" $B/admin/inspections)" = 400
+          curl -fs -H "$H" -XPOST -d "{\"data\":\"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==\"}" $B/admin/inspections/$IN/photos | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.inspections.find(i=>i.id==='$IN').photos.length!==1)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/admin/inspections)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/admin/inspections)" = 403
+          curl -fs -H "$H" -XDELETE $B/admin/inspections/$IN | node -e 'if(JSON.parse(require("fs").readFileSync(0)).inspections.some(i=>i.id==='$IN'))process.exit(1)'
           # 수업 신청 넣기(연락처처럼 보이면 거절, 다시 넣으면 통째로 바뀜)와 직원 프로젝트 '봉사자 현황'(묶음별 요약·변동·신청)
           printf '{"project":"봉사자 공개 프로젝트","group":"묵주","rows":[{"no":1,"org":"테스트수녀회","date":"2030-03-05","time":"14:00","qty":300},{"no":2,"org":"다른수녀회","date":"2030-03-09","qty":50}]}' > /tmp/ps/req.json
           ADM vol-request-import --dry < /tmp/ps/req.json | grep -q '미리보기.*2건.*합계 350'
