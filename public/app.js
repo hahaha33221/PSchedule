@@ -3997,7 +3997,6 @@
         (() => { const both = g.visits.filter((v) => qtyDiff(v) != null); return tile("차액 (요청 − 교육)", diffText(both.length ? both.reduce((n, v) => n + qtyDiff(v), 0) : null), `둘 다 적힌 일정 ${both.length}건`); })(),
         tile("입고", `${fmtN(inT)} ${unit}`, g.ledgers.map((l) => l.name).join(", ") || "대장 없음"),
         tile("출고", `${fmtN(outT)} ${unit}`, `재고 ${fmtN(inT - outT)} ${unit}`),
-        tile("원자재 보유", fmtN(g.material.total), g.material.count ? `원자재 ${g.material.kinds}종 · 최근 기준` : "기록 없음"),
         (() => { const st = g.recovery.stages || {}; return tile(g.name === "손십자가" ? "제품 (판매 가능)" : "완제품 (판매 가능)", fmtN((st.packed || 0) - (st.out || 0)), g.recovery.count ? `입고 ${fmtN(st.in || 0)} · 검수 ${fmtN(st.checked || 0)} · 패키징 ${fmtN(st.packed || 0)} · 출고 ${fmtN(st.out || 0)}` : "기록 없음"); })()
       ]),
       g.ledgers.length ? h("div", { class: "vstat__ledgers" }, g.ledgers.map((l) => h("a", { class: "stock-tag", href: `#/stock/${l.id}`, text: `${l.name} · 재고 ${fmtN(l.inTotal - l.outTotal)} ${l.unit}` }))) : null,
@@ -4331,7 +4330,7 @@
         p.note ? h("p", { class: "muted pj-desc", text: p.note }) : null,
         isAdmin() || data.volGroups?.length ? h("div", { class: "seg pj-tabs", role: "tablist" }, [
           h("button", { type: "button", role: "tab", "aria-selected": String(tab !== "volunteer"), text: "구역", onclick: () => go(`#/projects/${id}`) }),
-          data.volGroups?.length ? h("button", { type: "button", role: "tab", "aria-selected": String(tab === "volunteer"), title: "봉사자가 입력한 요청수량·입고·출고·원자재·회수와 최근 변동", onclick: () => go(`#/projects/${id}/volunteer`) }, "봉사자 현황") : null,
+          data.volGroups?.length ? h("button", { type: "button", role: "tab", "aria-selected": String(tab === "volunteer"), title: "봉사자가 입력한 요청수량·입고·출고·완제품과 최근 변동", onclick: () => go(`#/projects/${id}/volunteer`) }, "봉사자 현황") : null,
           isAdmin() ? h("button", { type: "button", role: "tab", "aria-selected": "false", title: "프로젝트 전체 WBS와 PDF. 관리자만 볼 수 있어요", onclick: () => go(`#/projects/${id}/process`) }, ["상세 프로세스", " ", adminBadge()]) : null
         ]) : null,
         tab === "volunteer" ? volunteerPanel(id) : h("div", { class: "pj-areas" }, [...named.map((n) => card(n, n)), common ? card("", COMMON_NAME) : null])
@@ -5145,7 +5144,7 @@
             h("a", { class: "side__link" + (top ? " is-active" : ""), href: `#/vp/${g.key}`, "aria-current": top ? "page" : null, title: `프로젝트 관리(${g.name})`, onclick: () => toggleNav(false) }, [icon("folder"), h("span", { class: "side__text", text: `프로젝트 관리(${g.name})` })]),
             h("button", { class: "side__toggle" + (open ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(open), "aria-label": `${g.name} 아래 메뉴 ${open ? "접기" : "펼치기"}`, onclick: () => setOpen(!open) })
           ]),
-          h("div", { class: "side__kids", hidden: !open }, [volOn("wbs") ? sub("wbs", "WBS", "grid") : null, volOn("req") ? sub("req", "추가 전달 물량", "cal") : null, volOn("in") ? sub("in", "입고", "db") : null, volOn("out") ? sub("out", "출고", "db") : null, volOn("material") ? sub("material", "원자재 보유물량", "db") : null, volOn("recovery") ? sub("recovery", g.key === "cross" ? "제품 관리" : "완제품 관리", "db") : null])
+          h("div", { class: "side__kids", hidden: !open }, [volOn("wbs") ? sub("wbs", "WBS", "grid") : null, volOn("req") ? sub("req", "추가 전달 물량", "cal") : null, volOn("in") ? sub("in", "입고", "db") : null, volOn("out") ? sub("out", "출고", "db") : null, volOn("recovery") ? sub("recovery", g.key === "cross" ? "제품 관리" : "완제품 관리", "db") : null])
         ]);
       };
       navBox.replaceChildren(...[
@@ -5458,13 +5457,13 @@
       return [...head(view === "in" ? "입고" : "출고"), moves];
     }
     if (view === "recovery") return [...head(fgCfg(g.key).title), await volStageCard(grp.id, g.key)];
-    if (view === "material") return [...head(VOL_RECORD[view].title), await volRecordCard(grp.id, view)];
+    if (view === "material") { location.replace(`#/vp/${g.key}`); return []; } // 원자재 보유물량은 없앰 (예전 주소는 요약으로)
     // 요약
     const leaf = items.filter((i) => i.kind === "item");
     const inT = ledgers.reduce((n, l) => n + l.inTotal, 0), outT = ledgers.reduce((n, l) => n + l.outTotal, 0);
     const reqT = visits.reduce((n, v) => n + (v.qty || 0), 0), reqLeft = visits.filter((v) => v.date >= today()).reduce((n, v) => n + (v.qty || 0), 0);
     const unit = ledgers[0]?.unit || "개";
-    const [mat, rec] = await Promise.all(["material", "recovery"].map((k) => api(`/volunteer/records?item=${grp.id}&kind=${k}`).then((r) => r.records)));
+    const rec = (await api(`/volunteer/records?item=${grp.id}&kind=recovery`)).records;
     const tile = (view, label, value, sub) => !volOn(view) ? null : h("a", { class: "card vol-sum__tile", href: `#/vp/${g.key}/${view}` }, [h("span", { class: "muted small", text: label }), h("strong", { text: value }), sub ? h("span", { class: "muted small", text: sub }) : null]);
     return [
       title(`프로젝트 관리(${g.name})`),
@@ -5474,7 +5473,6 @@
         tile("req", "추가 전달 물량", `실 ${fmtN(visits.reduce((n, v) => n + Math.max(0, moreThread(v) || 0), 0))} · 십자가 ${fmtN(visits.reduce((n, v) => n + Math.max(0, moreCross(v) || 0), 0))}`, visits.length ? `요청수량 ${fmtN(reqT)} · 방문 ${visits.length}건` : "연결된 일정 없음"),
         tile("in", "입고", `${fmtN(inT)} ${unit}`, ledgers.length ? `대장 ${ledgers.length}개` : "대장 없음"),
         tile("out", "출고", `${fmtN(outT)} ${unit}`, `재고 ${fmtN(inT - outT)} ${unit}`),
-        tile("material", "원자재 보유물량", fmtN(VOL_RECORD.material.total(mat)), mat.length ? VOL_RECORD.material.sub(mat) : "기록 없음"),
         (() => { const t = stageSum(rec); return tile("recovery", fgCfg(g.key).title, `판매 가능 ${fmtN(t.packed - t.out)}`, rec.length ? `입고 ${fmtN(t.in)} · 검수 ${fmtN(t.checked)} · 패키징 ${fmtN(t.packed)} · 출고 ${fmtN(t.out)}` : "기록 없음"); })()
       ]),
       grp.note ? h("p", { class: "vol-pre muted", text: grp.note }) : null,
@@ -5961,7 +5959,7 @@
     setMain("volunteers", loading());
     const tab = ["training", "stock", "records", "menu"].includes(route().id) ? route().id : "schedule";
     let vols = [], schedules = [], trainings = [], stockMoves = [], volRecords = [], volMenuSet = null;
-    const seg = h("div", { class: "seg", role: "tablist" }, [["schedule", "일정"], ["training", "기본 교육"], ["stock", "입출고 입력"], ["records", "원자재·회수"], ["menu", "메뉴 공개"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "schedule" ? "#/volunteers" : `#/volunteers/${k}`) })));
+    const seg = h("div", { class: "seg", role: "tablist" }, [["schedule", "일정"], ["training", "기본 교육"], ["stock", "입출고 입력"], ["records", "완제품 기록"], ["menu", "메뉴 공개"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "schedule" ? "#/volunteers" : `#/volunteers/${k}`) })));
     const dateAndTime = (date, start, end) => h("div", { class: "row2" }, [field("날짜", date), h("div", { class: "row2" }, [field("시작", start), end ? field("끝", end) : h("span")])]);
     const saveForm = (form, ok, err, send) => form.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -6054,13 +6052,13 @@
       ])) : h("div", { class: "card empty", text: "아직 봉사자가 입력한 기록이 없어요." });
       // 봉사자가 적은 원자재 보유물량 · 제품 회수물량
       const recView = volRecords.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
-        h("thead", {}, h("tr", {}, ["종류", "묶음", "날짜", "원자재·회수처", "수량", "메모", "적은 사람"].map((x) => h("th", { text: x })))),
+        h("thead", {}, h("tr", {}, ["종류", "묶음", "날짜", "어디서·어디로", "수량", "메모", "적은 사람"].map((x) => h("th", { text: x })))),
         h("tbody", {}, volRecords.map((r) => h("tr", {}, [
           h("td", { class: "nowrap", text: r.kind === "material" ? "원자재 보유" : `완제품 · ${{ in: "입고", checked: "검수완료", packed: "패키징 완료", out: "출고" }[r.stage] || "입고"}` }), h("td", { class: "nowrap", text: r.group }), h("td", { class: "nowrap", text: r.date }), h("td", { text: r.name || "-" }), h("td", { class: "num nowrap", text: fmtN(r.qty) }), h("td", { class: "muted small", text: r.note }), h("td", { class: "nowrap", text: r.author || "-" })
         ])))
-      ])) : h("div", { class: "card empty", text: "아직 봉사자가 적은 원자재·회수 기록이 없어요." });
+      ])) : h("div", { class: "card empty", text: "아직 봉사자가 적은 완제품 기록이 없어요." });
       // 메뉴 공개: 고른 메뉴만 봉사자 화면에 보임 (단계적으로 엶)
-      const MENU_LABEL = { home: "대시보드", schedule: "일정", training: "기본 교육", notices: "공지", wbs: "WBS", req: "요청수량", in: "입고", out: "출고", material: "원자재 보유물량", recovery: "제품 회수물량" };
+      const MENU_LABEL = { home: "대시보드", schedule: "일정", training: "기본 교육", notices: "공지", wbs: "WBS", req: "추가 전달 물량", in: "입고", out: "출고", recovery: "완제품·제품 관리" };
       const menuView = volMenuSet ? (() => {
         const boxes = volMenuSet.keys.map((k) => ({ k, el: h("input", { type: "checkbox", checked: volMenuSet.menu.includes(k) }) }));
         const ok = h("button", { class: "btn btn--primary", type: "button", text: "저장", onclick: () => busy(ok, async () => {
