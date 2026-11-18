@@ -607,6 +607,13 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPATCH -d '{"qty":1}' $B/volunteer/schedules/$RV/qty)" = 404
           curl -fs -H "$H" $B/admin/vol-schedules | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).schedules.find(x=>x.title==="묵주 교육 · 다");if(s.qty!==250||s.qtyBy!=="봉사자일")process.exit(1)'
           curl -fs -H "$H" -XPATCH -d '{"title":"묵주 교육 · 다","date":"2030-06-01","qty":250,"project":true,"note":"메모만"}' $B/admin/vol-schedules/$RV | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).schedule;if(s.qtyBy!=="봉사자일")process.exit(1)'
+          # 표에만 넣는 일정(수업 날짜 미정 신청): 달력에는 없고 프로젝트 표에는 보임, 관리자가 끄면 달력에도 보임
+          TV=$(curl -fs -H "$H" -XPOST -d '{"title":"묵주 교육 · 미정","date":"2030-06-03","qty":70,"project":true,"tableOnly":true}' $B/admin/vol-schedules | node -pe 'const s=JSON.parse(require("fs").readFileSync(0)).schedule;if(!s.tableOnly||s.fromForm||s.sumNote!=="")process.exit(1);s.id')
+          if curl -fs -H "$VH" $B/volunteer/home | grep -q '묵주 교육 · 미정'; then echo "표에만 넣은 일정이 달력에 보여요"; exit 1; fi
+          curl -fs -H "$VH" $B/volunteer/projects/$VPJ | node -e 'const v=JSON.parse(require("fs").readFileSync(0)).visits.find(x=>x.title==="묵주 교육 · 미정");if(!v||!v.tableOnly||v.qty!==70||v.noteQty!==null)process.exit(1)'
+          curl -fs -H "$H" -XPATCH -d '{"title":"묵주 교육 · 미정","date":"2030-06-03","qty":70,"project":true,"tableOnly":false}' $B/admin/vol-schedules/$TV >/dev/null
+          curl -fs -H "$VH" $B/volunteer/home | grep -q '묵주 교육 · 미정'
+          curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$TV >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$RV >/dev/null; curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$NV >/dev/null
           # 개인 지정 봉사자를 지워도 일정이 전체 공개로 바뀌지 않음
           curl -fs -H "$H" -XDELETE $B/admin/users/$VB >/dev/null

@@ -590,6 +590,10 @@ function addUnitColumns(db) {
   if (!has("vol_schedules", "edu_by")) db.exec("ALTER TABLE vol_schedules ADD COLUMN edu_by TEXT NOT NULL DEFAULT ''");
   if (!has("vol_schedules", "edu_at")) db.exec("ALTER TABLE vol_schedules ADD COLUMN edu_at TEXT");
   if (!has("vol_schedules", "qty_by")) db.exec("ALTER TABLE vol_schedules ADD COLUMN qty_by TEXT NOT NULL DEFAULT ''");
+  // 추가 전달 물량 표: 달력에는 안 보이는 줄(수업 날짜 미정인 신청), 합계에서 빼는 줄(다른 줄들의 합인 신청)과 그 이유, 연결된 네이버폼 신청
+  if (!has("vol_schedules", "table_only")) db.exec("ALTER TABLE vol_schedules ADD COLUMN table_only INTEGER NOT NULL DEFAULT 0");
+  if (!has("vol_schedules", "sum_note")) db.exec("ALTER TABLE vol_schedules ADD COLUMN sum_note TEXT NOT NULL DEFAULT ''");
+  if (!has("vol_schedules", "request_id")) db.exec("ALTER TABLE vol_schedules ADD COLUMN request_id INTEGER");
   if (!has("vol_schedules", "qty_at")) db.exec("ALTER TABLE vol_schedules ADD COLUMN qty_at TEXT");
   // 공지 공개 범위: all(봉사자 포함 전체) / staff(직원) / lead(본부장·관리자) / admin(관리자)
   if (!has("notices", "audience")) db.exec("ALTER TABLE notices ADD COLUMN audience TEXT NOT NULL DEFAULT 'staff'");

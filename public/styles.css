@@ -1534,6 +1534,7 @@ button.gantt__name:hover { background: var(--surface-2); }
 .vol-visits__table input.vol-visits__qty { width: 76px; min-width: 0; height: 32px; padding: 4px 8px; text-align: right; font-variant-numeric: tabular-nums; }
 .vol-visits__table th:last-child, .vol-visits__table td:last-child { width: 1%; white-space: nowrap; }
 .vol-visits__who, .vol-visits__by { display: block; font-size: 11.5px; }
+.vol-visits__tag { margin-left: 6px; padding: 0 6px; font-size: 11px; vertical-align: 1px; }
 .vol-linkcheck { align-self: end; font-size: 13px; }
 
 /* 협력업체 (관리자 전용) */

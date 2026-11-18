@@ -5820,6 +5820,10 @@
     const moreSort = { key: "moreT", dir: -1 }, inSort = { key: "date", dir: 1 };
     let qv = "";
     const orgOf = (v) => v.title.split(" · ").pop();
+    // 수도회 이름 옆 표시: 네이버폼 신청이 없는 일정, 수업 날짜가 아직 없어 달력에 없는 신청
+    const orgTags = (v) => [!v.fromForm ? h("span", { class: "stock-tag vol-visits__tag", title: "네이버폼 수업 신청에 없는 일정", text: "신청서 없음" }) : null, v.tableOnly ? h("span", { class: "stock-tag vol-visits__tag", title: "수업 날짜가 정해지지 않아 달력에는 없어요. 날짜는 신청서의 수업 가능 날짜", text: "달력 미정" }) : null];
+    // 합계에서 빼는 줄: 수량은 회색으로 보이고 이유를 붙임
+    const noteQtyCell = (v) => h("td", { class: "num muted", title: v.sumNote }, [fmtN(v.noteQty ?? 0), h("small", { class: "vol-visits__by", text: v.sumNote })]);
     const hit = (v) => !qv || `${orgOf(v)} ${v.place || ""}`.toLowerCase().replace(/\s/g, "").includes(qv.toLowerCase().replace(/\s/g, ""));
     const getters = { org: orgOf, date: (v) => v.date, qty: (v) => v.qty, edu: (v) => v.eduQty, thread: (v) => v.threadQty, cross: (v) => v.crossQty, moreT: moreThread, moreC: moreCross, diff: qtyDiff };
     // 검색 칸은 그대로 두고 아래만 다시 그림 (입력 중 커서가 빠지지 않게)
@@ -5834,10 +5838,11 @@
     const draw = () => {
       const sum = (rows, k = "qty") => rows.reduce((n, v) => n + (v[k] || 0), 0);
       const past = visits.filter((v) => v.date < today()), next = visits.filter((v) => v.date >= today());
-      const empty = visits.filter((v) => v.qty == null).length;
+      const empty = visits.filter((v) => v.qty == null && !v.sumNote).length;
       const whoOf = (v) => (v.note.match(/담당:\s*([^\n]+)/) || [])[1] || "";
       // 칸 하나: 요청수량·교육물량·실·십자가 출고. 고치면 바로 저장, 고친 사람 이름이 남음
       const qtyCell = (v, key, label) => {
+        if (key === "qty" && v.sumNote) return noteQtyCell(v);
         const by = key === "qty" ? v.qtyBy : key === "eduQty" ? v.eduBy : v.matBy, at = key === "qty" ? v.qtyAt : key === "eduQty" ? v.eduAt : v.matAt;
         const input = h("input", { type: "number", min: "0", inputmode: "numeric", class: "vol-visits__qty", value: v[key] ?? "", "aria-label": `${orgOf(v)} ${label}`, placeholder: "-" });
         input.addEventListener("change", async () => {
@@ -5852,7 +5857,7 @@
       const row = (v, i) => h("tr", { class: v.date < today() ? "is-past" : null }, [
         h("td", { class: "num muted", text: String(i + 1) }),
         h("td", { class: "nowrap" }, [volDay(v.date), v.startTime ? h("small", { class: "muted", text: ` ${v.startTime}` }) : null]),
-        h("td", {}, [h("span", { text: orgOf(v) }), v.place ? h("small", { class: "muted", text: ` · ${v.place}` }) : null, whoOf(v) ? h("small", { class: "vol-visits__who muted", text: whoOf(v) }) : null]),
+        h("td", {}, [h("span", { text: orgOf(v) }), v.place ? h("small", { class: "muted", text: ` · ${v.place}` }) : null, ...orgTags(v), whoOf(v) ? h("small", { class: "vol-visits__who muted", text: whoOf(v) }) : null]),
         qtyCell(v, "qty", "요청수량"),
         qtyCell(v, "eduQty", "교육물량"),
         qtyCell(v, "threadQty", "실 출고"),
@@ -5876,11 +5881,11 @@
         qv ? h("p", { class: "muted small", text: `'${qv}' 검색: ${shown.length}곳` }) : null,
         shown.length ? h("div", { class: "table-wrap" }, h("table", { class: "table vol-more__table" }, [
           sortHead([[null, "번호", "num"], ["org", "제작 수도회"], ["date", "교육일"], ["qty", "요청수량", "num"], ["thread", "실 출고", "num"], ["cross", "십자가 출고", "num"], ["moreT", "추가 전달 실", "num", "요청수량 − 실 출고"], ["moreC", "추가 전달 십자가", "num", "요청수량 − 십자가 출고"]], moreSort, draw),
-          h("tbody", {}, moreRows.map((v, i) => h("tr", { class: v.qty == null ? "is-past" : null }, [
+          h("tbody", {}, moreRows.map((v, i) => h("tr", { class: v.qty == null && !v.sumNote ? "is-past" : null }, [
             h("td", { class: "num muted", text: String(i + 1) }),
-            h("td", {}, [h("span", { text: orgOf(v) }), v.place ? h("small", { class: "muted", text: ` · ${v.place}` }) : null]),
+            h("td", {}, [h("span", { text: orgOf(v) }), v.place ? h("small", { class: "muted", text: ` · ${v.place}` }) : null, ...orgTags(v)]),
             h("td", { class: "nowrap", text: shortDate(v.date) }),
-            h("td", { class: "num", text: v.qty != null ? fmtN(v.qty) : "-" }),
+            v.sumNote ? noteQtyCell(v) : h("td", { class: "num", text: v.qty != null ? fmtN(v.qty) : "-" }),
             h("td", { class: "num", text: v.threadQty != null ? fmtN(v.threadQty) : "-" }),
             h("td", { class: "num", text: v.crossQty != null ? fmtN(v.crossQty) : "-" }),
             cell(moreThread(v)), cell(moreCross(v))
@@ -6137,6 +6142,7 @@
       const qty = h("input", { type: "number", min: "0", inputmode: "numeric", value: s?.qty ?? "" });
       const eduQty = h("input", { type: "number", min: "0", inputmode: "numeric", value: s?.eduQty ?? "" });
       const linkBox = h("input", { type: "checkbox", checked: s ? !!s.project : false });
+      const tableOnlyBox = h("input", { type: "checkbox", checked: !!s?.tableOnly });
       let audience = s?.audience || "all";
       const picked = new Set(s?.userIds || []);
       const box = h("div", { class: "vol-pick" });
@@ -6154,10 +6160,11 @@
         field("제목", title), h("div", { class: "row2" }, [field("날짜", date), h("div", { class: "row2" }, [field("시작", start), field("끝", end)])]), field("장소", place), field("메모", note),
         field("교육물량 (선택)", eduQty, s?.eduBy ? `마지막 수정: ${s.eduBy}` : "교육 때 쓰거나 나눈 물량"),
         h("div", { class: "row2" }, [field("수량 (선택)", qty, s?.qtyBy ? `마지막 수정: ${s.qtyBy}` : null), h("label", { class: "check vol-linkcheck" }, [linkBox, h("span", { text: "묵주 프로젝트 방문 (봉사자 프로젝트 관리에서 수량을 고쳐요)" })])]),
+        h("label", { class: "check" }, [tableOnlyBox, h("span", { text: "달력에는 안 보이게 (수업 날짜 미정, 추가 전달 물량 표에만)" })]),
         h("div", { class: "field" }, [h("span", { class: "field__label", text: "대상" }), seg2, box]), err,
         h("div", { class: "actions" }, [s ? delBtn(s.title, `/admin/vol-schedules/${s.id}`) : null, h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])
       ]);
-      saveForm(form, ok, err, () => api(s ? `/admin/vol-schedules/${s.id}` : "/admin/vol-schedules", { method: s ? "PATCH" : "POST", body: { title: title.value, date: date.value, startTime: start.value, endTime: end.value, place: place.value, note: note.value, audience, userIds: [...picked], qty: qty.value, eduQty: eduQty.value, project: linkBox.checked } }));
+      saveForm(form, ok, err, () => api(s ? `/admin/vol-schedules/${s.id}` : "/admin/vol-schedules", { method: s ? "PATCH" : "POST", body: { title: title.value, date: date.value, startTime: start.value, endTime: end.value, place: place.value, note: note.value, audience, userIds: [...picked], qty: qty.value, eduQty: eduQty.value, project: linkBox.checked, tableOnly: tableOnlyBox.checked } }));
       openDialog(s ? "봉사 일정 고치기" : "봉사 일정 등록", form, { admin: true });
     }
     function trainingDialog(t) {
@@ -6186,7 +6193,7 @@
         h("thead", {}, h("tr", {}, ["번호", "날짜", "시간", "제목", "장소", "요청수량", "교육물량", "실 출고", "십자가 출고", "차액", "대상", "입력자"].map((x) => h("th", { text: x })))),
         h("tbody", {}, schedules.map((s, i) => h("tr", rowAttrs(() => scheduleDialog(s)), [
           h("td", { class: "num muted", text: String(i + 1) }),
-          h("td", { class: "nowrap", text: volDay(s.date) }), h("td", { class: "nowrap", text: volTime(s) || "-" }), h("td", { text: s.title }), h("td", { text: s.place || "-" }), h("td", { class: "nowrap num", text: s.qty != null ? fmtN(s.qty) : "-" }), h("td", { class: "nowrap num", text: s.eduQty != null ? fmtN(s.eduQty) : "-" }), h("td", { class: "nowrap num", text: s.threadQty != null ? fmtN(s.threadQty) : "-" }), h("td", { class: "nowrap num", text: s.crossQty != null ? fmtN(s.crossQty) : "-" }), h("td", { class: "nowrap num " + diffCls(qtyDiff(s)), text: diffText(qtyDiff(s)) }),
+          h("td", { class: "nowrap", text: volDay(s.date) }), h("td", { class: "nowrap", text: volTime(s) || "-" }), h("td", {}, [s.title, s.tableOnly ? h("span", { class: "stock-tag vol-visits__tag", text: "달력 미정" }) : null, s.sumNote ? h("small", { class: "muted", text: ` · 합계 제외: ${s.sumNote}` }) : null]), h("td", { text: s.place || "-" }), h("td", { class: "nowrap num", text: s.qty != null ? fmtN(s.qty) : "-" }), h("td", { class: "nowrap num", text: s.eduQty != null ? fmtN(s.eduQty) : "-" }), h("td", { class: "nowrap num", text: s.threadQty != null ? fmtN(s.threadQty) : "-" }), h("td", { class: "nowrap num", text: s.crossQty != null ? fmtN(s.crossQty) : "-" }), h("td", { class: "nowrap num " + diffCls(qtyDiff(s)), text: diffText(qtyDiff(s)) }),
           h("td", { text: s.audience === "all" ? "전체" : s.userIds.map((id) => vols.find((u) => u.id === id)?.name).filter(Boolean).join(", ") || "지정 없음" }),
           h("td", { class: "nowrap" }, s.byVolunteer ? [s.enteredBy, " ", h("span", { class: "stock-tag", text: "봉사자" })] : s.enteredBy || "-")
         ])))
