@@ -2093,7 +2093,16 @@
         }
         return [...new Set(out)];
       };
-      const evCodes = events.map((e) => ({ e, codes: codesOf(e) }));
+      // 대괄호가 없으면 장소 칸: 'A604호' 같은 번호가 있으면 번호로, 없으면 회의실·층·호·홀·센터가 들어간 장소 이름 그대로 (온라인·외부 주소·사람 이름은 뺌)
+      const placeOf = (e) => {
+        const loc = String(e.location || "").replace(/\s+/g, " ").trim();
+        if (!loc) return [];
+        const coded = codesOf({ title: `[${loc.replace(/\[|\]/g, "")}]` });
+        if (coded.length) return coded;
+        if (/teams|zoom|온라인|대한민국|https?:/i.test(loc) || loc.length > 30) return [];
+        return /회의실|호|층|홀|센터|집무실|강당|세미나실/.test(loc) ? [loc] : [];
+      };
+      const evCodes = events.map((e) => { const c = codesOf(e); return { e, codes: c.length ? c : placeOf(e) }; });
       const lettered = new Set(evCodes.flatMap((x) => x.codes).filter((c) => /^[A-Z]/.test(c)));
       const fix = (c) => { if (/^[A-Z]/.test(c)) return c; const m = [...lettered].filter((x) => x.endsWith(c)); return m.length === 1 ? m[0] : c; };
       // 관리자 목록은 순서·늘 보일 회의실용 (예약이 없어도 보임), 그 뒤에 그날 표기된 회의실
