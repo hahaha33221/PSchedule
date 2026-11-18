@@ -5207,7 +5207,7 @@
             h("a", { class: "side__link" + (top ? " is-active" : ""), href: `#/vp/${g.key}`, "aria-current": top ? "page" : null, title: `프로젝트 관리(${g.name})`, onclick: () => toggleNav(false) }, [icon("folder"), h("span", { class: "side__text", text: `프로젝트 관리(${g.name})` })]),
             h("button", { class: "side__toggle" + (open ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(open), "aria-label": `${g.name} 아래 메뉴 ${open ? "접기" : "펼치기"}`, onclick: () => setOpen(!open) })
           ]),
-          h("div", { class: "side__kids", hidden: !open }, [volOn("wbs") ? sub("wbs", "WBS", "grid") : null, volOn("req") ? sub("req", "추가 전달 물량", "cal") : null, volOn("in") ? sub("in", "입고", "db") : null, volOn("out") ? sub("out", "출고", "db") : null, volOn("recovery") ? sub("recovery", g.key === "cross" ? "제품 관리" : "완제품 관리", "db") : null])
+          h("div", { class: "side__kids", hidden: !open }, g.only ? [volOn(g.only) ? sub(g.only, "제품 관리", "db") : null] : [volOn("wbs") ? sub("wbs", "WBS", "grid") : null, volOn("req") ? sub("req", "추가 전달 물량", "cal") : null, volOn("in") ? sub("in", "입고", "db") : null, volOn("out") ? sub("out", "출고", "db") : null, volOn("recovery") ? sub("recovery", g.key === "cross" ? "제품 관리" : "완제품 관리", "db") : null])
         ]);
       };
       navBox.replaceChildren(...[
@@ -5494,8 +5494,9 @@
     ];
   }
   // 봉사자 프로젝트 관리는 묶음별: 묵주 / 손십자가
-  const VOL_GROUPS = [{ key: "rosary", name: "묵주" }, { key: "cross", name: "손십자가" }];
+  const VOL_GROUPS = [{ key: "rosary", name: "묵주" }, { key: "cross", name: "손십자가", only: "recovery" }]; // only: 이 화면만 둠 (손십자가는 제품 관리만)
   async function volGroupPage(g, view) {
+    if (g.only && view !== g.only) { location.replace(`#/vp/${g.key}/${g.only}`); return []; }
     document.title = `프로젝트 관리(${g.name}) · ${TITLE}`;
     const title = (t) => h("h1", { class: "vol__hello", text: t });
     const { projects } = await api("/volunteer/projects");
