@@ -6110,6 +6110,26 @@
       h("div", { class: "actions actions--start" }, [toggle, needSet])
     ]);
   }
+  // 교육 등록 (리더 봉사자·관리자): 수도회·교육, 홈, 캘린더에서 같이 씀. 날짜를 비우면 달력 미정으로 표에만
+  function teamEduDialog(date0, done) {
+    const err = errorLine();
+    const org = h("input", { maxlength: "80", autofocus: true, placeholder: "예: ○○수녀회" }), date = h("input", { type: "date", value: date0 || "" }), time = h("input", { type: "time" });
+    const place = h("input", { maxlength: "120", placeholder: "예: 명동" }), qty = h("input", { type: "number", min: "0", inputmode: "numeric" }), helper = h("input", { maxlength: "80", placeholder: "예: 길동" });
+    const ok = h("button", { class: "btn btn--primary", type: "submit", text: "등록" });
+    const form = h("form", { class: "stack", novalidate: true }, [
+      h("p", { class: "muted small", text: "지금 목록에 없는 교육도 새로 등록할 수 있어요. 등록하면 수도회·교육 목록과 캘린더에 보여요." }),
+      field("수도회", org), h("div", { class: "row2" }, [field("교육 날짜", date, "비우면 '달력 미정'으로 수도회·교육 목록에만 보여요"), field("시작 시간", time, "모르면 비워 두세요 ('시간 없음')")]),
+      h("div", { class: "row2" }, [field("장소", place), field("요청수량 (선택)", qty)]), field("담당 봉사자 (선택)", helper), err,
+      h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])]);
+    form.addEventListener("submit", (e) => { e.preventDefault(); busy(ok, async () => {
+      try {
+        if (!org.value.trim()) return showError(err, "수도회 이름을 적어 주세요.");
+        const r = await api("/team/orgs", { method: "POST", body: { org: org.value, date: date.value, startTime: time.value, place: place.value, qty: qty.value, helper: helper.value } });
+        closeDialog(); toast("교육을 등록했어요."); done(r);
+      } catch (ex) { showError(err, ex.message); }
+    }); });
+    openDialog("교육 등록", form);
+  }
   const teamHead = (title, sub) => [h("h1", { class: "vol__hello", text: title }), sub ? h("p", { class: "muted small", text: sub }) : null];
   async function teamHome() {
     document.title = `팀 봉사자 · ${TITLE}`;
@@ -6153,7 +6173,9 @@
         tile("#/tinsp/shifts", "내 근무 신청", `${d.myShifts.length}일`, d.myShifts.slice(0, 2).map((s) => shortDate(s.date)).join(", ") || "신청한 날이 없어요")
       ]),
       h("section", { class: "card vol__card" }, [
-        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "다가오는 교육" }), h("a", { class: "link-btn", href: "#/tcal", text: "캘린더" })]),
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "다가오는 교육" }), h("span", { class: "actions" }, [
+          st.avail.canSetNeed ? h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => teamEduDialog("", () => render()) }, [icon("plus"), "교육 등록"]) : null,
+          h("a", { class: "link-btn", href: "#/tcal", text: "캘린더" })])]),
         d.nextEdu.length ? h("ul", { class: "vol-sched-list" }, d.nextEdu.map((o) => h("li", { class: "vol-sched" }, [
           h("div", { class: "vol-sched__when" }, [h("strong", { text: volDay(o.date) }), h("span", { class: "muted small", text: o.startTime || "시간 없음" })]),
           h("div", { class: "vol-sched__what" }, [h("strong", { text: o.org }), h("span", { class: "muted small", text: [o.place, o.helper ? `담당 ${o.helper}` : "", TEAM_STATUS[o.status]].filter(Boolean).join(" · ") })])
@@ -6196,7 +6218,8 @@
       // 고른 날 자세히
       const edu = eduOf(picked), shifts = shiftsOf(picked);
       const detail = h("section", { class: "card vol__card tcal__detail" }, [
-        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: volDay(picked) }), picked === today() ? statusTag("오늘", "is-plan") : null]),
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: volDay(picked) }), h("span", { class: "actions" }, [picked === today() ? statusTag("오늘", "is-plan") : null,
+          st.avail.canSetNeed && picked >= today() ? h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => teamEduDialog(picked, () => render()) }, [icon("plus"), "이날 교육 등록"]) : null])]),
         edu.length || shifts.length ? h("ul", { class: "tcal__list" }, [
           ...edu.map((x) => ({ t: x.startTime, el: [statusTag("교육", "is-edu"), h("strong", { text: ` ${x.org}` }), h("small", { class: "muted", text: [x.place, x.helper ? `담당 ${x.helper}` : "", TEAM_STATUS[x.status]].filter(Boolean).map((t) => ` · ${t}`).join("") })] })),
           ...shifts.map((x) => ({ t: x.startTime, el: [statusTag("검수 근무", "is-insp"), ` 필요 ${x.need}명 · 신청 ${x.people.length}명`, x.people.length ? h("small", { class: "muted", text: ` (${x.people.join(", ")})` }) : null, h("a", { class: "link-btn small", href: "#/tinsp/shifts", text: " 근무 신청" })] }))
@@ -6228,28 +6251,14 @@
     const first = await api("/team/orgs");
     let orgs = first.orgs;
     const canAdd = !!first.canAdd; // 리더 봉사자·관리자
-    // 교육 추가 (리더): 날짜를 비우면 달력 미정으로 표에만
-    const addDialog = () => {
-      const err = errorLine();
-      const org = h("input", { maxlength: "80", autofocus: true, placeholder: "예: ○○수녀회" }), date = h("input", { type: "date" }), time = h("input", { type: "time" });
-      const place = h("input", { maxlength: "120", placeholder: "예: 명동" }), qty = h("input", { type: "number", min: "0", inputmode: "numeric" }), helper = h("input", { maxlength: "80", placeholder: "예: 길동" });
-      const ok = h("button", { class: "btn btn--primary", type: "submit", text: "추가" });
-      const form = h("form", { class: "stack", novalidate: true }, [field("수도회", org), h("div", { class: "row2" }, [field("교육 날짜", date, "비우면 '달력 미정'으로 표에만 보여요"), field("시작 시간", time)]),
-        h("div", { class: "row2" }, [field("장소", place), field("요청수량 (선택)", qty)]), field("담당 봉사자 (선택)", helper), err,
-        h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])]);
-      form.addEventListener("submit", (e) => { e.preventDefault(); busy(ok, async () => {
-        try { if (!org.value.trim()) return showError(err, "수도회 이름을 적어 주세요."); orgs = (await api("/team/orgs", { method: "POST", body: { org: org.value, date: date.value, startTime: time.value, place: place.value, qty: qty.value, helper: helper.value } })).orgs; closeDialog(); toast("교육을 추가했어요."); draw(); }
-        catch (ex) { showError(err, ex.message); }
-      }); });
-      openDialog("교육 추가", form);
-    };
+    const addDialog = () => teamEduDialog("", (r) => { orgs = r.orgs; draw(); });
     let qv = "", st = "";
     const box = h("div", { class: "stack" });
     const draw = () => {
       const shown = orgs.filter((o) => (!st || o.status === st) && (!qv || `${o.org} ${o.place} ${o.helper}`.replace(/\s/g, "").includes(qv.replace(/\s/g, ""))));
       fill(box,
         h("div", { class: "filters" }, [
-          canAdd ? h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: addDialog }, [icon("plus"), "교육 추가"]) : null,
+          canAdd ? h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: addDialog }, [icon("plus"), "교육 등록"]) : null,
           h("label", { class: "search" }, [icon("search"), h("input", { type: "search", placeholder: "수도회·장소·담당 검색", "aria-label": "수도회 검색", value: qv, oninput: (e) => { qv = e.target.value.trim(); drawList(); } })]),
           (() => { const s2 = h("select", { "aria-label": "교육 상태" }, [h("option", { value: "", text: "모든 상태" }), ...Object.entries(TEAM_STATUS).map(([k, v]) => h("option", { value: k, text: v }))]); s2.value = st; s2.addEventListener("change", () => { st = s2.value; draw(); }); return s2; })(),
           h("span", { class: "muted small filters__end", text: `${shown.length}곳 / 전체 ${orgs.length}곳` })
