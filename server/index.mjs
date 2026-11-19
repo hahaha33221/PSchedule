@@ -1562,18 +1562,21 @@ async function teamRoute(req, res, user, path, method) {
     return ok(405, { error: "Method not allowed" });
   }
   // 봉사 가능한 날 (내 것만 고침, 다른 사람은 날짜별 인원 수만)
+  // 교육 일정이 있는 날 (달력에 보이는 묵주 교육): 봉사 가능 신청·필요 인원은 이 날만
+  const eduDays = () => new Set(teamOrgRows(admin).filter((o) => !o.tableOnly).map((o) => o.date));
   // 봉사 가능한 날: 날짜별로 성을 뺀 이름만 (팀 봉사자와 관리자에게만)
   const availOut = () => {
     const people = {};
     for (const x of q.teamAvailPeople.all(today())) (people[x.date] ||= []).push(givenName(x.name));
     const needs = Object.fromEntries(q.teamDayNeeds.all(today()).map((x) => [x.date, { need: x.need, note: x.note, by: x.updated_by }]));
-    return { mine: q.teamAvailMine.all(user.id, today()).map((x) => x.date), counts: Object.fromEntries(Object.entries(people).map(([d, l]) => [d, l.length])), people, needs, canSetNeed: leader };
+    return { mine: q.teamAvailMine.all(user.id, today()).map((x) => x.date), counts: Object.fromEntries(Object.entries(people).map(([d, l]) => [d, l.length])), people, needs, canSetNeed: leader, eduDays: [...eduDays()].filter((d) => d >= today()).sort() };
   };
   if (path === "/api/team/avail" && method === "GET") return ok(200, availOut());
   if (path === "/api/team/avail" && method === "PUT") {
     const b = await readJson(req);
     if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
     if (b.date < today()) throw bad("지난 날은 바꿀 수 없어요.");
+    if (b.on && !eduDays().has(b.date)) throw bad("교육 일정이 있는 날만 봉사 가능을 신청할 수 있어요.");
     if (b.on) q.addTeamAvail.run(user.id, b.date); else q.delTeamAvail.run(user.id, b.date);
     return ok(200, availOut());
   }
@@ -1584,6 +1587,7 @@ async function teamRoute(req, res, user, path, method) {
     if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
     const need = teamQty(b.need, "필요 인원");
     if (need != null && need > 500) throw bad("필요 인원은 500명까지 적을 수 있어요.");
+    if (need && !eduDays().has(b.date)) throw bad("교육 일정이 있는 날만 필요 인원을 정할 수 있어요.");
     if (!need) q.delTeamDayNeed.run(b.date); else q.setTeamDayNeed.run(b.date, need, text(b.note, 200, "메모") || "", user.name);
     return ok(200, availOut());
   }

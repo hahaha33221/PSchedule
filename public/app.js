@@ -6093,10 +6093,13 @@
   // st = { avail } 를 같이 쓰고, 바뀌면 redraw()
   function availBox(ymd, st, redraw, compact) {
     const a = st.avail, people = a.people?.[ymd] || [], mine = a.mine.includes(ymd), need = a.needs?.[ymd], past = ymd < today();
+    // 교육 일정이 있는 날만 신청 (없는 날은 버튼 없이 안내만, 이미 신청한 것은 취소만)
+    const hasEdu = (a.eduDays || []).includes(ymd);
+    if (!past && !hasEdu && !mine && !need) return h("div", { class: "tcal__availbox" + (compact ? " is-compact" : "") }, h("p", { class: "muted small", text: "교육 일정이 없는 날은 봉사 가능을 신청할 수 없어요." }));
     const full = need && people.length >= need.need;
-    const toggle = past ? null : h("button", { class: "btn btn--sm " + (mine ? "btn--primary" : "btn--ghost"), type: "button", "aria-pressed": String(mine), text: mine ? (compact ? "신청함 ✓" : "봉사 가능 ✓ (누르면 취소)") : compact ? "봉사 가능" : "이날 봉사할 수 있어요",
+    const toggle = past || (!hasEdu && !mine) ? null : h("button", { class: "btn btn--sm " + (mine ? "btn--primary" : "btn--ghost"), type: "button", "aria-pressed": String(mine), text: mine ? (compact ? "신청함 ✓" : "봉사 가능 ✓ (누르면 취소)") : compact ? "봉사 가능" : "이날 봉사할 수 있어요",
       onclick: async () => { st.avail = await act(() => api("/team/avail", { method: "PUT", body: { date: ymd, on: !mine } })); redraw(); } });
-    const needSet = a.canSetNeed && !past ? (() => {
+    const needSet = a.canSetNeed && !past && (hasEdu || need) ? (() => {
       const n = h("input", { type: "number", min: "0", max: "500", inputmode: "numeric", class: "tcal__needin", value: need?.need ?? "", placeholder: "인원", "aria-label": `${volDay(ymd)} 필요 인원` });
       const note = compact ? null : h("input", { maxlength: "200", value: need?.note || "", placeholder: "메모 (선택)", "aria-label": "필요 인원 메모" });
       return h("span", { class: "tcal__needset" }, [h("span", { class: "muted small", text: "필요 인원" }), n, note, h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "저장", onclick: async () => { st.avail = await act(() => api("/team/day-need", { method: "PUT", body: { date: ymd, need: n.value, note: note ? note.value : need?.note || "" } }), "필요 인원을 저장했어요."); redraw(); } })]);
@@ -6117,16 +6120,16 @@
     const drawAvail = () => {
       const days = Object.keys(st.avail.needs || {}).filter((d) => d >= today()).sort();
       const addBox = st.avail.canSetNeed ? (() => {
-        const date = h("input", { type: "date", min: today(), value: "", "aria-label": "봉사가 필요한 날" }), n = h("input", { type: "number", min: "1", max: "500", inputmode: "numeric", class: "tcal__needin", placeholder: "인원", "aria-label": "필요 인원" });
+        const date = h("select", { "aria-label": "봉사가 필요한 날 (교육 일정이 있는 날)" }, [h("option", { value: "", text: (st.avail.eduDays || []).length ? "교육 있는 날 고르기" : "앞으로 교육 일정이 없어요" }), ...(st.avail.eduDays || []).map((d) => h("option", { value: d, text: `${volDay(d)} · ${o.orgs.filter((x) => !x.tableOnly && x.date === d).map((x) => x.org).join(", ")}` }))]), n = h("input", { type: "number", min: "1", max: "500", inputmode: "numeric", class: "tcal__needin", placeholder: "인원", "aria-label": "필요 인원" });
         const note = h("input", { maxlength: "200", placeholder: "메모 (선택, 예: 오전 검수)", "aria-label": "메모" });
         return h("div", { class: "tcal__needset team-needadd" }, [h("span", { class: "muted small", text: "필요한 날 넣기" }), date, n, note, h("button", { class: "btn btn--primary btn--sm", type: "button", text: "넣기", onclick: async () => {
-          if (!date.value || !Number(n.value)) return toast("날짜와 필요 인원을 적어 주세요.");
+          if (!date.value || !Number(n.value)) return toast("교육 있는 날과 필요 인원을 골라 주세요.");
           st.avail = await act(() => api("/team/day-need", { method: "PUT", body: { date: date.value, need: n.value, note: note.value } }), "필요한 날을 넣었어요."); drawAvail();
         } })]);
       })() : null;
       fill(availCard,
         h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "봉사 가능 신청" }), h("a", { class: "link-btn", href: "#/tcal", text: "캘린더에서 보기" })]),
-        h("p", { class: "muted small", text: st.avail.canSetNeed ? "봉사가 필요한 날과 인원을 넣으면 여기에 보여요. 봉사자는 '봉사 가능'을 눌러 신청해요. 인원을 0으로 저장하면 목록에서 빠져요." : "리더 봉사자가 봉사가 필요한 날을 넣으면 여기에 보여요. 할 수 있는 날에 '봉사 가능'을 눌러 주세요." }),
+        h("p", { class: "muted small", text: st.avail.canSetNeed ? "교육 일정이 있는 날 중에서 봉사가 필요한 날과 인원을 넣으면 여기에 보여요. 봉사자는 '봉사 가능'을 눌러 신청해요. 인원을 0으로 저장하면 목록에서 빠져요." : "리더 봉사자가 교육 일정이 있는 날 중 봉사가 필요한 날을 넣으면 여기에 보여요. 할 수 있는 날에 '봉사 가능'을 눌러 주세요." }),
         addBox,
         days.length ? h("ul", { class: "team-days" }, days.map((ymd) => {
           const edu = o.orgs.filter((x) => !x.tableOnly && x.date === ymd).sort((a, b) => (a.startTime || "99:99").localeCompare(b.startTime || "99:99"));
