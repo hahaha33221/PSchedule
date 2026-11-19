@@ -71,7 +71,7 @@ const q = {
   userByLogin: db.prepare("SELECT * FROM users WHERE login = ?"),
   userById: db.prepare("SELECT * FROM users WHERE id = ?"),
   session: db.prepare(`
-    SELECT u.id, u.login, u.role, u.director, u.volunteer, u.vol_kind, s.vol_mode, u.name, u.unit_id, u.pw_changed, u.pw_hash FROM sessions s
+    SELECT u.id, u.login, u.role, u.director, u.volunteer, u.vol_kind, u.vol_leader, s.vol_mode, u.name, u.unit_id, u.pw_changed, u.pw_hash FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ? AND s.expires_at > ?`),
   addSession: db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at, vol_mode) VALUES (?, ?, ?, ?)"),
@@ -456,9 +456,10 @@ const q = {
   setUserDirector: db.prepare("UPDATE users SET director = ? WHERE id = ?"),
   setUserVolunteer: db.prepare("UPDATE users SET volunteer = ? WHERE id = ?"),
   setUserVolKind: db.prepare("UPDATE users SET vol_kind = ? WHERE id = ?"),
+  setUserVolLeader: db.prepare("UPDATE users SET vol_leader = ? WHERE id = ?"),
   unlinkUserPositions: db.prepare("UPDATE org_positions SET user_id = NULL WHERE user_id = ?"),
   positionUnitsOf: db.prepare("SELECT DISTINCT unit_id AS id FROM org_positions WHERE user_id = ?"),
-  users: db.prepare("SELECT id, login, role, director, volunteer, vol_kind, name, unit_id, note, pw_changed, created_at, last_login_at FROM users ORDER BY role = 'admin' DESC, name, id"),
+  users: db.prepare("SELECT id, login, role, director, volunteer, vol_kind, vol_leader, name, unit_id, note, pw_changed, created_at, last_login_at FROM users ORDER BY role = 'admin' DESC, name, id"),
   addUser: db.prepare("INSERT INTO users (login, pw_hash, role, name, unit_id, note) VALUES (?, ?, ?, ?, ?, ?)"),
   setUser: db.prepare("UPDATE users SET name = ?, unit_id = ?, note = ?, role = ? WHERE id = ?"),
   delUser: db.prepare("DELETE FROM users WHERE id = ?"),
@@ -609,7 +610,7 @@ const volKindsInput = (b) => {
   return b.role === "team" ? "team" : "dept";
 };
 const volKindStore = (kinds) => (kinds.includes("dept") && kinds.includes("team") ? "both" : kinds.includes("team") ? "team" : "dept");
-const publicUser = (u) => ({ id: u.id, login: u.login, role: roleOut(u), volKind: volKindOf(u), volKinds: volKindsOf(u), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), mustChangePassword: u.pw_changed !== 1 });
+const publicUser = (u) => ({ id: u.id, login: u.login, role: roleOut(u), volKind: volKindOf(u), volKinds: volKindsOf(u), volLeader: !!(u.volunteer && u.vol_leader && volKindsOf(u).includes("team")), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), mustChangePassword: u.pw_changed !== 1 });
 const teamOut = () => q.team.all().map((u) => ({ id: u.id, name: u.name, unitId: u.unit_id }));
 
 // 입력 정리
@@ -1412,7 +1413,8 @@ function teamOrgRows(admin) {
       id: s.id, no: i + 1, org: s.title.split(" · ").pop(), date: s.date, startTime: s.start_time, place: s.place, tableOnly: !!s.table_only, fromForm: s.request_id != null,
       reqQty: s.qty, sumNote: s.sum_note || "", eduQty: s.edu_qty ?? null, threadQty: s.thread_qty ?? null, crossQty: s.cross_qty ?? null,
       contact: f.contact || "", helper: f.helper || "", status: f.status || "plan", attend: f.attend ?? null, resultNote: f.result_note || "", madeQty: f.made_qty ?? null, madeDue: f.made_due || "",
-      updatedBy: f.updated_by || "", updatedAt: f.updated_at || null, inquiries: c?.n || 0, openInquiries: c?.open || 0, canContact: !!admin
+      updatedBy: f.updated_by || "", updatedAt: f.updated_at || null, inquiries: c?.n || 0, openInquiries: c?.open || 0, canContact: !!admin,
+      deletable: s.request_id == null && s.thread_qty == null && s.cross_qty == null && s.edu_qty == null
     };
   });
 }
@@ -1420,6 +1422,7 @@ const teamOrgOf = (id) => { const s = q.volSchedule.get(Number(id)); if (!s || !
 const teamIssueOut = (x) => ({ id: x.id, kind: x.kind, scheduleId: x.schedule_id, org: x.org_title ? x.org_title.split(" · ").pop() : "", title: x.title, body: x.body, status: x.status, reply: x.reply, author: x.author || "", mine: false, createdBy: x.created_by, photos: x.photo_ids ? String(x.photo_ids).split(",").map(Number) : [], createdAt: x.created_at, updatedAt: x.updated_at });
 async function teamRoute(req, res, user, path, method) {
   const admin = user.role === "admin";
+  const leader = admin || !!user.vol_leader; // 리더 봉사자: 교육 추가·지우기
   const ok = (code, body) => { send(res, code, body); return true; };
   const issues = () => q.teamIssues.all().map((x) => ({ ...teamIssueOut(x), mine: x.created_by === user.id }));
   if (await inspectionRoute(req, res, user, path, method, "/api/team")) return true;
@@ -1437,7 +1440,24 @@ async function teamRoute(req, res, user, path, method) {
     });
   }
   // 담당 수도회
-  if (path === "/api/team/orgs" && method === "GET") return ok(200, { orgs: teamOrgRows(admin) });
+  if (path === "/api/team/orgs" && method === "GET") return ok(200, { orgs: teamOrgRows(admin), canAdd: leader });
+  // 교육 추가 (리더·관리자): 묵주 방문 일정 한 줄. 날짜가 없으면 달력 미정으로 표에만
+  if (path === "/api/team/orgs" && method === "POST") {
+    if (!leader) return ok(403, { error: "교육 추가는 리더 봉사자와 관리자만 해요." });
+    const gid = rosaryGroupId();
+    if (!gid) throw notFound("묵주 프로젝트");
+    const b = await readJson(req);
+    const org = text(b.org, 80, "수도회 이름", true).replace(/·/g, " ").trim();
+    const date = optDate(b.date, "교육 날짜");
+    const id = inTx(() => {
+      const id = Number(db.prepare("INSERT INTO vol_schedules (title, date, start_time, place, audience, qty, project_item_id, created_by, table_only) VALUES (?, ?, ?, ?, 'all', ?, ?, ?, ?)")
+        .run(`묵주 교육 · ${org}`, date || today(), optTime(b.startTime), text(b.place, 120, "장소") || "", teamQty(b.qty, "요청수량"), gid, user.id, date ? 0 : 1).lastInsertRowid);
+      if (b.qty !== "" && b.qty != null) q.markVolQty.run(user.name, id);
+      q.teamOrgUpsert.run(id, "", text(b.helper, 80, "담당 봉사자") || "", "plan", null, "", null, "", user.name);
+      return id;
+    });
+    return ok(201, { id, orgs: teamOrgRows(admin) });
+  }
   const om = path.match(/^\/api\/team\/orgs\/(\d+)(\/inquiries)?$/);
   if (om) {
     const s = teamOrgOf(om[1]);
@@ -1451,6 +1471,13 @@ async function teamRoute(req, res, user, path, method) {
       }
       return ok(405, { error: "Method not allowed" });
     }
+    // 지우기 (리더·관리자): 네이버폼 신청이나 출고·교육물량 기록이 있는 줄은 지우지 않음
+    if (!om[2] && method === "DELETE") {
+      if (!leader) return ok(403, { error: "교육 지우기는 리더 봉사자와 관리자만 해요." });
+      if (s.request_id != null || s.thread_qty != null || s.cross_qty != null || s.edu_qty != null) return ok(400, { error: "네이버폼 신청이나 출고·교육물량 기록이 있는 교육은 지울 수 없어요. 관리자에게 알려 주세요." });
+      q.delVolSchedule.run(s.id);
+      return ok(200, { orgs: teamOrgRows(admin) });
+    }
     if (method === "PATCH") {
       const b = await readJson(req), f = q.teamOrgInfo.get(s.id) || {};
       if (has(b, "contact") && !admin) return ok(403, { error: "연락처는 관리자만 적어요." });
@@ -1458,6 +1485,11 @@ async function teamRoute(req, res, user, path, method) {
       if (!TEAM_STATUS.includes(status)) throw bad("교육 상태를 확인해 주세요.");
       inTx(() => {
         // 교육 날짜를 정하면 달력에도 보이게 (달력 미정 → 일정)
+        // 수도회 이름·장소 (팀 봉사자 모두)
+        if (has(b, "org") || has(b, "place")) {
+          const org = has(b, "org") ? text(b.org, 80, "수도회 이름", true).replace(/·/g, " ").trim() : s.title.split(" · ").pop();
+          db.prepare("UPDATE vol_schedules SET title = ?, place = ? WHERE id = ?").run(`묵주 교육 · ${org}`, has(b, "place") ? text(b.place, 120, "장소") || "" : s.place, s.id);
+        }
         if (has(b, "date")) {
           if (!isDate(b.date)) throw bad("교육 날짜를 확인해 주세요.");
           db.prepare("UPDATE vol_schedules SET date = ?, start_time = ?, table_only = 0 WHERE id = ?").run(b.date, has(b, "startTime") ? optTime(b.startTime) : s.start_time, s.id);
@@ -2927,7 +2959,7 @@ async function api(req, res, path) {
     if (path === "/api/admin/users" && method === "GET") {
       return send(res, 200, {
         users: q.users.all().map((u) => ({
-          id: u.id, login: u.login, role: roleOut(u), volKind: volKindOf(u), volKinds: volKindsOf(u), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), note: u.note, pwChanged: u.pw_changed === 1,
+          id: u.id, login: u.login, role: roleOut(u), volKind: volKindOf(u), volKinds: volKindsOf(u), volLeader: !!(u.volunteer && u.vol_leader && volKindsOf(u).includes("team")), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), note: u.note, pwChanged: u.pw_changed === 1,
           createdAt: u.created_at, lastLoginAt: u.last_login_at, me: u.id === user.id
         }))
       });
@@ -2950,6 +2982,7 @@ async function api(req, res, path) {
         if (director) q.setUserDirector.run(1, id);
         if (volunteer) q.setUserVolunteer.run(1, id);
         if (volunteer) q.setUserVolKind.run(kindsNew, id);
+        if (volunteer && b.volLeader && kindsNew !== "dept") q.setUserVolLeader.run(1, id);
       });
       console.log(`[admin] ${user.login} → ${login} 계정 발급`);
       return send(res, 201, { login, name, password });
@@ -3240,6 +3273,8 @@ async function api(req, res, path) {
           q.setUserDirector.run(director, target.id);
           q.setUserVolunteer.run(volunteer, target.id);
           q.setUserVolKind.run(volKind, target.id);
+          // 리더는 팀 봉사자만. 보내지 않으면 그대로, 봉사자가 아니거나 팀 권한이 없어지면 끔
+          q.setUserVolLeader.run(volunteer && volKind !== "dept" ? (has(b, "volLeader") ? (b.volLeader ? 1 : 0) : target.vol_leader || 0) : 0, target.id);
           if (grants || volunteer) q.clearViewUnits.run(target.id);
           if (grants && !volunteer) for (const g of grants) q.addViewUnit.run(target.id, g.unit, g.sub);
           if (volunteer) q.unlinkUserPositions.run(target.id); // 봉사자는 조직도 자리에 연결하지 않음

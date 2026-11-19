@@ -633,6 +633,19 @@ jobs:
           curl -fs -H "$TH" -XPOST -d '{"itemId":'$IG',"stage":3,"date":"2030-06-01","checkedQty":10,"defects":{"매듭":1},"rework":"fix"}' $B/team/inspections >/dev/null
           curl -fs -H "$H" $B/admin/inspections | node -e 'const x=JSON.parse(require("fs").readFileSync(0)).inspections.find(i=>i.author==="팀봉사");if(!x||x.rework!=="fix")process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d '{"itemId":'$IG',"stage":3,"date":"2030-06-01","checkedQty":1,"rework":"x"}' $B/team/inspections)" = 400
+          # 리더 봉사자: 교육(수도회 일정) 추가·지우기는 리더·관리자만, 이름·장소 고치기는 팀 봉사자 모두, 신청·출고 기록이 있는 교육은 못 지움
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d '{"org":"새 수도회"}' $B/team/orgs)" = 403
+          curl -fs -H "$H" -XPATCH -d '{"volLeader":true}' $B/admin/users/$(USR teamv) >/dev/null
+          curl -fs -H "$TH" $B/me | node -e 'if(!JSON.parse(require("fs").readFileSync(0)).user.volLeader)process.exit(1)'
+          NO=$(curl -fs -H "$TH" -XPOST -d '{"org":"새 수도회","place":"명동","qty":50}' $B/team/orgs | node -pe 'const d=JSON.parse(require("fs").readFileSync(0));const o=d.orgs.find(x=>x.id===d.id);if(!o.tableOnly||o.org!=="새 수도회"||o.reqQty!==50||!o.deletable)process.exit(1);d.id')
+          if curl -fs -H "$VH" $B/volunteer/home | grep -q '새 수도회'; then echo "날짜 없는 교육이 달력에 보여요"; exit 1; fi
+          curl -fs -H "$TH" -XPATCH -d '{"org":"고친 수도회","place":"혜화"}' $B/team/orgs/$NO | node -e 'const o=JSON.parse(require("fs").readFileSync(0)).org;if(o.org!=="고친 수도회"||o.place!=="혜화")process.exit(1)'
+          curl -fs -H "$TH" -XDELETE $B/team/orgs/$NO | node -e 'if(JSON.parse(require("fs").readFileSync(0)).orgs.some(o=>o.org==="고친 수도회"))process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XDELETE $B/team/orgs/$TO)" = 400
+          curl -fs -H "$H" -XPATCH -d '{"volLeader":false}' $B/admin/users/$(USR teamv) >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XDELETE $B/team/orgs/$TO)" = 403
+          curl -fs -H "$H" -XPATCH -d '{"role":"volunteer","volKinds":["dept"],"volLeader":true}' $B/admin/users/$(USR volb) >/dev/null
+          curl -fs -H "$H" $B/admin/users | node -e 'const u=JSON.parse(require("fs").readFileSync(0)).users.find(x=>x.login==="volb");if(!u||u.volLeader)process.exit(1)'
           TI=$(curl -fs -H "$TH" -XPOST -d '{"kind":"thread","scheduleId":'$TO',"title":"실 끊어짐"}' $B/team/issues | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPATCH -d '{"status":"done"}' $B/team/issues/$TI)" = 403
           curl -fs -H "$H" -XPATCH -d '{"status":"doing","reply":"확인 중"}' $B/team/issues/$TI | node -e 'const x=JSON.parse(require("fs").readFileSync(0)).issues.find(i=>i.id==='$TI');if(x.status!=="doing"||x.reply!=="확인 중")process.exit(1)'

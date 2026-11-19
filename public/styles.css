@@ -1860,3 +1860,15 @@ th.num .sort-th__btn { justify-content: flex-end; }
   .tcal__cell.is-picked { padding: 1px; }
   .tcal__ev, .tcal__avail { font-size: 10px; padding: 0 2px; }
 }
+/* 로고 옆 봉사자 구분 버튼 (권한이 둘이면 눌러서 화면 전환) */
+.vol__kind { display: inline-flex; align-items: center; gap: 4px; margin-left: 6px; margin-right: auto; padding: 3px 10px; border: 0; border-radius: 999px; background: var(--vol-bar-ink, var(--dark)); color: var(--primary); font: inherit; font-size: 12px; font-weight: 700; white-space: nowrap; cursor: default; }
+.vol__kind.is-switch { cursor: pointer; box-shadow: 0 0 0 2px var(--primary-soft); }
+.vol__kind.is-switch:hover { filter: brightness(1.15); }
+.vol__kind:disabled { opacity: 1; }
+.vol__kind-swap { font-size: 13px; }
+.mobilebar .vol__kind { margin: 0; }
+.side-mini .side__top .vol__kind { display: none; }
+.vol-kind__leader { margin-left: 22px; }
+.shell--vol .side__top { flex-wrap: wrap; row-gap: 6px; }
+.shell--vol .side__top .brand span { white-space: nowrap; }
+.side__top .vol__kind { order: 3; margin: 0 0 2px 6px; }
