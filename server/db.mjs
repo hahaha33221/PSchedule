@@ -495,6 +495,26 @@ function addUnitColumns(db) {
       date    TEXT NOT NULL,
       PRIMARY KEY (user_id, date)
     );
+    -- 날짜별 봉사 필요 인원 (리더 봉사자·관리자가 정함)
+    CREATE TABLE IF NOT EXISTS team_day_need (
+      date       TEXT PRIMARY KEY,
+      need       INTEGER NOT NULL,
+      note       TEXT NOT NULL DEFAULT '',
+      updated_by TEXT NOT NULL DEFAULT '',
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    -- 제품 회수: 수도회(교육 줄)에서 완성품을 받은 날짜·수량·방법
+    CREATE TABLE IF NOT EXISTS team_recovery (
+      id          INTEGER PRIMARY KEY,
+      schedule_id INTEGER NOT NULL REFERENCES vol_schedules(id) ON DELETE CASCADE,
+      date        TEXT NOT NULL,
+      qty         INTEGER NOT NULL DEFAULT 0,
+      method      TEXT NOT NULL DEFAULT '' CHECK (method IN ('', 'parcel', 'visit', 'bring')),
+      note        TEXT NOT NULL DEFAULT '',
+      created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     -- 자료실: 교육 자료 · 검수 기준 · 기타 (파일은 링크로)
     CREATE TABLE IF NOT EXISTS team_docs (
       id         INTEGER PRIMARY KEY,

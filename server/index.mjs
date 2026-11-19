@@ -394,6 +394,14 @@ const q = {
   addTeamAvail: db.prepare("INSERT OR IGNORE INTO team_avail (user_id, date) VALUES (?, ?)"),
   delTeamAvail: db.prepare("DELETE FROM team_avail WHERE user_id = ? AND date = ?"),
   teamDocs: db.prepare("SELECT * FROM team_docs ORDER BY category, id"),
+  teamDayNeeds: db.prepare("SELECT * FROM team_day_need WHERE date >= ?"),
+  setTeamDayNeed: db.prepare("INSERT INTO team_day_need (date, need, note, updated_by) VALUES (?, ?, ?, ?) ON CONFLICT(date) DO UPDATE SET need = excluded.need, note = excluded.note, updated_by = excluded.updated_by, updated_at = datetime('now')"),
+  delTeamDayNeed: db.prepare("DELETE FROM team_day_need WHERE date = ?"),
+  teamRecoveries: db.prepare("SELECT x.*, u.name AS author, s.title AS org_title FROM team_recovery x JOIN vol_schedules s ON s.id = x.schedule_id LEFT JOIN users u ON u.id = x.created_by ORDER BY x.date DESC, x.id DESC"),
+  teamRecovery: db.prepare("SELECT * FROM team_recovery WHERE id = ?"),
+  addTeamRecovery: db.prepare("INSERT INTO team_recovery (schedule_id, date, qty, method, note, created_by) VALUES (?, ?, ?, ?, ?, ?)"),
+  setTeamRecovery: db.prepare("UPDATE team_recovery SET schedule_id = ?, date = ?, qty = ?, method = ?, note = ?, updated_at = datetime('now') WHERE id = ?"),
+  delTeamRecovery: db.prepare("DELETE FROM team_recovery WHERE id = ?"),
   teamDoc: db.prepare("SELECT * FROM team_docs WHERE id = ?"),
   addTeamDoc: db.prepare("INSERT INTO team_docs (category, title, url, note) VALUES (?, ?, ?, ?)"),
   setTeamDoc: db.prepare("UPDATE team_docs SET category = ?, title = ?, url = ?, note = ? WHERE id = ?"),
@@ -1435,6 +1443,7 @@ async function teamRoute(req, res, user, path, method) {
       nextEdu: orgs.filter((o) => !o.tableOnly && o.date >= t).slice(0, 5),
       inspect: { count: ins.length, checked: ins.reduce((n, x) => n + x.checkedQty, 0), bad: ins.reduce((n, x) => n + x.defectTotal, 0) },
       daily: q.teamDaily.all().reduce((n, x) => n + x.qty, 0),
+      recovered: q.teamRecoveries.all().reduce((n, x) => n + x.qty, 0),
       myShifts: shifts.filter((s) => su.some((x) => x.shift_id === s.id && x.id === user.id)).map((s) => ({ id: s.id, date: s.date, startTime: s.start_time })),
       openIssues: q.teamIssues.all().filter((x) => x.status !== "done").length
     });
@@ -1557,14 +1566,54 @@ async function teamRoute(req, res, user, path, method) {
   const availOut = () => {
     const people = {};
     for (const x of q.teamAvailPeople.all(today())) (people[x.date] ||= []).push(givenName(x.name));
-    return { mine: q.teamAvailMine.all(user.id, today()).map((x) => x.date), counts: Object.fromEntries(Object.entries(people).map(([d, l]) => [d, l.length])), people };
+    const needs = Object.fromEntries(q.teamDayNeeds.all(today()).map((x) => [x.date, { need: x.need, note: x.note, by: x.updated_by }]));
+    return { mine: q.teamAvailMine.all(user.id, today()).map((x) => x.date), counts: Object.fromEntries(Object.entries(people).map(([d, l]) => [d, l.length])), people, needs, canSetNeed: leader };
   };
   if (path === "/api/team/avail" && method === "GET") return ok(200, availOut());
   if (path === "/api/team/avail" && method === "PUT") {
     const b = await readJson(req);
     if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
+    if (b.date < today()) throw bad("지난 날은 바꿀 수 없어요.");
     if (b.on) q.addTeamAvail.run(user.id, b.date); else q.delTeamAvail.run(user.id, b.date);
     return ok(200, availOut());
+  }
+  // 날짜별 필요 인원 (리더·관리자): 0 이나 빈 값이면 지움
+  if (path === "/api/team/day-need" && method === "PUT") {
+    if (!leader) return ok(403, { error: "필요 인원은 리더 봉사자와 관리자가 정해요." });
+    const b = await readJson(req);
+    if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
+    const need = teamQty(b.need, "필요 인원");
+    if (need != null && need > 500) throw bad("필요 인원은 500명까지 적을 수 있어요.");
+    if (!need) q.delTeamDayNeed.run(b.date); else q.setTeamDayNeed.run(b.date, need, text(b.note, 200, "메모") || "", user.name);
+    return ok(200, availOut());
+  }
+  // 제품 회수: 수도회에서 완성품을 받은 기록 (팀 봉사자 입력, 지우기는 적은 사람·리더·관리자)
+  const RECOVERY_METHODS = ["", "parcel", "visit", "bring"];
+  const recoveryOut = () => {
+    const list = q.teamRecoveries.all().map((x) => ({ id: x.id, scheduleId: x.schedule_id, org: x.org_title.split(" · ").pop(), date: x.date, qty: x.qty, method: x.method, note: x.note, author: x.author || "", mine: x.created_by === user.id }));
+    const byOrg = {};
+    for (const x of list) byOrg[x.scheduleId] = (byOrg[x.scheduleId] || 0) + x.qty;
+    return { records: list, byOrg, total: list.reduce((n, x) => n + x.qty, 0) };
+  };
+  const recoveryIn = async () => {
+    const b = await readJson(req);
+    const s = teamOrgOf(b.scheduleId);
+    if (!isDate(b.date)) throw bad("회수 날짜를 확인해 주세요.");
+    const qty = teamQty(b.qty, "회수 수량");
+    if (qty == null) throw bad("회수 수량을 적어 주세요.");
+    const m = b.method == null ? "" : String(b.method);
+    if (!RECOVERY_METHODS.includes(m)) throw bad("회수 방법을 확인해 주세요.");
+    return [s.id, b.date, qty, m, text(b.note, 500, "메모") || ""];
+  };
+  if (path === "/api/team/recovery" && method === "GET") return ok(200, recoveryOut());
+  if (path === "/api/team/recovery" && method === "POST") { q.addTeamRecovery.run(...(await recoveryIn()), user.id); return ok(201, recoveryOut()); }
+  const rcm = path.match(/^\/api\/team\/recovery\/(\d+)$/);
+  if (rcm) {
+    const x = q.teamRecovery.get(Number(rcm[1]));
+    if (!x) throw notFound("회수 기록");
+    if (method === "PATCH") { q.setTeamRecovery.run(...(await recoveryIn()), x.id); return ok(200, recoveryOut()); }
+    if (method === "DELETE") { if (x.created_by !== user.id && !leader) return ok(403, { error: "적은 사람과 리더·관리자만 지울 수 있어요." }); q.delTeamRecovery.run(x.id); return ok(200, recoveryOut()); }
+    return ok(405, { error: "Method not allowed" });
   }
   // 이슈: 봉사자가 등록(사진 4장), 관리자가 처리 상태·답
   const issueIn = (b) => {

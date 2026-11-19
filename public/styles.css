@@ -1872,3 +1872,13 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .shell--vol .side__top { flex-wrap: wrap; row-gap: 6px; }
 .shell--vol .side__top .brand span { white-space: nowrap; }
 .side__top .vol__kind { order: 3; margin: 0 0 2px 6px; }
+/* 봉사 가능 상자: 필요 인원 */
+.tcal__availbox.is-compact { margin: 0; padding: 0; border: 0; gap: 4px; }
+.tcal__needset { display: inline-flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tcal__needin { width: 70px; }
+.team-ok { color: var(--c1); font-weight: 700; }
+.tcal__availbox.is-compact { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.tcal__availbox .actions { flex-wrap: wrap; gap: 6px; align-items: center; }
+.tcal__needset input.tcal__needin { width: 72px; min-width: 0; padding: 4px 8px; }
+.tcal__needset input:not(.tcal__needin) { width: 160px; min-width: 0; padding: 4px 8px; }
+.tcal__needset { flex-wrap: nowrap; }
