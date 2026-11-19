@@ -689,6 +689,8 @@ function addUnitColumns(db) {
   if (!has("users", "volunteer")) db.exec("ALTER TABLE users ADD COLUMN volunteer INTEGER NOT NULL DEFAULT 0");
   // 봉사자 구분: dept = 부서 봉사자(물류, 예전 봉사자 화면), team = 팀 봉사자(교육·검수)
   if (!has("users", "vol_kind")) db.exec("ALTER TABLE users ADD COLUMN vol_kind TEXT NOT NULL DEFAULT 'dept'");
+  // 봉사자 권한 겹치기: vol_kind 'both' = 부서·팀 봉사자 둘 다. 세션마다 지금 쓰는 쪽(vol_mode)을 기억
+  if (!has("sessions", "vol_mode")) db.exec("ALTER TABLE sessions ADD COLUMN vol_mode TEXT NOT NULL DEFAULT ''");
   // 검수 불합격품 처리: '' 정하지 않음 · return 수도회로 반송 · fix 현장 재작업
   if (!has("inspections", "rework")) db.exec("ALTER TABLE inspections ADD COLUMN rework TEXT NOT NULL DEFAULT ''");
   if (!has("users", "note")) {

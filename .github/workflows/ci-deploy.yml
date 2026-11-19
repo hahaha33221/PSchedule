@@ -645,6 +645,41 @@ jobs:
           curl -fs -H "$TH" -XPOST -d '{"on":true}' $B/team/shifts/$SH/signup | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).shifts.find(x=>x.id==='$SH');if(!s.mine||s.people[0]!=="팀봉사")process.exit(1)'
           curl -fs -H "$TH" -XPOST -d '{"date":"2030-06-02","qty":40}' $B/team/daily | node -e 'if(JSON.parse(require("fs").readFileSync(0)).daily[0].qty!==40)process.exit(1)'
           curl -fs -H "$TH" -XPUT -d '{"date":"2030-06-03","on":true}' $B/team/avail | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.mine[0]!=="2030-06-03"||d.counts["2030-06-03"]!==1)process.exit(1)'
+          # 봉사자 권한 겹치기(부서·팀): 둘 다 로그인 가능, 세션마다 한쪽 권한만, 메뉴에서 바꿈, 없는 권한으로는 못 바꿈. 관리자는 겹치지 않음
+          BPW=$(curl -fs -H "$H" -XPOST -d '{"login":"bothv","name":"겸직봉사","role":"volunteer","volKinds":["dept","team"]}' $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).password')
+          curl -fs -H "$H" $B/admin/users | node -e 'const u=JSON.parse(require("fs").readFileSync(0)).users.find(x=>x.login==="bothv");if(u.volKinds.join()!=="dept,team")process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"login":"nonev","name":"x","role":"volunteer","volKinds":[]}' $B/admin/users)" = 400
+          BD=$(curl -fs -XPOST -H 'content-type: application/json' -d "{\"login\":\"bothv\",\"password\":\"$BPW\",\"as\":\"volunteer\"}" $B/login | node -pe 'const d=JSON.parse(require("fs").readFileSync(0));if(d.user.volKind!=="dept"||d.user.volKinds.length!==2)process.exit(1);d.token')
+          BT=$(curl -fs -XPOST -H 'content-type: application/json' -d "{\"login\":\"bothv\",\"password\":\"$BPW\",\"as\":\"team\"}" $B/login | node -pe 'const d=JSON.parse(require("fs").readFileSync(0));if(d.user.volKind!=="team")process.exit(1);d.token')
+          J="{\"login\":\"bothv\",\"password\":\"$BPW\",\"as\":\"staff\"}"; test "$(curl -s -o /dev/null -w '%{http_code}' -XPOST -H 'content-type: application/json' -d "$J" $B/login)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$BD")" $B/team/home)" = 403
+          curl -fs -H "$(bearer "$BD")" $B/volunteer/home >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$BT")" $B/volunteer/home)" = 403
+          curl -fs -H "$(bearer "$BT")" $B/team/orgs | grep -q '연락처 칸'
+          curl -fs -H "$(bearer "$BD")" -XPOST -d '{"mode":"team"}' $B/vol-mode | node -e 'if(JSON.parse(require("fs").readFileSync(0)).user.volKind!=="team")process.exit(1)'
+          curl -fs -H "$(bearer "$BD")" $B/team/home >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$BD")" $B/volunteer/home)" = 403
+          curl -fs -H "$(bearer "$BD")" $B/me | node -e 'const u=JSON.parse(require("fs").readFileSync(0)).user;if(u.volKind!=="team"||u.role!=="volunteer")process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d '{"mode":"dept"}' $B/vol-mode)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d '{"mode":"team"}' $B/vol-mode)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d '{"mode":"x"}' $B/vol-mode)" = 403
+          # 겹친 계정도 남의 비밀글은 못 보고 직원 데이터는 막힘, 부서 쪽에서는 연락처(팀 API)도 막힘
+          BX=$(curl -fs -H "$VH" -XPOST -d '{"category":"request","title":"남의 비밀","body":"숨긴 내용","secret":true}' $B/board | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+          for TK in "$BD" "$BT"; do
+            curl -fs -H "$(bearer "$TK")" $B/board/$BX | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.post.body||d.post.canSee)process.exit(1)'
+            test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$TK")" $B/contacts)" = 403
+            test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$TK")" $B/admin/users)" = 403
+          done
+          curl -fs -H "$(bearer "$BD")" -XPOST -d '{"mode":"dept"}' $B/vol-mode >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$BD")" $B/team/orgs)" = 403
+          # 예전 화면처럼 volKinds 없이 고쳐도 겹친 권한은 그대로, 관리자로 바꾸면 봉사자 권한은 없어짐
+          curl -fs -H "$H" -XPATCH -d '{"name":"겸직봉사","role":"volunteer"}' $B/admin/users/$(USR bothv) >/dev/null
+          curl -fs -H "$H" $B/admin/users | node -e 'const u=JSON.parse(require("fs").readFileSync(0)).users.find(x=>x.login==="bothv");if(u.volKinds.join()!=="dept,team")process.exit(1)'
+          curl -fs -H "$H" -XPATCH -d '{"role":"admin","volKinds":["dept","team"]}' $B/admin/users/$(USR bothv) >/dev/null
+          curl -fs -H "$H" $B/admin/users | node -e 'const u=JSON.parse(require("fs").readFileSync(0)).users.find(x=>x.login==="bothv");if(u.role!=="admin"||u.volKinds.length)process.exit(1)'
+          curl -fs -H "$(bearer "$BT")" $B/me | node -e 'const u=JSON.parse(require("fs").readFileSync(0)).user;if(u.role!=="admin"||u.volKind!==null||u.volKinds.length)process.exit(1)'
+          curl -fs -H "$H" -XDELETE $B/board/$BX >/dev/null
+          curl -fs -H "$H" -XDELETE $B/admin/users/$(USR bothv) >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/users/$(USR teamv) >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$TV >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$RV >/dev/null; curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$NV >/dev/null

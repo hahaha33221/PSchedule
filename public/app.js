@@ -2890,7 +2890,7 @@
           h("td", {}, h("span", { class: "person person--stack" }, [volunteer ? h("span", { class: "avatar avatar--sm c0", title: u.name, text: u.name.replace(/\s/g, "").slice(-2) }) : avatar(u.id, "sm"), h("span", {}, [h("strong", { text: u.name }), u.me ? h("span", { class: "badge", text: "나" }) : null, u.note ? h("small", { class: "muted person__note", text: u.note }) : null])])),
           h("td", {}, volunteer ? h("span", { class: "muted", text: "-" }) : [unitBtn, (u.viewUnits || []).length ? h("small", { class: "muted member-extra", title: "관리자가 추가로 지정한 볼 수 있는 조직", text: `+ 추가로 봄: ${viewGrantsText(u.viewUnits)}` }) : null]),
           h("td", { class: "mono", text: u.login }),
-          h("td", {}, u.role === "admin" ? adminBadge("관리자") : h("span", { class: "badge", text: u.role === "volunteer" ? (u.volKind === "team" ? "팀 봉사자" : "부서 봉사자") : { director: "본부장" }[u.role] || "멤버" })),
+          h("td", {}, u.role === "admin" ? adminBadge("관리자") : h("span", { class: "badge", text: u.role === "volunteer" ? (u.volKinds?.length > 1 ? "부서·팀 봉사자" : u.volKinds?.[0] === "team" ? "팀 봉사자" : "부서 봉사자") : { director: "본부장" }[u.role] || "멤버" })),
           h("td", { class: "muted" }, u.pwChanged ? "변경함" : h("span", { class: "warn", text: "임시 비밀번호" })),
           h("td", { class: "muted", text: u.lastLoginAt ? ago(u.lastLoginAt) : "아직 없음" }),
           h("td", { class: "td-actions" }, [
@@ -2955,12 +2955,14 @@
     const name = h("input", { maxlength: "20", autofocus: true, placeholder: "예: 김지현" });
     let unitId = memberFilter.unit && unitOf(memberFilter.unit) ? memberFilter.unit : null;
     const login = h("input", { maxlength: "20", autocapitalize: "none", spellcheck: "false", placeholder: "예: jihyun" });
-    const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "director", text: "본부장" }), h("option", { value: "admin", text: "관리자" }), h("option", { value: "volunteer", text: "부서 봉사자(물류)" }), h("option", { value: "team", text: "팀 봉사자(교육&검수)" })]);
+    const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "director", text: "본부장" }), h("option", { value: "admin", text: "관리자" }), h("option", { value: "volunteer", text: "봉사자" })]);
+    const vk = volKindPicker(role, ["dept"]);
     const submit = h("button", { class: "btn btn--admin", type: "submit", text: "발급" });
     const form = h("form", { class: "stack", novalidate: true }, [
       h("div", { class: "row2" }, [field("이름", name), field("소속", unitButton(unitId, (id) => { unitId = id; }), "조직도에서 고르기 (나중에 정해도 돼요)")]),
       field("아이디", login, "영문 소문자·숫자·._- 3~20자"),
       field("권한", role, "봉사자는 봉사자 전용 화면만 보고 소속 없이 관리돼요. 관리자는 조직도·멤버·분류·캘린더·백업 관리와 공지 쓰기를 할 수 있어요. 본부장은 맡은 조직(소속·연결한 조직도 자리)과 그 아래 조직의 회의·할 일·메모·연락처를 봐요. 관리 기능은 없어요"),
+      vk.el,
       err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), submit])
     ]);
@@ -2968,7 +2970,7 @@
       e.preventDefault();
       busy(submit, async () => {
         try {
-          const p = await api("/admin/users", { method: "POST", body: { name: name.value, unitId, login: login.value, role: role.value } });
+          const p = await api("/admin/users", { method: "POST", body: { name: name.value, unitId, login: login.value, role: role.value, ...(role.value === "volunteer" ? { volKinds: vk.kinds() } : {}) } });
           await reloadTeam();
           showIssued("계정을 만들었어요", p);
         } catch (ex) { showError(err, ex.message); (ex.field === "login" ? login : name).focus(); }
@@ -2977,6 +2979,17 @@
     openDialog("계정 발급", form, { admin: true });
   }
 
+  // 봉사자 권한 고르기: 부서 봉사자(물류) · 팀 봉사자(교육&검수), 둘 다 고를 수 있음 (권한이 '봉사자'일 때만 보임)
+  function volKindPicker(role, init) {
+    const box = (k, label) => h("input", { type: "checkbox", checked: init.includes(k), "data-k": k, "aria-label": label });
+    const dept = box("dept", "부서 봉사자(물류)"), team = box("team", "팀 봉사자(교육&검수)");
+    const el = h("div", { class: "field" }, [h("span", { class: "field__label", text: "봉사자 권한 (여러 개 고를 수 있어요)" }),
+      h("label", { class: "check" }, [dept, h("span", { text: "부서 봉사자(물류)" })]), h("label", { class: "check" }, [team, h("span", { text: "팀 봉사자(교육&검수)" })]),
+      h("span", { class: "field__hint", text: "둘 다 고르면 로그인 뒤 내 계정 메뉴에서 화면을 바꿔 써요." })]);
+    const sync = () => { el.hidden = role.value !== "volunteer"; };
+    role.addEventListener("change", sync); sync();
+    return { el, kinds: () => [dept, team].filter((c) => c.checked).map((c) => c.dataset.k) };
+  }
   function editMember(u) {
     const err = errorLine();
     const name = h("input", { value: u.name, maxlength: "20", autofocus: true });
@@ -2999,22 +3012,24 @@
     }
     drawGrants();
     const note = h("input", { value: u.note || "", maxlength: "200", placeholder: "예: 예전 직책, 연락 메모" });
-    const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "director", text: "본부장" }), h("option", { value: "admin", text: "관리자" }), h("option", { value: "volunteer", text: "부서 봉사자(물류)" }), h("option", { value: "team", text: "팀 봉사자(교육&검수)" })]);
-    role.value = u.role === "volunteer" && u.volKind === "team" ? "team" : u.role;
+    const role = h("select", {}, [h("option", { value: "member", text: "멤버" }), h("option", { value: "director", text: "본부장" }), h("option", { value: "admin", text: "관리자" }), h("option", { value: "volunteer", text: "봉사자" })]);
+    role.value = u.role;
+    const vk = volKindPicker(role, u.volKinds?.length ? u.volKinds : ["dept"]);
     const submit = h("button", { class: "btn btn--admin", type: "submit", text: "저장" });
     const form = h("form", { class: "stack", novalidate: true }, [
       h("div", { class: "row2" }, [field("이름", name), field("소속", unitButton(unitId, (id) => { unitId = id; }))]),
       // (field 는 <label> 이라 안에 체크 상자가 여럿이면 엉뚱한 것이 눌려서 div 로)
       h("div", { class: "field" }, [h("span", { class: "field__label", text: "추가로 볼 수 있는 조직" }), grantsBox, h("span", { class: "field__hint", text: "소속 말고도 이 조직의 회의·할 일·메모를 봐요. '아래 팀 포함'을 끄면 그 조직(부·본부 직속)만 봐요." })]),
       field("메모", note, "관리자만 보는 메모예요. 예전 '직책'은 여기로 옮겨 두었어요."),
-      field("권한", role, "봉사자로 바꾸면 소속·추가로 볼 조직·조직도 자리 연결이 지워지고 봉사자 전용 화면만 봐요. 본부장은 맡은 조직(소속·연결한 조직도 자리)과 그 아래 조직의 회의·할 일·메모·연락처를 봐요. 관리 기능은 없어요"), err,
+      field("권한", role, "봉사자로 바꾸면 소속·추가로 볼 조직·조직도 자리 연결이 지워지고 봉사자 전용 화면만 봐요. 본부장은 맡은 조직(소속·연결한 조직도 자리)과 그 아래 조직의 회의·할 일·메모·연락처를 봐요. 관리 기능은 없어요"),
+      vk.el, err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), submit])
     ]);
     form.addEventListener("submit", (e) => {
       e.preventDefault();
       busy(submit, async () => {
         try {
-          await api(`/admin/users/${u.id}`, { method: "PATCH", body: { name: name.value, unitId, note: note.value, role: role.value, viewUnits: grants } });
+          await api(`/admin/users/${u.id}`, { method: "PATCH", body: { name: name.value, unitId, note: note.value, role: role.value, viewUnits: grants, ...(role.value === "volunteer" ? { volKinds: vk.kinds() } : {}) } });
           closeDialog(); toast("저장했어요.");
           await reloadTeam();
           if (isAdmin()) { buildLayout(); render(); } else go("#/today");
@@ -5229,7 +5244,14 @@
       h("span", { class: `avatar c${state.user.id % 6}`, text: state.user.name.replace(/\s/g, "").slice(-2) }),
       h("span", { class: "side__who" }, [h("strong", { text: state.user.name }), h("small", { text: team ? "팀 봉사자" : "부서 봉사자" })])
     ]);
+    const other = (state.user.volKinds || []).find((k) => k !== (team ? "team" : "dept")); // 권한이 둘이면 다른 쪽
     account.addEventListener("click", () => popover(account, h("div", { class: "pop__list" }, [
+      other ? h("button", { type: "button", class: "pop__item", onclick: async () => {
+        closePop();
+        const r = await act(() => api("/vol-mode", { method: "POST", body: { mode: other } }));
+        state.user = r.user; state.volMenu = null; store.set("ps.loginAs", other === "team" ? "team" : "volunteer");
+        location.hash = other === "team" ? "#/thome" : "#/vhome"; render();
+      } }, other === "team" ? "팀 봉사자 화면으로" : "부서 봉사자 화면으로") : null,
       h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); openDialog("비밀번호 변경", passwordForm(closeDialog)); } }, "비밀번호 변경"),
       h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); logout(); } }, "로그아웃")
     ])));

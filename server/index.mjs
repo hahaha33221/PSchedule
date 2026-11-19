@@ -71,10 +71,11 @@ const q = {
   userByLogin: db.prepare("SELECT * FROM users WHERE login = ?"),
   userById: db.prepare("SELECT * FROM users WHERE id = ?"),
   session: db.prepare(`
-    SELECT u.id, u.login, u.role, u.director, u.volunteer, u.vol_kind, u.name, u.unit_id, u.pw_changed, u.pw_hash FROM sessions s
+    SELECT u.id, u.login, u.role, u.director, u.volunteer, u.vol_kind, s.vol_mode, u.name, u.unit_id, u.pw_changed, u.pw_hash FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ? AND s.expires_at > ?`),
-  addSession: db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)"),
+  addSession: db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at, vol_mode) VALUES (?, ?, ?, ?)"),
+  setSessionMode: db.prepare("UPDATE sessions SET vol_mode = ? WHERE token_hash = ?"),
   delSession: db.prepare("DELETE FROM sessions WHERE token_hash = ?"),
   delOtherSessions: db.prepare("DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?"),
   delUserSessions: db.prepare("DELETE FROM sessions WHERE user_id = ?"),
@@ -585,13 +586,29 @@ function readJson(req) {
 function auth(req) {
   const m = String(req.headers.authorization || "").match(/^Bearer\s+(\S+)$/i);
   if (!m) return null;
-  return q.session.get(sha256(m[1]), Date.now()) || null;
+  const u = q.session.get(sha256(m[1]), Date.now());
+  if (!u) return null;
+  u.vol_kinds = volKindsOf(u);
+  if (u.volunteer) u.vol_kind = u.vol_kinds.includes(u.vol_mode) ? u.vol_mode : u.vol_kinds[0]; // 지금 쓰는 쪽 하나만 권한으로
+  return u;
 }
 const tokenOf = (req) => String(req.headers.authorization).split(/\s+/)[1];
 
 const roleOut = (u) => (u.volunteer ? "volunteer" : u.director ? "director" : u.role); // 화면·API 에서는 봉사자 / 멤버 / 본부장 / 관리자
-const volKindOf = (u) => (u.volunteer ? (u.vol_kind === "team" ? "team" : "dept") : null); // 봉사자 구분: dept 부서 봉사자(물류) · team 팀 봉사자(교육·검수)
-const publicUser = (u) => ({ id: u.id, login: u.login, role: roleOut(u), volKind: volKindOf(u), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), mustChangePassword: u.pw_changed !== 1 });
+const volKindOf = (u) => (u.volunteer ? (u.vol_kind === "team" ? "team" : "dept") : null); // 봉사자 구분(지금 쓰는 쪽): dept 부서 봉사자(물류) · team 팀 봉사자(교육·검수)
+// 계정에 있는 봉사자 권한 전부 (users.vol_kind: dept · team · both). 세션에서 덮어쓴 vol_kind 가 아니라 vol_kinds 를 봄
+const volKindsOf = (u) => (!u.volunteer ? [] : u.vol_kinds || (u.vol_kind === "both" ? ["dept", "team"] : u.vol_kind === "team" ? ["team"] : ["dept"]));
+// 발급·수정 때 봉사자 권한: volKinds 배열(부서·팀 하나 이상) 또는 예전 방식 role "team"
+const volKindsInput = (b) => {
+  if (Array.isArray(b.volKinds)) {
+    const k = b.volKinds.filter((x) => x === "dept" || x === "team");
+    if (!k.length) throw bad("봉사자 권한을 하나 이상 골라 주세요.");
+    return volKindStore(k);
+  }
+  return b.role === "team" ? "team" : "dept";
+};
+const volKindStore = (kinds) => (kinds.includes("dept") && kinds.includes("team") ? "both" : kinds.includes("team") ? "team" : "dept");
+const publicUser = (u) => ({ id: u.id, login: u.login, role: roleOut(u), volKind: volKindOf(u), volKinds: volKindsOf(u), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), mustChangePassword: u.pw_changed !== 1 });
 const teamOut = () => q.team.all().map((u) => ({ id: u.id, name: u.name, unitId: u.unit_id }));
 
 // 입력 정리
@@ -1821,21 +1838,32 @@ async function api(req, res, path) {
     }
     // 직원·봉사자 로그인 구분: 비밀번호가 맞을 때만 알려 줌 (아이디만으로 계정 종류를 알 수 없게)
     // 직원 · 부서 봉사자(물류) · 팀 봉사자(교육·검수): 고른 쪽과 계정이 다르면 맞는 쪽을 알려 줌
-    const kindOf = !user.volunteer ? "staff" : user.vol_kind === "team" ? "team" : "volunteer";
-    if (["staff", "volunteer", "team"].includes(as) && as !== kindOf) {
+    // 봉사자 권한이 둘이면 부서·팀 어느 쪽으로든 들어옴
+    const kinds = volKindsOf(user), allowed = !user.volunteer ? ["staff"] : kinds.map((k) => (k === "team" ? "team" : "volunteer"));
+    if (["staff", "volunteer", "team"].includes(as) && !allowed.includes(as)) {
+      const kindOf = allowed[0];
       return send(res, 403, { error: { staff: "직원 계정이에요.", volunteer: "부서 봉사자 계정이에요.", team: "팀 봉사자 계정이에요." }[kindOf], field: "as", as: kindOf });
     }
+    const volMode = !user.volunteer ? "" : as === "team" ? "team" : as === "volunteer" ? "dept" : kinds[0];
     const token = crypto.randomBytes(32).toString("base64url");
     const expiresAt = Date.now() + SESSION_DAYS * 86400 * 1000;
-    q.addSession.run(sha256(token), user.id, expiresAt);
+    q.addSession.run(sha256(token), user.id, expiresAt, volMode);
     q.touchLogin.run(user.id);
-    return send(res, 200, { token, expiresAt, user: publicUser(user) });
+    return send(res, 200, { token, expiresAt, user: publicUser({ ...user, vol_kinds: kinds, vol_kind: volMode || user.vol_kind }) });
   }
 
   const user = auth(req);
   if (!user) return send(res, 401, { error: "로그인이 필요해요." });
   // 봉사자: 내 계정 정보·비밀번호·로그아웃과 봉사자 전용 API 만. 직원 데이터(조직도·연락처·일정 등)는 입구에서 막음
   if (user.volunteer) {
+    // 부서·팀 봉사자 권한이 둘 다 있으면 다시 로그인 없이 쪽을 바꿈 (이 세션만)
+    if (path === "/api/vol-mode" && method === "POST") {
+      const b = await readJson(req);
+      const mode = b.mode === "team" ? "team" : b.mode === "dept" ? "dept" : null;
+      if (!mode || !user.vol_kinds.includes(mode)) return send(res, 403, { error: "이 계정에는 그 봉사자 권한이 없어요." });
+      q.setSessionMode.run(mode, sha256(tokenOf(req)));
+      return send(res, 200, { user: publicUser({ ...user, vol_kind: mode }) });
+    }
     if (user.vol_kind === "team") {
       if (path.startsWith("/api/team/")) { if (await teamRoute(req, res, user, path, method)) return; return send(res, 404, { error: "찾을 수 없어요." }); }
       if (path.startsWith("/api/volunteer/")) return send(res, 403, { error: "팀 봉사자 계정으로는 볼 수 없어요." });
@@ -2885,7 +2913,7 @@ async function api(req, res, path) {
     if (path === "/api/admin/users" && method === "GET") {
       return send(res, 200, {
         users: q.users.all().map((u) => ({
-          id: u.id, login: u.login, role: roleOut(u), volKind: volKindOf(u), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), note: u.note, pwChanged: u.pw_changed === 1,
+          id: u.id, login: u.login, role: roleOut(u), volKind: volKindOf(u), volKinds: volKindsOf(u), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), note: u.note, pwChanged: u.pw_changed === 1,
           createdAt: u.created_at, lastLoginAt: u.last_login_at, me: u.id === user.id
         }))
       });
@@ -2896,6 +2924,7 @@ async function api(req, res, path) {
       if (!/^[a-z0-9._-]{3,20}$/.test(login)) throw bad("아이디는 영문 소문자·숫자·._- 로 3~20자로 정해 주세요.", "login");
       const name = text(b.name, LIMITS.name, "이름", true);
       const volunteer = b.role === "volunteer" || b.role === "team" ? 1 : 0;
+      const kindsNew = volunteer ? volKindsInput(b) : "dept";
       const unit = volunteer ? null : unitIdOrNull(b.unitId);
       const role = b.role === "admin" ? "admin" : "member";
       const director = b.role === "director" ? 1 : 0;
@@ -2906,7 +2935,7 @@ async function api(req, res, path) {
         const id = Number(q.addUser.run(login, hash, role, name, unit, note).lastInsertRowid);
         if (director) q.setUserDirector.run(1, id);
         if (volunteer) q.setUserVolunteer.run(1, id);
-        if (volunteer) q.setUserVolKind.run(b.role === "team" ? "team" : "dept", id);
+        if (volunteer) q.setUserVolKind.run(kindsNew, id);
       });
       console.log(`[admin] ${user.login} → ${login} 계정 발급`);
       return send(res, 201, { login, name, password });
@@ -3183,7 +3212,8 @@ async function api(req, res, path) {
         const role = b.role === "admin" ? "admin" : b.role === "member" || b.role === "director" || isVol ? "member" : target.role;
         const director = b.role === "director" ? 1 : b.role === "admin" || b.role === "member" || isVol ? 0 : target.director;
         const volunteer = isVol ? 1 : b.role === "admin" || b.role === "member" || b.role === "director" ? 0 : target.volunteer;
-        const volKind = b.role === "team" ? "team" : b.role === "volunteer" ? "dept" : target.vol_kind || "dept";
+        // volKinds 를 안 보내면(예전 화면) 봉사자 권한은 그대로
+        const volKind = isVol ? (Array.isArray(b.volKinds) || b.role === "team" || !target.volunteer ? volKindsInput(b) : target.vol_kind || "dept") : target.vol_kind || "dept";
         if (lastAdmin && role !== "admin") throw bad("관리자가 한 명은 있어야 해요.");
         // 추가로 볼 수 있는 조직: [{ unitId, sub }] 로 통째로 바꿈
         let grants = null;
