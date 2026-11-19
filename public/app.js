@@ -612,11 +612,13 @@
     team: { title: "팀 봉사자 로그인", pick: "팀 봉사자(교육&검수)", desc: "수도회 교육 · 검수", icon: "check" }
   };
   // 봉사자 화면·봉사자 로그인은 노란색 바탕 (색은 styles.css 의 .theme-volunteer)
-  function volunteerTheme(on) {
+  // 봉사자 화면 바탕: 부서 봉사자는 노랑, 팀 봉사자(team)는 연초록
+  function volunteerTheme(on, team) {
     document.documentElement.classList.toggle("theme-volunteer", on);
+    document.documentElement.classList.toggle("theme-team", !!(on && team));
     document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
       m.dataset.base ??= m.content;
-      m.content = on ? "#ffd43b" : m.dataset.base;
+      m.content = on ? (team ? "#8fd16a" : "#ffd43b") : m.dataset.base;
     });
   }
   const authBrand = () => h("div", { class: "brand brand--lg" }, [h("img", { src: "favicon.svg", alt: "" }), h("span", { text: TITLE })]);
@@ -625,7 +627,7 @@
     const mode = LOGIN_AS[as] ? as : store.get("ps.loginAs", "");
     if (!LOGIN_AS[mode]) return renderLoginChoice(message);
     const info = LOGIN_AS[mode];
-    volunteerTheme(mode !== "staff");
+    volunteerTheme(mode !== "staff", mode === "team");
     const err = errorLine();
     const login = h("input", { name: "login", autocomplete: "username", autocapitalize: "none", spellcheck: "false", required: true, value: keepId || "" });
     const pw = h("input", { name: "password", type: "password", autocomplete: "current-password", required: true });
@@ -6793,7 +6795,7 @@
   /* ---------- 시작 ---------- */
   function render() {
     if (!state.user) return;
-    volunteerTheme(state.user.role === "volunteer");
+    volunteerTheme(state.user.role === "volunteer", state.user.volKind === "team");
     if (state.user.mustChangePassword) { layout.main = null; return renderForcedPassword(); }
     if (state.user.role === "volunteer") { closeDialog(); closePop(); return renderVolunteer(); }
     if (!layout.main || !app.contains(layout.main)) buildLayout();
