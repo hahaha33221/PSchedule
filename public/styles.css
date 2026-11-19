@@ -1882,3 +1882,5 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .tcal__needset input.tcal__needin { width: 72px; min-width: 0; padding: 4px 8px; }
 .tcal__needset input:not(.tcal__needin) { width: 160px; min-width: 0; padding: 4px 8px; }
 .tcal__needset { flex-wrap: nowrap; }
+.team-needadd { margin: 4px 0 8px; flex-wrap: wrap; }
+.team-needadd input[type="date"] { width: 150px; min-width: 0; padding: 4px 8px; }

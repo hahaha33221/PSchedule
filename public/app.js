@@ -6102,7 +6102,7 @@
       return h("span", { class: "tcal__needset" }, [h("span", { class: "muted small", text: "필요 인원" }), n, note, h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "저장", onclick: async () => { st.avail = await act(() => api("/team/day-need", { method: "PUT", body: { date: ymd, need: n.value, note: note ? note.value : need?.note || "" } }), "필요 인원을 저장했어요."); redraw(); } })]);
     })() : null;
     return h("div", { class: "tcal__availbox" + (compact ? " is-compact" : "") }, [
-      h("div", {}, [h("strong", { text: "봉사 가능" }), h("span", { class: "small " + (full ? "team-ok" : "muted"), text: need ? ` ${people.length} / 필요 ${need.need}명${full ? " (다 찼어요)" : ""}` : people.length ? ` ${people.length}명` : " 아직 없어요" }), need?.note && !compact ? h("small", { class: "muted", text: ` · ${need.note}` }) : null]),
+      h("div", {}, [h("strong", { text: "봉사 가능" }), h("span", { class: "small " + (full ? "team-ok" : "muted"), text: need ? ` ${people.length} / 필요 ${need.need}명${full ? " (다 찼어요)" : ""}` : people.length ? ` ${people.length}명` : " 아직 없어요" }), need?.note ? h("small", { class: "muted", text: ` · ${need.note}` }) : null]),
       people.length ? h("div", { class: "tcal__names" }, people.map((n) => h("span", { class: "tcal__name", text: n }))) : null,
       h("div", { class: "actions actions--start" }, [toggle, needSet])
     ]);
@@ -6113,18 +6113,28 @@
     const [d, av, o] = await Promise.all([api("/team/home"), api("/team/avail"), api("/team/orgs")]);
     const st = { avail: av };
     const availCard = h("section", { class: "card vol__card" });
+    // 봉사 가능 신청: 리더·관리자가 필요 인원을 넣은 날만 보임 (오늘부터 날짜순)
     const drawAvail = () => {
-      const days = Array.from({ length: 14 }, (_, i) => shiftYmd(today(), i));
+      const days = Object.keys(st.avail.needs || {}).filter((d) => d >= today()).sort();
+      const addBox = st.avail.canSetNeed ? (() => {
+        const date = h("input", { type: "date", min: today(), value: "", "aria-label": "봉사가 필요한 날" }), n = h("input", { type: "number", min: "1", max: "500", inputmode: "numeric", class: "tcal__needin", placeholder: "인원", "aria-label": "필요 인원" });
+        const note = h("input", { maxlength: "200", placeholder: "메모 (선택, 예: 오전 검수)", "aria-label": "메모" });
+        return h("div", { class: "tcal__needset team-needadd" }, [h("span", { class: "muted small", text: "필요한 날 넣기" }), date, n, note, h("button", { class: "btn btn--primary btn--sm", type: "button", text: "넣기", onclick: async () => {
+          if (!date.value || !Number(n.value)) return toast("날짜와 필요 인원을 적어 주세요.");
+          st.avail = await act(() => api("/team/day-need", { method: "PUT", body: { date: date.value, need: n.value, note: note.value } }), "필요한 날을 넣었어요."); drawAvail();
+        } })]);
+      })() : null;
       fill(availCard,
-        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "봉사 가능 신청 (앞으로 2주)" }), h("a", { class: "link-btn", href: "#/tcal", text: "캘린더에서 더 보기" })]),
-        h("p", { class: "muted small", text: st.avail.canSetNeed ? "봉사할 수 있는 날에 '봉사 가능'을 눌러 주세요. 리더는 날마다 필요 인원을 정할 수 있어요." : "봉사할 수 있는 날에 '봉사 가능'을 눌러 주세요. 필요 인원은 리더 봉사자가 정해요." }),
-        h("ul", { class: "team-days" }, days.map((ymd) => {
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "봉사 가능 신청" }), h("a", { class: "link-btn", href: "#/tcal", text: "캘린더에서 보기" })]),
+        h("p", { class: "muted small", text: st.avail.canSetNeed ? "봉사가 필요한 날과 인원을 넣으면 여기에 보여요. 봉사자는 '봉사 가능'을 눌러 신청해요. 인원을 0으로 저장하면 목록에서 빠져요." : "리더 봉사자가 봉사가 필요한 날을 넣으면 여기에 보여요. 할 수 있는 날에 '봉사 가능'을 눌러 주세요." }),
+        addBox,
+        days.length ? h("ul", { class: "team-days" }, days.map((ymd) => {
           const edu = o.orgs.filter((x) => !x.tableOnly && x.date === ymd).sort((a, b) => (a.startTime || "99:99").localeCompare(b.startTime || "99:99"));
           return h("li", { class: "team-day" + (ymd === today() ? " is-today" : "") }, [
             h("div", { class: "team-day__when" }, [h("strong", { text: volDay(ymd) }), edu.length ? h("small", { class: "muted", text: ` 교육 ${edu.map((x) => `${x.startTime || "시간 없음"} ${x.org}`).join(", ")}` }) : null]),
             availBox(ymd, st, drawAvail, true)
           ]);
-        })));
+        })) : h("p", { class: "muted", text: "아직 봉사가 필요한 날이 없어요." }));
     };
     drawAvail();
     const tile = (href, label, value, sub) => h("a", { class: "card vstat__tile team-tile", href }, [h("span", { class: "muted small", text: label }), h("strong", { text: value }), sub ? h("span", { class: "muted small", text: sub }) : null]);
@@ -6139,14 +6149,14 @@
         tile("#/tissues", "처리 전 이슈", `${d.openIssues}건`, "접수·처리 중"),
         tile("#/tinsp/shifts", "내 근무 신청", `${d.myShifts.length}일`, d.myShifts.slice(0, 2).map((s) => shortDate(s.date)).join(", ") || "신청한 날이 없어요")
       ]),
-      availCard,
       h("section", { class: "card vol__card" }, [
         h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "다가오는 교육" }), h("a", { class: "link-btn", href: "#/tcal", text: "캘린더" })]),
         d.nextEdu.length ? h("ul", { class: "vol-sched-list" }, d.nextEdu.map((o) => h("li", { class: "vol-sched" }, [
           h("div", { class: "vol-sched__when" }, [h("strong", { text: volDay(o.date) }), h("span", { class: "muted small", text: o.startTime || "시간 없음" })]),
           h("div", { class: "vol-sched__what" }, [h("strong", { text: o.org }), h("span", { class: "muted small", text: [o.place, o.helper ? `담당 ${o.helper}` : "", TEAM_STATUS[o.status]].filter(Boolean).join(" · ") })])
         ]))) : h("p", { class: "muted", text: "다가오는 교육 일정이 없어요." })
-      ])
+      ]),
+      availCard
     ];
   }
   // 캘린더: 달력 모양(한 달), 날짜를 누르면 아래에 그날 교육·검수 근무와 '봉사 가능'(성 뺀 이름)
