@@ -6119,9 +6119,9 @@
         h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "봉사 가능 신청 (앞으로 2주)" }), h("a", { class: "link-btn", href: "#/tcal", text: "캘린더에서 더 보기" })]),
         h("p", { class: "muted small", text: st.avail.canSetNeed ? "봉사할 수 있는 날에 '봉사 가능'을 눌러 주세요. 리더는 날마다 필요 인원을 정할 수 있어요." : "봉사할 수 있는 날에 '봉사 가능'을 눌러 주세요. 필요 인원은 리더 봉사자가 정해요." }),
         h("ul", { class: "team-days" }, days.map((ymd) => {
-          const edu = o.orgs.filter((x) => !x.tableOnly && x.date === ymd);
+          const edu = o.orgs.filter((x) => !x.tableOnly && x.date === ymd).sort((a, b) => (a.startTime || "99:99").localeCompare(b.startTime || "99:99"));
           return h("li", { class: "team-day" + (ymd === today() ? " is-today" : "") }, [
-            h("div", { class: "team-day__when" }, [h("strong", { text: volDay(ymd) }), edu.length ? h("small", { class: "muted", text: ` 교육 ${edu.map((x) => x.org).join(", ")}` }) : null]),
+            h("div", { class: "team-day__when" }, [h("strong", { text: volDay(ymd) }), edu.length ? h("small", { class: "muted", text: ` 교육 ${edu.map((x) => `${x.startTime || "시간 없음"} ${x.org}`).join(", ")}` }) : null]),
             availBox(ymd, st, drawAvail, true)
           ]);
         })));
@@ -6143,7 +6143,7 @@
       h("section", { class: "card vol__card" }, [
         h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "다가오는 교육" }), h("a", { class: "link-btn", href: "#/tcal", text: "캘린더" })]),
         d.nextEdu.length ? h("ul", { class: "vol-sched-list" }, d.nextEdu.map((o) => h("li", { class: "vol-sched" }, [
-          h("div", { class: "vol-sched__when" }, [h("strong", { text: volDay(o.date) }), o.startTime ? h("span", { class: "muted small", text: o.startTime }) : null]),
+          h("div", { class: "vol-sched__when" }, [h("strong", { text: volDay(o.date) }), h("span", { class: "muted small", text: o.startTime || "시간 없음" })]),
           h("div", { class: "vol-sched__what" }, [h("strong", { text: o.org }), h("span", { class: "muted small", text: [o.place, o.helper ? `담당 ${o.helper}` : "", TEAM_STATUS[o.status]].filter(Boolean).join(" · ") })])
         ]))) : h("p", { class: "muted", text: "다가오는 교육 일정이 없어요." })
       ])
@@ -6156,7 +6156,9 @@
     const st = { avail: av };
     let month = today().slice(0, 7), picked = today();
     const box = h("div", { class: "stack" });
-    const eduOf = (ymd) => o.orgs.filter((x) => !x.tableOnly && x.date === ymd), shiftsOf = (ymd) => sh.shifts.filter((x) => x.date === ymd);
+    // 하루 일정은 시간순(시간이 없으면 뒤로, '시간 없음'으로 표시)
+    const byTime = (a, b) => (a.startTime || "99:99").localeCompare(b.startTime || "99:99");
+    const eduOf = (ymd) => o.orgs.filter((x) => !x.tableOnly && x.date === ymd).sort(byTime), shiftsOf = (ymd) => sh.shifts.filter((x) => x.date === ymd).sort(byTime);
     const draw = () => {
       const [y, m] = month.split("-").map(Number);
       const days = new Date(y, m, 0).getDate(), first = new Date(y, m - 1, 1).getDay();
@@ -6171,9 +6173,9 @@
           onclick: () => { picked = ymd; draw(); }
         }, [
           h("span", { class: "tcal__num", text: String(d) }),
-          ...edu.slice(0, 2).map((x) => h("span", { class: "tcal__ev is-edu", text: x.org })),
+          ...edu.slice(0, 2).map((x) => h("span", { class: "tcal__ev is-edu", title: `${x.startTime || "시간 없음"} ${x.org}` }, [h("b", { class: "tcal__time", text: x.startTime || "없음" }), ` ${x.org}`])),
           edu.length > 2 ? h("span", { class: "tcal__more", text: `+${edu.length - 2}` }) : null,
-          ...shifts.map((x) => h("span", { class: "tcal__ev is-insp", text: `검수 ${x.people.length}/${x.need}` })),
+          ...shifts.map((x) => h("span", { class: "tcal__ev is-insp", title: `${x.startTime || "시간 없음"} 검수 근무` }, [h("b", { class: "tcal__time", text: x.startTime || "없음" }), ` 검수 ${x.people.length}/${x.need}`])),
           people.length || need ? h("span", { class: "tcal__avail" + (st.avail.mine.includes(ymd) ? " is-mine" : ""), text: need ? `가능 ${people.length}/${need.need}` : `가능 ${people.length}` }) : null
         ]));
       }
@@ -6183,9 +6185,10 @@
       const detail = h("section", { class: "card vol__card tcal__detail" }, [
         h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: volDay(picked) }), picked === today() ? statusTag("오늘", "is-plan") : null]),
         edu.length || shifts.length ? h("ul", { class: "tcal__list" }, [
-          ...edu.map((x) => h("li", {}, [statusTag("교육", "is-edu"), h("strong", { text: ` ${x.org}` }), h("small", { class: "muted", text: [x.startTime, x.place, x.helper ? `담당 ${x.helper}` : "", TEAM_STATUS[x.status]].filter(Boolean).map((t) => ` · ${t}`).join("") })])),
-          ...shifts.map((x) => h("li", {}, [statusTag("검수 근무", "is-insp"), ` ${x.startTime || ""} 필요 ${x.need}명 · 신청 ${x.people.length}명`, x.people.length ? h("small", { class: "muted", text: ` (${x.people.join(", ")})` }) : null, h("a", { class: "link-btn small", href: "#/tinsp/shifts", text: " 근무 신청" })]))
-        ]) : h("p", { class: "muted small", text: "이날은 교육·검수 일정이 없어요." }),
+          ...edu.map((x) => ({ t: x.startTime, el: [statusTag("교육", "is-edu"), h("strong", { text: ` ${x.org}` }), h("small", { class: "muted", text: [x.place, x.helper ? `담당 ${x.helper}` : "", TEAM_STATUS[x.status]].filter(Boolean).map((t) => ` · ${t}`).join("") })] })),
+          ...shifts.map((x) => ({ t: x.startTime, el: [statusTag("검수 근무", "is-insp"), ` 필요 ${x.need}명 · 신청 ${x.people.length}명`, x.people.length ? h("small", { class: "muted", text: ` (${x.people.join(", ")})` }) : null, h("a", { class: "link-btn small", href: "#/tinsp/shifts", text: " 근무 신청" })] }))
+        ].sort((a, b) => byTime({ startTime: a.t }, { startTime: b.t })).map((x) => h("li", { class: "tcal__row" }, [h("span", { class: "tcal__rowtime" + (x.t ? "" : " is-none"), text: x.t || "시간 없음" }), h("span", {}, x.el)])))
+        : h("p", { class: "muted small", text: "이날은 교육·검수 일정이 없어요." }),
         availBox(picked, st, draw, false),
         picked < today() ? h("p", { class: "muted small", text: "지난 날은 바꿀 수 없어요." }) : null
       ]);
