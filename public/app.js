@@ -6222,7 +6222,7 @@
       // 고른 날 자세히
       const edu = eduOf(picked), shifts = shiftsOf(picked);
       const detail = h("section", { class: "card vol__card tcal__detail" }, [
-        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: volDay(picked) }), h("span", { class: "actions" }, [picked === today() ? statusTag("오늘", "is-plan") : null,
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title tcal__title" }, [volDay(picked), picked === today() ? statusTag("오늘", "is-plan") : null]), h("span", { class: "actions" }, [
           st.avail.canSetNeed && picked >= today() ? h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => teamEduDialog(picked, () => render()) }, [icon("plus"), "이날 교육 등록"]) : null])]),
         edu.length || shifts.length ? h("ul", { class: "tcal__list" }, [
           ...edu.map((x) => ({ t: x.startTime, el: [statusTag("교육", "is-edu"), h("strong", { text: ` ${x.org}` }), h("small", { class: "muted", text: [x.place, x.helper ? `담당 ${x.helper}` : "", TEAM_STATUS[x.status]].filter(Boolean).map((t) => ` · ${t}`).join("") })] })),

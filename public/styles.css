@@ -1934,3 +1934,6 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .push-ask { position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 60; width: min(560px, calc(100vw - 24px)); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 12px 14px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-lg); }
 .push-ask p { margin: 0; flex: 1 1 260px; font-size: 13.5px; }
 .app-guide { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }
+/* 동그란 표시(태그): 높이를 정해 글자가 늘 가운데 (기기 글꼴과 상관없이) */
+.team-tag { height: 22px; padding: 0 10px; line-height: 1; justify-content: center; box-sizing: border-box; vertical-align: middle; }
+.tcal__title { display: inline-flex; align-items: center; gap: 8px; }
