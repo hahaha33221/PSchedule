@@ -71,7 +71,7 @@ const q = {
   userByLogin: db.prepare("SELECT * FROM users WHERE login = ?"),
   userById: db.prepare("SELECT * FROM users WHERE id = ?"),
   session: db.prepare(`
-    SELECT u.id, u.login, u.role, u.director, u.volunteer, u.name, u.unit_id, u.pw_changed, u.pw_hash FROM sessions s
+    SELECT u.id, u.login, u.role, u.director, u.volunteer, u.vol_kind, u.name, u.unit_id, u.pw_changed, u.pw_hash FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ? AND s.expires_at > ?`),
   addSession: db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)"),
@@ -353,6 +353,49 @@ const q = {
   inspPhotoCount: db.prepare("SELECT count(*) AS n FROM inspection_photos WHERE inspection_id = ?"),
   addInspPhoto: db.prepare("INSERT INTO inspection_photos (inspection_id, mime, data, created_by) VALUES (?, ?, ?, ?)"),
   delInspPhoto: db.prepare("DELETE FROM inspection_photos WHERE id = ?"),
+  setInspRework: db.prepare("UPDATE inspections SET rework = ? WHERE id = ?"),
+  // 팀 봉사자(교육·검수)
+  teamOrgInfo: db.prepare("SELECT * FROM team_org_info WHERE schedule_id = ?"),
+  teamOrgInfos: db.prepare("SELECT * FROM team_org_info"),
+  teamOrgUpsert: db.prepare(`INSERT INTO team_org_info (schedule_id, contact, helper, status, attend, result_note, made_qty, made_due, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    ON CONFLICT(schedule_id) DO UPDATE SET contact = excluded.contact, helper = excluded.helper, status = excluded.status, attend = excluded.attend, result_note = excluded.result_note, made_qty = excluded.made_qty, made_due = excluded.made_due, updated_by = excluded.updated_by, updated_at = excluded.updated_at`),
+  teamInqCounts: db.prepare("SELECT schedule_id, COUNT(*) AS n, SUM(done = 0) AS open FROM team_inquiries GROUP BY schedule_id"),
+  teamInqs: db.prepare("SELECT x.*, u.name AS author FROM team_inquiries x LEFT JOIN users u ON u.id = x.created_by WHERE x.schedule_id = ? ORDER BY x.date DESC, x.id DESC"),
+  teamInq: db.prepare("SELECT * FROM team_inquiries WHERE id = ?"),
+  addTeamInq: db.prepare("INSERT INTO team_inquiries (schedule_id, date, question, answer, done, created_by) VALUES (?, ?, ?, ?, ?, ?)"),
+  setTeamInq: db.prepare("UPDATE team_inquiries SET date = ?, question = ?, answer = ?, done = ?, updated_at = datetime('now') WHERE id = ?"),
+  delTeamInq: db.prepare("DELETE FROM team_inquiries WHERE id = ?"),
+  teamIssues: db.prepare("SELECT x.*, u.name AS author, s.title AS org_title, (SELECT group_concat(p.id) FROM team_issue_photos p WHERE p.issue_id = x.id) AS photo_ids FROM team_issues x LEFT JOIN users u ON u.id = x.created_by LEFT JOIN vol_schedules s ON s.id = x.schedule_id ORDER BY (x.status = 'done'), x.created_at DESC, x.id DESC"),
+  teamIssue: db.prepare("SELECT * FROM team_issues WHERE id = ?"),
+  addTeamIssue: db.prepare("INSERT INTO team_issues (kind, schedule_id, title, body, created_by) VALUES (?, ?, ?, ?, ?)"),
+  setTeamIssue: db.prepare("UPDATE team_issues SET kind = ?, schedule_id = ?, title = ?, body = ?, updated_at = datetime('now') WHERE id = ?"),
+  setTeamIssueStatus: db.prepare("UPDATE team_issues SET status = ?, reply = ?, updated_at = datetime('now') WHERE id = ?"),
+  delTeamIssue: db.prepare("DELETE FROM team_issues WHERE id = ?"),
+  teamIssuePhoto: db.prepare("SELECT * FROM team_issue_photos WHERE id = ?"),
+  teamIssuePhotoCount: db.prepare("SELECT count(*) AS n FROM team_issue_photos WHERE issue_id = ?"),
+  addTeamIssuePhoto: db.prepare("INSERT INTO team_issue_photos (issue_id, mime, data, created_by) VALUES (?, ?, ?, ?)"),
+  delTeamIssuePhoto: db.prepare("DELETE FROM team_issue_photos WHERE id = ?"),
+  teamDaily: db.prepare("SELECT x.*, u.name AS author FROM team_daily x LEFT JOIN users u ON u.id = x.created_by ORDER BY x.date DESC, x.id DESC LIMIT 500"),
+  teamDailyOne: db.prepare("SELECT * FROM team_daily WHERE id = ?"),
+  addTeamDaily: db.prepare("INSERT INTO team_daily (date, qty, workers, note, created_by) VALUES (?, ?, ?, ?, ?)"),
+  setTeamDaily: db.prepare("UPDATE team_daily SET date = ?, qty = ?, workers = ?, note = ?, updated_at = datetime('now') WHERE id = ?"),
+  delTeamDaily: db.prepare("DELETE FROM team_daily WHERE id = ?"),
+  teamShifts: db.prepare("SELECT * FROM team_shifts WHERE date >= ? ORDER BY date, start_time, id"),
+  teamShift: db.prepare("SELECT * FROM team_shifts WHERE id = ?"),
+  teamShiftUsers: db.prepare("SELECT x.shift_id, u.id, u.name FROM team_shift_users x JOIN users u ON u.id = x.user_id ORDER BY u.name"),
+  addTeamShift: db.prepare("INSERT INTO team_shifts (date, start_time, need, note, created_by) VALUES (?, ?, ?, ?, ?)"),
+  delTeamShift: db.prepare("DELETE FROM team_shifts WHERE id = ?"),
+  teamShiftJoin: db.prepare("INSERT OR IGNORE INTO team_shift_users (shift_id, user_id) VALUES (?, ?)"),
+  teamShiftLeave: db.prepare("DELETE FROM team_shift_users WHERE shift_id = ? AND user_id = ?"),
+  teamAvailMine: db.prepare("SELECT date FROM team_avail WHERE user_id = ? AND date >= ? ORDER BY date"),
+  teamAvailCounts: db.prepare("SELECT date, COUNT(*) AS n FROM team_avail WHERE date >= ? GROUP BY date"),
+  addTeamAvail: db.prepare("INSERT OR IGNORE INTO team_avail (user_id, date) VALUES (?, ?)"),
+  delTeamAvail: db.prepare("DELETE FROM team_avail WHERE user_id = ? AND date = ?"),
+  teamDocs: db.prepare("SELECT * FROM team_docs ORDER BY category, id"),
+  teamDoc: db.prepare("SELECT * FROM team_docs WHERE id = ?"),
+  addTeamDoc: db.prepare("INSERT INTO team_docs (category, title, url, note) VALUES (?, ?, ?, ?)"),
+  setTeamDoc: db.prepare("UPDATE team_docs SET category = ?, title = ?, url = ?, note = ? WHERE id = ?"),
+  delTeamDoc: db.prepare("DELETE FROM team_docs WHERE id = ?"),
   setMoveInspect: db.prepare("UPDATE stock_moves SET inspect_ok = ?, inspect_bad = ? WHERE id = ?"),
   // 직원 프로젝트 '봉사자 현황': 묶음별 일정·신청·기록·변동
   volSchedulesOfItems: db.prepare("SELECT * FROM vol_schedules WHERE project_item_id IS NOT NULL ORDER BY date, start_time"),
@@ -410,9 +453,10 @@ const q = {
   // 멤버 (관리자)
   setUserDirector: db.prepare("UPDATE users SET director = ? WHERE id = ?"),
   setUserVolunteer: db.prepare("UPDATE users SET volunteer = ? WHERE id = ?"),
+  setUserVolKind: db.prepare("UPDATE users SET vol_kind = ? WHERE id = ?"),
   unlinkUserPositions: db.prepare("UPDATE org_positions SET user_id = NULL WHERE user_id = ?"),
   positionUnitsOf: db.prepare("SELECT DISTINCT unit_id AS id FROM org_positions WHERE user_id = ?"),
-  users: db.prepare("SELECT id, login, role, director, volunteer, name, unit_id, note, pw_changed, created_at, last_login_at FROM users ORDER BY role = 'admin' DESC, name, id"),
+  users: db.prepare("SELECT id, login, role, director, volunteer, vol_kind, name, unit_id, note, pw_changed, created_at, last_login_at FROM users ORDER BY role = 'admin' DESC, name, id"),
   addUser: db.prepare("INSERT INTO users (login, pw_hash, role, name, unit_id, note) VALUES (?, ?, ?, ?, ?, ?)"),
   setUser: db.prepare("UPDATE users SET name = ?, unit_id = ?, note = ?, role = ? WHERE id = ?"),
   delUser: db.prepare("DELETE FROM users WHERE id = ?"),
@@ -546,7 +590,8 @@ function auth(req) {
 const tokenOf = (req) => String(req.headers.authorization).split(/\s+/)[1];
 
 const roleOut = (u) => (u.volunteer ? "volunteer" : u.director ? "director" : u.role); // 화면·API 에서는 봉사자 / 멤버 / 본부장 / 관리자
-const publicUser = (u) => ({ id: u.id, login: u.login, role: roleOut(u), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), mustChangePassword: u.pw_changed !== 1 });
+const volKindOf = (u) => (u.volunteer ? (u.vol_kind === "team" ? "team" : "dept") : null); // 봉사자 구분: dept 부서 봉사자(물류) · team 팀 봉사자(교육·검수)
+const publicUser = (u) => ({ id: u.id, login: u.login, role: roleOut(u), volKind: volKindOf(u), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), mustChangePassword: u.pw_changed !== 1 });
 const teamOut = () => q.team.all().map((u) => ({ id: u.id, name: u.name, unitId: u.unit_id }));
 
 // 입력 정리
@@ -1281,8 +1326,251 @@ function inspectionInput(b) {
 }
 const inspectionOut = (x) => {
   const defects = JSON.parse(x.defects || "{}");
-  return { id: x.id, itemId: x.item_id, group: x.group_name, stage: x.stage, date: x.date, source: x.source, checkedQty: x.checked_qty, sampled: !!x.sampled, sampleQty: x.sample_qty, defects, defectTotal: Object.values(defects).reduce((a, b) => a + b, 0), note: x.note, author: x.author || "", photos: x.photo_ids ? String(x.photo_ids).split(",").map(Number) : [], updatedAt: x.updated_at };
+  return { id: x.id, itemId: x.item_id, group: x.group_name, stage: x.stage, date: x.date, source: x.source, checkedQty: x.checked_qty, sampled: !!x.sampled, sampleQty: x.sample_qty, defects, defectTotal: Object.values(defects).reduce((a, b) => a + b, 0), note: x.note, rework: x.rework || "", author: x.author || "", photos: x.photo_ids ? String(x.photo_ids).split(",").map(Number) : [], updatedAt: x.updated_at };
 };
+// 검수 기록 API: 관리자(/api/admin)와 팀 봉사자(/api/team)가 같은 기록을 씀. 사진은 선택(4장까지), 불합격품 처리(반송·재작업)
+const REWORK = ["", "return", "fix"];
+const reworkInput = (v) => { const r = v == null ? "" : String(v); if (!REWORK.includes(r)) throw bad("불합격품 처리를 확인해 주세요."); return r; };
+async function inspectionRoute(req, res, user, path, method, base) {
+  const list = () => q.inspections.all().map(inspectionOut);
+  if (path === `${base}/inspections` && method === "GET") { send(res, 200, { groups: inspGroups(), types: DEFECT_TYPES, inspections: list() }); return true; }
+  if (path === `${base}/inspections` && method === "POST") {
+    const b = await readJson(req), rw = reworkInput(b.rework);
+    const id = inTx(() => { const id = Number(q.addInspection.run(...inspectionInput(b), user.id).lastInsertRowid); q.setInspRework.run(rw, id); return id; });
+    send(res, 201, { id, inspections: list() }); return true;
+  }
+  const m = path.startsWith(`${base}/inspections/`) && path.slice(base.length).match(/^\/inspections\/(\d+)(\/photos)?$/);
+  if (m) {
+    const x = q.inspection.get(Number(m[1]));
+    if (!x) throw notFound("검수 기록");
+    if (m[2]) {
+      if (method !== "POST") { send(res, 405, { error: "Method not allowed" }); return true; }
+      const b = await readJson(req), buf = Buffer.from(String(b.data || ""), "base64");
+      if (!buf.length || buf.length > ITEM_IMAGE_MAX) throw bad("사진을 확인해 주세요.");
+      const mime = imageMime(buf);
+      if (!mime) throw bad("JPG, PNG, WEBP 사진만 올릴 수 있어요.");
+      if (q.inspPhotoCount.get(x.id).n >= 4) throw bad("사진은 기록마다 4장까지 올릴 수 있어요.");
+      q.addInspPhoto.run(x.id, mime, buf, user.id);
+      send(res, 201, { inspections: list() }); return true;
+    }
+    if (method === "PATCH") { const b = await readJson(req), v = inspectionInput(b), rw = has(b, "rework") ? reworkInput(b.rework) : x.rework || ""; inTx(() => { q.setInspection.run(...v, x.id); q.setInspRework.run(rw, x.id); }); send(res, 200, { inspections: list() }); return true; }
+    if (method === "DELETE") { q.delInspection.run(x.id); send(res, 200, { inspections: list() }); return true; }
+    send(res, 405, { error: "Method not allowed" }); return true;
+  }
+  const pm = path === `${base}/inspection-photos/${path.split("/").pop()}` && path.match(/\/inspection-photos\/(\d+)$/);
+  if (pm) {
+    const ph = q.inspPhoto.get(Number(pm[1]));
+    if (!ph) throw notFound("사진");
+    if (method === "GET") { sendPhoto(res, ph); return true; }
+    if (method === "DELETE") { q.delInspPhoto.run(ph.id); send(res, 200, { inspections: list() }); return true; }
+    send(res, 405, { error: "Method not allowed" }); return true;
+  }
+  return false;
+}
+
+// ---- 팀 봉사자(교육·검수): 담당 수도회·교육·문의·제작 진행, 검수(기록·일일 작업·근무), 이슈, 자료실, 봉사 가능한 날
+// 관리자도 같은 API 를 씀 (연락처 입력·이슈 처리·자료실 관리는 관리자만)
+const today = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10); // 한국 날짜
+const TEAM_STATUS = ["plan", "done", "delay"];
+const teamQty = (v, label) => { if (v === "" || v == null) return null; const n = Number(v); if (!Number.isInteger(n) || n < 0 || n > 100000000) throw bad(`${label}은 0 이상의 숫자로 적어 주세요.`); return n; };
+const optDate = (v, label) => { if (v === "" || v == null) return ""; if (!isDate(v)) throw bad(`${label}를 확인해 주세요.`); return v; };
+const optTime = (v) => { const t = v == null ? "" : String(v); if (t && !/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) throw bad("시간을 확인해 주세요."); return t; };
+// 담당 수도회 = 묵주에 이어진 방문 일정(추가 전달 물량의 줄). 교육 순서는 날짜순 번호
+function teamOrgRows(admin) {
+  const gid = rosaryGroupId();
+  if (!gid) return [];
+  const infos = new Map(q.teamOrgInfos.all().map((x) => [x.schedule_id, x]));
+  const inq = new Map(q.teamInqCounts.all().map((x) => [x.schedule_id, x]));
+  return q.volSchedulesOfItems.all().filter((s) => s.project_item_id === gid).map((s, i) => {
+    const f = infos.get(s.id) || {}, c = inq.get(s.id);
+    return {
+      id: s.id, no: i + 1, org: s.title.split(" · ").pop(), date: s.date, startTime: s.start_time, place: s.place, tableOnly: !!s.table_only, fromForm: s.request_id != null,
+      reqQty: s.qty, sumNote: s.sum_note || "", eduQty: s.edu_qty ?? null, threadQty: s.thread_qty ?? null, crossQty: s.cross_qty ?? null,
+      contact: f.contact || "", helper: f.helper || "", status: f.status || "plan", attend: f.attend ?? null, resultNote: f.result_note || "", madeQty: f.made_qty ?? null, madeDue: f.made_due || "",
+      updatedBy: f.updated_by || "", updatedAt: f.updated_at || null, inquiries: c?.n || 0, openInquiries: c?.open || 0, canContact: !!admin
+    };
+  });
+}
+const teamOrgOf = (id) => { const s = q.volSchedule.get(Number(id)); if (!s || !s.project_item_id || s.project_item_id !== rosaryGroupId()) throw notFound("수도회"); return s; };
+const teamIssueOut = (x) => ({ id: x.id, kind: x.kind, scheduleId: x.schedule_id, org: x.org_title ? x.org_title.split(" · ").pop() : "", title: x.title, body: x.body, status: x.status, reply: x.reply, author: x.author || "", mine: false, createdBy: x.created_by, photos: x.photo_ids ? String(x.photo_ids).split(",").map(Number) : [], createdAt: x.created_at, updatedAt: x.updated_at });
+async function teamRoute(req, res, user, path, method) {
+  const admin = user.role === "admin";
+  const ok = (code, body) => { send(res, code, body); return true; };
+  const issues = () => q.teamIssues.all().map((x) => ({ ...teamIssueOut(x), mine: x.created_by === user.id }));
+  if (await inspectionRoute(req, res, user, path, method, "/api/team")) return true;
+  if (path === "/api/team/home" && method === "GET") {
+    const orgs = teamOrgRows(admin), t = today();
+    const ins = q.inspections.all().map(inspectionOut);
+    const shifts = q.teamShifts.all(t), su = q.teamShiftUsers.all();
+    return ok(200, {
+      orgs: { total: orgs.length, done: orgs.filter((o) => o.status === "done").length, delay: orgs.filter((o) => o.status === "delay").length, undated: orgs.filter((o) => o.tableOnly).length, openInquiries: orgs.reduce((n, o) => n + o.openInquiries, 0), made: orgs.reduce((n, o) => n + (o.madeQty || 0), 0) },
+      nextEdu: orgs.filter((o) => !o.tableOnly && o.date >= t).slice(0, 5),
+      inspect: { count: ins.length, checked: ins.reduce((n, x) => n + x.checkedQty, 0), bad: ins.reduce((n, x) => n + x.defectTotal, 0) },
+      daily: q.teamDaily.all().reduce((n, x) => n + x.qty, 0),
+      myShifts: shifts.filter((s) => su.some((x) => x.shift_id === s.id && x.id === user.id)).map((s) => ({ id: s.id, date: s.date, startTime: s.start_time })),
+      openIssues: q.teamIssues.all().filter((x) => x.status !== "done").length
+    });
+  }
+  // 담당 수도회
+  if (path === "/api/team/orgs" && method === "GET") return ok(200, { orgs: teamOrgRows(admin) });
+  const om = path.match(/^\/api\/team\/orgs\/(\d+)(\/inquiries)?$/);
+  if (om) {
+    const s = teamOrgOf(om[1]);
+    if (om[2]) {
+      if (method === "GET") return ok(200, { inquiries: q.teamInqs.all(s.id).map((x) => ({ id: x.id, date: x.date, question: x.question, answer: x.answer, done: !!x.done, author: x.author || "", updatedAt: x.updated_at })) });
+      if (method === "POST") {
+        const b = await readJson(req);
+        if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
+        q.addTeamInq.run(s.id, b.date, text(b.question, 1000, "문의 내용", true), text(b.answer, 1000, "답변") || "", b.done ? 1 : 0, user.id);
+        return ok(201, { ok: true });
+      }
+      return ok(405, { error: "Method not allowed" });
+    }
+    if (method === "PATCH") {
+      const b = await readJson(req), f = q.teamOrgInfo.get(s.id) || {};
+      if (has(b, "contact") && !admin) return ok(403, { error: "연락처는 관리자만 적어요." });
+      const status = has(b, "status") ? String(b.status) : f.status || "plan";
+      if (!TEAM_STATUS.includes(status)) throw bad("교육 상태를 확인해 주세요.");
+      inTx(() => {
+        // 교육 날짜를 정하면 달력에도 보이게 (달력 미정 → 일정)
+        if (has(b, "date")) {
+          if (!isDate(b.date)) throw bad("교육 날짜를 확인해 주세요.");
+          db.prepare("UPDATE vol_schedules SET date = ?, start_time = ?, table_only = 0 WHERE id = ?").run(b.date, has(b, "startTime") ? optTime(b.startTime) : s.start_time, s.id);
+        }
+        q.teamOrgUpsert.run(s.id, has(b, "contact") ? text(b.contact, 300, "연락처") || "" : f.contact || "", has(b, "helper") ? text(b.helper, 80, "담당 봉사자") || "" : f.helper || "", status,
+          has(b, "attend") ? teamQty(b.attend, "참석 인원") : f.attend ?? null, has(b, "resultNote") ? text(b.resultNote, 1000, "특이사항") || "" : f.result_note || "",
+          has(b, "madeQty") ? teamQty(b.madeQty, "예상 완성 수량") : f.made_qty ?? null, has(b, "madeDue") ? text(b.madeDue, 40, "완성 예정 시기") || "" : f.made_due || "", user.name);
+      });
+      return ok(200, { org: teamOrgRows(admin).find((o) => o.id === s.id) });
+    }
+    return ok(405, { error: "Method not allowed" });
+  }
+  const iqm = path.match(/^\/api\/team\/inquiries\/(\d+)$/);
+  if (iqm) {
+    const x = q.teamInq.get(Number(iqm[1]));
+    if (!x) throw notFound("문의");
+    if (method === "PATCH") {
+      const b = await readJson(req);
+      if (has(b, "date") && !isDate(b.date)) throw bad("날짜를 확인해 주세요.");
+      q.setTeamInq.run(has(b, "date") ? b.date : x.date, has(b, "question") ? text(b.question, 1000, "문의 내용", true) : x.question, has(b, "answer") ? text(b.answer, 1000, "답변") || "" : x.answer, has(b, "done") ? (b.done ? 1 : 0) : x.done, x.id);
+      return ok(200, { ok: true });
+    }
+    if (method === "DELETE") { if (x.created_by !== user.id && !admin) return ok(403, { error: "적은 사람과 관리자만 지울 수 있어요." }); q.delTeamInq.run(x.id); return ok(200, { ok: true }); }
+    return ok(405, { error: "Method not allowed" });
+  }
+  // 입고 완성품 (부서 봉사자가 적은 묵주 완제품 기록, 조회만)
+  if (path === "/api/team/products" && method === "GET") {
+    const gid = rosaryGroupId();
+    return ok(200, { records: gid ? q.volRecords.all(gid, "recovery").map((r) => ({ id: r.id, date: r.date, name: r.name, qty: r.qty, note: r.note, stage: r.stage || "in" })) : [] });
+  }
+  // 일일 작업 기록
+  const dailyIn = async () => { const b = await readJson(req); if (!isDate(b.date)) throw bad("날짜를 확인해 주세요."); return [b.date, teamQty(b.qty, "검수 수량") ?? 0, text(b.workers, 300, "작업자") || "", text(b.note, 500, "메모") || ""]; };
+  const dailyList = () => q.teamDaily.all().map((x) => ({ id: x.id, date: x.date, qty: x.qty, workers: x.workers, note: x.note, author: x.author || "", mine: x.created_by === user.id }));
+  if (path === "/api/team/daily" && method === "GET") return ok(200, { daily: dailyList() });
+  if (path === "/api/team/daily" && method === "POST") { q.addTeamDaily.run(...(await dailyIn()), user.id); return ok(201, { daily: dailyList() }); }
+  const dm = path.match(/^\/api\/team\/daily\/(\d+)$/);
+  if (dm) {
+    const x = q.teamDailyOne.get(Number(dm[1]));
+    if (!x) throw notFound("작업 기록");
+    if (method === "PATCH") { q.setTeamDaily.run(...(await dailyIn()), x.id); return ok(200, { daily: dailyList() }); }
+    if (method === "DELETE") { if (x.created_by !== user.id && !admin) return ok(403, { error: "적은 사람과 관리자만 지울 수 있어요." }); q.delTeamDaily.run(x.id); return ok(200, { daily: dailyList() }); }
+    return ok(405, { error: "Method not allowed" });
+  }
+  // 검수 근무일(필요 인원)과 신청
+  const shiftList = () => { const su = q.teamShiftUsers.all(); return q.teamShifts.all(today()).map((s) => { const us = su.filter((x) => x.shift_id === s.id); return { id: s.id, date: s.date, startTime: s.start_time, need: s.need, note: s.note, people: us.map((x) => x.name), mine: us.some((x) => x.id === user.id), canDelete: admin || s.created_by === user.id }; }); };
+  if (path === "/api/team/shifts" && method === "GET") return ok(200, { shifts: shiftList() });
+  if (path === "/api/team/shifts" && method === "POST") {
+    const b = await readJson(req);
+    if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
+    const need = teamQty(b.need, "필요 인원");
+    if (!need || need > 200) throw bad("필요 인원은 1~200명으로 적어 주세요.");
+    q.addTeamShift.run(b.date, optTime(b.startTime), need, text(b.note, 300, "메모") || "", user.id);
+    return ok(201, { shifts: shiftList() });
+  }
+  const sm = path.match(/^\/api\/team\/shifts\/(\d+)(\/signup)?$/);
+  if (sm) {
+    const s = q.teamShift.get(Number(sm[1]));
+    if (!s) throw notFound("근무일");
+    if (sm[2] && method === "POST") { if (admin && !user.volunteer) return ok(403, { error: "근무 신청은 봉사자가 해요." }); const b = await readJson(req); if (b.on) q.teamShiftJoin.run(s.id, user.id); else q.teamShiftLeave.run(s.id, user.id); return ok(200, { shifts: shiftList() }); }
+    if (!sm[2] && method === "DELETE") { if (!admin && s.created_by !== user.id) return ok(403, { error: "만든 사람과 관리자만 지울 수 있어요." }); q.delTeamShift.run(s.id); return ok(200, { shifts: shiftList() }); }
+    return ok(405, { error: "Method not allowed" });
+  }
+  // 봉사 가능한 날 (내 것만 고침, 다른 사람은 날짜별 인원 수만)
+  if (path === "/api/team/avail" && method === "GET") return ok(200, { mine: q.teamAvailMine.all(user.id, today()).map((x) => x.date), counts: Object.fromEntries(q.teamAvailCounts.all(today()).map((x) => [x.date, x.n])) });
+  if (path === "/api/team/avail" && method === "PUT") {
+    const b = await readJson(req);
+    if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
+    if (b.on) q.addTeamAvail.run(user.id, b.date); else q.delTeamAvail.run(user.id, b.date);
+    return ok(200, { mine: q.teamAvailMine.all(user.id, today()).map((x) => x.date), counts: Object.fromEntries(q.teamAvailCounts.all(today()).map((x) => [x.date, x.n])) });
+  }
+  // 이슈: 봉사자가 등록(사진 4장), 관리자가 처리 상태·답
+  const issueIn = (b) => {
+    const kind = b.kind === "thread" ? "thread" : "general";
+    const sid = b.scheduleId ? teamOrgOf(b.scheduleId).id : null;
+    return [kind, sid, text(b.title, 120, "제목", true), text(b.body, 2000, "내용") || ""];
+  };
+  if (path === "/api/team/issues" && method === "GET") return ok(200, { issues: issues() });
+  if (path === "/api/team/issues" && method === "POST") { const id = Number(q.addTeamIssue.run(...issueIn(await readJson(req)), user.id).lastInsertRowid); return ok(201, { id, issues: issues() }); }
+  const im = path.match(/^\/api\/team\/issues\/(\d+)(\/photos)?$/);
+  if (im) {
+    const x = q.teamIssue.get(Number(im[1]));
+    if (!x) throw notFound("이슈");
+    const own = x.created_by === user.id;
+    if (im[2]) {
+      if (method !== "POST") return ok(405, { error: "Method not allowed" });
+      if (!own && !admin) return ok(403, { error: "올린 사람과 관리자만 사진을 붙여요." });
+      const b = await readJson(req), buf = Buffer.from(String(b.data || ""), "base64");
+      if (!buf.length || buf.length > ITEM_IMAGE_MAX) throw bad("사진을 확인해 주세요.");
+      const mime = imageMime(buf);
+      if (!mime) throw bad("JPG, PNG, WEBP 사진만 올릴 수 있어요.");
+      if (q.teamIssuePhotoCount.get(x.id).n >= 4) throw bad("사진은 이슈마다 4장까지 올릴 수 있어요.");
+      q.addTeamIssuePhoto.run(x.id, mime, buf, user.id);
+      return ok(201, { issues: issues() });
+    }
+    if (method === "PATCH") {
+      const b = await readJson(req);
+      if (has(b, "status")) {
+        if (!admin) return ok(403, { error: "처리 상태는 관리자가 바꿔요." });
+        if (!["new", "doing", "done"].includes(b.status)) throw bad("처리 상태를 확인해 주세요.");
+        q.setTeamIssueStatus.run(b.status, has(b, "reply") ? text(b.reply, 1000, "답") || "" : x.reply, x.id);
+        return ok(200, { issues: issues() });
+      }
+      if (!own && !admin) return ok(403, { error: "올린 사람과 관리자만 고칠 수 있어요." });
+      q.setTeamIssue.run(...issueIn(b), x.id);
+      return ok(200, { issues: issues() });
+    }
+    if (method === "DELETE") { if (!admin && !(own && x.status === "new")) return ok(403, { error: "처리 전인 내 이슈만 지울 수 있어요." }); q.delTeamIssue.run(x.id); return ok(200, { issues: issues() }); }
+    return ok(405, { error: "Method not allowed" });
+  }
+  const ipm = path.match(/^\/api\/team\/issue-photos\/(\d+)$/);
+  if (ipm) {
+    const ph = q.teamIssuePhoto.get(Number(ipm[1]));
+    if (!ph) throw notFound("사진");
+    if (method === "GET") { sendPhoto(res, ph); return true; }
+    if (method === "DELETE") { const x = q.teamIssue.get(ph.issue_id); if (!admin && x?.created_by !== user.id) return ok(403, { error: "올린 사람과 관리자만 지울 수 있어요." }); q.delTeamIssuePhoto.run(ph.id); return ok(200, { issues: issues() }); }
+    return ok(405, { error: "Method not allowed" });
+  }
+  // 자료실 (링크): 보기는 모두, 등록·수정은 관리자
+  const docList = () => q.teamDocs.all().map((d) => ({ id: d.id, category: d.category, title: d.title, url: d.url, note: d.note }));
+  const docIn = async () => {
+    const b = await readJson(req);
+    const url = text(b.url, 500, "링크") || "";
+    if (url && !/^https:\/\//.test(url)) throw bad("링크는 https:// 로 시작해야 해요.");
+    return [["edu", "inspect", "etc"].includes(b.category) ? b.category : "etc", text(b.title, 120, "제목", true), url, text(b.note, 2000, "내용") || ""];
+  };
+  if (path === "/api/team/docs" && method === "GET") return ok(200, { docs: docList() });
+  if (path === "/api/team/docs" && method === "POST") { if (!admin) return ok(403, { error: "자료실은 관리자가 올려요." }); q.addTeamDoc.run(...(await docIn())); return ok(201, { docs: docList() }); }
+  const dcm = path.match(/^\/api\/team\/docs\/(\d+)$/);
+  if (dcm) {
+    if (!admin) return ok(403, { error: "자료실은 관리자가 고쳐요." });
+    const d = q.teamDoc.get(Number(dcm[1]));
+    if (!d) throw notFound("자료");
+    if (method === "PATCH") { q.setTeamDoc.run(...(await docIn()), d.id); return ok(200, { docs: docList() }); }
+    if (method === "DELETE") { q.delTeamDoc.run(d.id); return ok(200, { docs: docList() }); }
+    return ok(405, { error: "Method not allowed" });
+  }
+  return false;
+}
 // 봉사자에게 보이는 묶음(묵주·손십자가)인지
 function volGroupItem(id) {
   const i = Number.isInteger(id) && q.projectItem.get(id);
@@ -1532,8 +1820,10 @@ async function api(req, res, path) {
       return send(res, 401, { error: "아이디 또는 비밀번호를 다시 확인해 주세요." });
     }
     // 직원·봉사자 로그인 구분: 비밀번호가 맞을 때만 알려 줌 (아이디만으로 계정 종류를 알 수 없게)
-    if ((as === "staff" && user.volunteer) || (as === "volunteer" && !user.volunteer)) {
-      return send(res, 403, { error: user.volunteer ? "봉사자 계정이에요." : "직원 계정이에요.", field: "as" });
+    // 직원 · 부서 봉사자(물류) · 팀 봉사자(교육·검수): 고른 쪽과 계정이 다르면 맞는 쪽을 알려 줌
+    const kindOf = !user.volunteer ? "staff" : user.vol_kind === "team" ? "team" : "volunteer";
+    if (["staff", "volunteer", "team"].includes(as) && as !== kindOf) {
+      return send(res, 403, { error: { staff: "직원 계정이에요.", volunteer: "부서 봉사자 계정이에요.", team: "팀 봉사자 계정이에요." }[kindOf], field: "as", as: kindOf });
     }
     const token = crypto.randomBytes(32).toString("base64url");
     const expiresAt = Date.now() + SESSION_DAYS * 86400 * 1000;
@@ -1546,6 +1836,10 @@ async function api(req, res, path) {
   if (!user) return send(res, 401, { error: "로그인이 필요해요." });
   // 봉사자: 내 계정 정보·비밀번호·로그아웃과 봉사자 전용 API 만. 직원 데이터(조직도·연락처·일정 등)는 입구에서 막음
   if (user.volunteer) {
+    if (user.vol_kind === "team") {
+      if (path.startsWith("/api/team/")) { if (await teamRoute(req, res, user, path, method)) return; return send(res, 404, { error: "찾을 수 없어요." }); }
+      if (path.startsWith("/api/volunteer/")) return send(res, 403, { error: "팀 봉사자 계정으로는 볼 수 없어요." });
+    } else if (path.startsWith("/api/team/")) return send(res, 403, { error: "부서 봉사자 계정으로는 볼 수 없어요." });
     if (path === "/api/volunteer/home" && method === "GET") {
       const done = new Map(q.volDoneOfUser.all(user.id).map((d) => [d.training_id, d.done_at]));
       return send(res, 200, {
@@ -1705,6 +1999,12 @@ async function api(req, res, path) {
     if (!((path === "/api/logout" || path === "/api/password") && method === "POST")) return send(res, 403, { error: "봉사자 계정으로는 볼 수 없어요." });
   }
   const isAdmin = user.role === "admin";
+  // 팀 봉사자 화면 API: 관리자도 씀 (연락처·이슈 처리·자료실)
+  if (path.startsWith("/api/team/")) {
+    if (!isAdmin) return send(res, 403, { error: "관리자만 볼 수 있어요." });
+    if (await teamRoute(req, res, user, path, method)) return;
+    return send(res, 404, { error: "찾을 수 없어요." });
+  }
   // 게시판: 직원은 쓰지 않음 (봉사자·관리자만)
   if (path === "/api/board" || path.startsWith("/api/board/") || path.startsWith("/api/board-comments/")) {
     if (!boardCan(user)) return send(res, 403, { error: "게시판은 봉사자와 관리자만 써요." });
@@ -2536,37 +2836,7 @@ async function api(req, res, path) {
       return send(res, 200, { moves: q.volStockMoves.all().map((m) => ({ id: m.id, type: m.type, date: m.date, note: m.note, handler: m.handler, issue: m.issue || "", photos: m.photos, inspectOk: m.inspect_ok ?? null, inspectBad: m.inspect_bad ?? null, createdAt: m.created_at, enteredBy: m.author, ledgerId: m.ledger_id, ledgerName: m.ledger_name, unit: m.unit, total: m.total })) });
     }
     // 봉사자가 적은 원자재 보유물량 · 제품 회수물량 (최근 300건)
-    if (path === "/api/admin/inspections" && method === "GET") return send(res, 200, { groups: inspGroups(), types: DEFECT_TYPES, inspections: q.inspections.all().map(inspectionOut) });
-    if (path === "/api/admin/inspections" && method === "POST") {
-      const id = Number(q.addInspection.run(...inspectionInput(await readJson(req)), user.id).lastInsertRowid);
-      return send(res, 201, { id, inspections: q.inspections.all().map(inspectionOut) });
-    }
-    const iam = path.match(/^\/api\/admin\/inspections\/(\d+)(\/photos)?$/);
-    if (iam) {
-      const x = q.inspection.get(Number(iam[1]));
-      if (!x) throw notFound("검수 기록");
-      if (iam[2]) {
-        if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
-        const b = await readJson(req), buf = Buffer.from(String(b.data || ""), "base64");
-        if (!buf.length || buf.length > ITEM_IMAGE_MAX) throw bad("사진을 확인해 주세요.");
-        const mime = imageMime(buf);
-        if (!mime) throw bad("JPG, PNG, WEBP 사진만 올릴 수 있어요.");
-        if (q.inspPhotoCount.get(x.id).n >= 4) throw bad("사진은 기록마다 4장까지 올릴 수 있어요.");
-        q.addInspPhoto.run(x.id, mime, buf, user.id);
-        return send(res, 201, { inspections: q.inspections.all().map(inspectionOut) });
-      }
-      if (method === "PATCH") { q.setInspection.run(...inspectionInput(await readJson(req)), x.id); return send(res, 200, { inspections: q.inspections.all().map(inspectionOut) }); }
-      if (method === "DELETE") { q.delInspection.run(x.id); return send(res, 200, { inspections: q.inspections.all().map(inspectionOut) }); }
-      return send(res, 405, { error: "Method not allowed" });
-    }
-    const ipm = path.match(/^\/api\/admin\/inspection-photos\/(\d+)$/);
-    if (ipm) {
-      const ph = q.inspPhoto.get(Number(ipm[1]));
-      if (!ph) throw notFound("사진");
-      if (method === "GET") return sendPhoto(res, ph);
-      if (method === "DELETE") { q.delInspPhoto.run(ph.id); return send(res, 200, { inspections: q.inspections.all().map(inspectionOut) }); }
-      return send(res, 405, { error: "Method not allowed" });
-    }
+    if (await inspectionRoute(req, res, user, path, method, "/api/admin")) return;
     if (path === "/api/admin/vol-records" && method === "GET") {
       return send(res, 200, { records: q.volRecordsAll.all().map((r) => ({ id: r.id, kind: r.kind, stage: r.stage || "in", group: r.group_name, date: r.date, name: r.name, qty: r.qty, note: r.note, author: r.author || "", updatedAt: r.updated_at })) });
     }
@@ -2615,7 +2885,7 @@ async function api(req, res, path) {
     if (path === "/api/admin/users" && method === "GET") {
       return send(res, 200, {
         users: q.users.all().map((u) => ({
-          id: u.id, login: u.login, role: roleOut(u), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), note: u.note, pwChanged: u.pw_changed === 1,
+          id: u.id, login: u.login, role: roleOut(u), volKind: volKindOf(u), name: u.name, unitId: u.unit_id, viewUnits: viewUnitsOut(u.id), note: u.note, pwChanged: u.pw_changed === 1,
           createdAt: u.created_at, lastLoginAt: u.last_login_at, me: u.id === user.id
         }))
       });
@@ -2625,7 +2895,7 @@ async function api(req, res, path) {
       const login = normalizeLogin(b.login);
       if (!/^[a-z0-9._-]{3,20}$/.test(login)) throw bad("아이디는 영문 소문자·숫자·._- 로 3~20자로 정해 주세요.", "login");
       const name = text(b.name, LIMITS.name, "이름", true);
-      const volunteer = b.role === "volunteer" ? 1 : 0;
+      const volunteer = b.role === "volunteer" || b.role === "team" ? 1 : 0;
       const unit = volunteer ? null : unitIdOrNull(b.unitId);
       const role = b.role === "admin" ? "admin" : "member";
       const director = b.role === "director" ? 1 : 0;
@@ -2636,6 +2906,7 @@ async function api(req, res, path) {
         const id = Number(q.addUser.run(login, hash, role, name, unit, note).lastInsertRowid);
         if (director) q.setUserDirector.run(1, id);
         if (volunteer) q.setUserVolunteer.run(1, id);
+        if (volunteer) q.setUserVolKind.run(b.role === "team" ? "team" : "dept", id);
       });
       console.log(`[admin] ${user.login} → ${login} 계정 발급`);
       return send(res, 201, { login, name, password });
@@ -2908,9 +3179,11 @@ async function api(req, res, path) {
         const name = b.name === undefined ? target.name : text(b.name, LIMITS.name, "이름", true);
         const unit = has(b, "unitId") ? unitIdOrNull(b.unitId) : target.unit_id;
         const note = has(b, "note") ? text(b.note, LIMITS.userNote, "메모") : target.note;
-        const role = b.role === "admin" ? "admin" : b.role === "member" || b.role === "director" || b.role === "volunteer" ? "member" : target.role;
-        const director = b.role === "director" ? 1 : b.role === "admin" || b.role === "member" || b.role === "volunteer" ? 0 : target.director;
-        const volunteer = b.role === "volunteer" ? 1 : b.role === "admin" || b.role === "member" || b.role === "director" ? 0 : target.volunteer;
+        const isVol = b.role === "volunteer" || b.role === "team";
+        const role = b.role === "admin" ? "admin" : b.role === "member" || b.role === "director" || isVol ? "member" : target.role;
+        const director = b.role === "director" ? 1 : b.role === "admin" || b.role === "member" || isVol ? 0 : target.director;
+        const volunteer = isVol ? 1 : b.role === "admin" || b.role === "member" || b.role === "director" ? 0 : target.volunteer;
+        const volKind = b.role === "team" ? "team" : b.role === "volunteer" ? "dept" : target.vol_kind || "dept";
         if (lastAdmin && role !== "admin") throw bad("관리자가 한 명은 있어야 해요.");
         // 추가로 볼 수 있는 조직: [{ unitId, sub }] 로 통째로 바꿈
         let grants = null;
@@ -2922,6 +3195,7 @@ async function api(req, res, path) {
           q.setUser.run(name, volunteer ? null : unit, note, role, target.id);
           q.setUserDirector.run(director, target.id);
           q.setUserVolunteer.run(volunteer, target.id);
+          q.setUserVolKind.run(volKind, target.id);
           if (grants || volunteer) q.clearViewUnits.run(target.id);
           if (grants && !volunteer) for (const g of grants) q.addViewUnit.run(target.id, g.unit, g.sub);
           if (volunteer) q.unlinkUserPositions.run(target.id); // 봉사자는 조직도 자리에 연결하지 않음

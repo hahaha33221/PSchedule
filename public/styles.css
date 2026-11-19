@@ -1779,3 +1779,35 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .insp-defects { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
 .board-item.is-locked { opacity: .7; cursor: default; }
 .board-lock { font-size: 12px; }
+
+/* ---------- 팀 봉사자(교육·검수) ---------- */
+.team-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 16px; }
+.team-tile { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; color: inherit; text-decoration: none; }
+.team-tile strong { font-size: 22px; }
+.team-tile:hover { box-shadow: var(--shadow-lg); }
+.team-tag { margin-right: 4px; padding: 0 8px; font-size: 11.5px; align-self: auto; vertical-align: 1px; }
+.team-tag.is-done { background: var(--c1-soft); color: var(--c1); }
+.team-tag.is-delay, .team-tag.is-new, .team-tag.is-thread { background: var(--c6-soft); color: var(--c6); }
+.team-tag.is-doing, .team-tag.is-plan { background: var(--c0-soft); color: var(--c0); }
+.team-tag.is-edu { background: var(--c5-soft); color: var(--c5); }
+.team-tag.is-insp { background: var(--c4-soft); color: var(--c4); }
+.team-days { list-style: none; margin: 0; padding: 4px 16px; }
+.team-day { display: grid; grid-template-columns: 150px 1fr auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line-2); }
+.team-day:last-child { border-bottom: 0; }
+.team-day.is-today .team-day__when strong { color: var(--primary); }
+.team-day.is-past { opacity: .6; }
+.team-day__what { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.team-sec { margin: 8px 0 0; font-size: 14px; color: var(--ink-2); border-top: 1px solid var(--line-2); padding-top: 10px; }
+.team-inq { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.team-inq__item { padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; }
+.team-inq__item.is-done { opacity: .75; }
+.team-inq__item p { margin: 4px 0; }
+.team-issue { display: flex; flex-direction: column; gap: 6px; padding: 12px 16px; }
+.team-issue__head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.team-issue__reply { margin: 0; padding: 6px 10px; border-radius: 8px; background: var(--surface-2); }
+.team-docs, .team-list { list-style: none; margin: 0; padding: 0; }
+.team-doc { display: flex; flex-direction: column; gap: 4px; padding: 12px 16px; }
+.team-orgs td { vertical-align: middle; }
+@media (max-width: 640px) {
+  .team-day { grid-template-columns: 1fr; gap: 6px; }
+}

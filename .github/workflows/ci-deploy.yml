@@ -613,6 +613,39 @@ jobs:
           curl -fs -H "$VH" $B/volunteer/projects/$VPJ | node -e 'const v=JSON.parse(require("fs").readFileSync(0)).visits.find(x=>x.title==="묵주 교육 · 미정");if(!v||!v.tableOnly||v.qty!==70||v.noteQty!==null)process.exit(1)'
           curl -fs -H "$H" -XPATCH -d '{"title":"묵주 교육 · 미정","date":"2030-06-03","qty":70,"project":true,"tableOnly":false}' $B/admin/vol-schedules/$TV >/dev/null
           curl -fs -H "$VH" $B/volunteer/home | grep -q '묵주 교육 · 미정'
+          # 팀 봉사자(교육·검수): 로그인은 팀으로만, 팀 API 와 부서 봉사자 API 는 서로 막힘, 연락처·이슈 처리·자료실은 관리자만, 검수 기록은 관리자와 같이 씀
+          TPW=$(curl -fs -H "$H" -XPOST -d '{"login":"teamv","name":"팀봉사","role":"team"}' $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).password')
+          curl -s -XPOST -H 'content-type: application/json' -d "{\"login\":\"teamv\",\"password\":\"$TPW\",\"as\":\"volunteer\"}" $B/login | grep -q '"as":"team"'
+          TT=$(curl -fs -XPOST -H 'content-type: application/json' -d "{\"login\":\"teamv\",\"password\":\"$TPW\",\"as\":\"team\"}" $B/login | node -pe 'const d=JSON.parse(require("fs").readFileSync(0));if(d.user.volKind!=="team")process.exit(1);d.token')
+          TH="$(bearer "$TT")"
+          curl -fs -H "$TH" $B/team/home >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" $B/volunteer/home)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/team/home)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/team/home)" = 403
+          TO=$(curl -fs -H "$TH" $B/team/orgs | node -pe 'const o=JSON.parse(require("fs").readFileSync(0)).orgs;if(!o.length)process.exit(1);o[0].id')
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPATCH -d '{"contact":"x"}' $B/team/orgs/$TO)" = 403
+          curl -fs -H "$H" -XPATCH -d '{"contact":"연락처 칸"}' $B/team/orgs/$TO >/dev/null
+          curl -fs -H "$TH" -XPATCH -d '{"status":"done","helper":"팀봉사","madeQty":30}' $B/team/orgs/$TO | node -e 'const o=JSON.parse(require("fs").readFileSync(0)).org;if(o.status!=="done"||o.madeQty!==30||o.contact!=="연락처 칸"||o.updatedBy!=="팀봉사")process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPATCH -d '{"status":"nope"}' $B/team/orgs/$TO)" = 400
+          curl -fs -H "$TH" -XPOST -d '{"date":"2030-06-01","question":"문의"}' $B/team/orgs/$TO/inquiries >/dev/null
+          curl -fs -H "$TH" $B/team/orgs | node -e 'const o=JSON.parse(require("fs").readFileSync(0)).orgs.find(x=>x.id==='$TO');if(o.openInquiries!==1)process.exit(1)'
+          IG=$(curl -fs -H "$TH" $B/team/inspections | node -pe 'JSON.parse(require("fs").readFileSync(0)).groups[0].id')
+          curl -fs -H "$TH" -XPOST -d '{"itemId":'$IG',"stage":3,"date":"2030-06-01","checkedQty":10,"defects":{"매듭":1},"rework":"fix"}' $B/team/inspections >/dev/null
+          curl -fs -H "$H" $B/admin/inspections | node -e 'const x=JSON.parse(require("fs").readFileSync(0)).inspections.find(i=>i.author==="팀봉사");if(!x||x.rework!=="fix")process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d '{"itemId":'$IG',"stage":3,"date":"2030-06-01","checkedQty":1,"rework":"x"}' $B/team/inspections)" = 400
+          TI=$(curl -fs -H "$TH" -XPOST -d '{"kind":"thread","scheduleId":'$TO',"title":"실 끊어짐"}' $B/team/issues | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPATCH -d '{"status":"done"}' $B/team/issues/$TI)" = 403
+          curl -fs -H "$H" -XPATCH -d '{"status":"doing","reply":"확인 중"}' $B/team/issues/$TI | node -e 'const x=JSON.parse(require("fs").readFileSync(0)).issues.find(i=>i.id==='$TI');if(x.status!=="doing"||x.reply!=="확인 중")process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XDELETE $B/team/issues/$TI)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d '{"title":"x"}' $B/team/docs)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"title":"x","url":"http://a"}' $B/team/docs)" = 400
+          curl -fs -H "$H" -XPOST -d '{"category":"inspect","title":"검수 기준","url":"https://example.com/a"}' $B/team/docs >/dev/null
+          curl -fs -H "$TH" $B/team/docs | grep -q '검수 기준'
+          SH=$(curl -fs -H "$TH" -XPOST -d '{"date":"2030-06-02","need":2}' $B/team/shifts | node -pe 'JSON.parse(require("fs").readFileSync(0)).shifts.find(s=>s.date==="2030-06-02").id')
+          curl -fs -H "$TH" -XPOST -d '{"on":true}' $B/team/shifts/$SH/signup | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).shifts.find(x=>x.id==='$SH');if(!s.mine||s.people[0]!=="팀봉사")process.exit(1)'
+          curl -fs -H "$TH" -XPOST -d '{"date":"2030-06-02","qty":40}' $B/team/daily | node -e 'if(JSON.parse(require("fs").readFileSync(0)).daily[0].qty!==40)process.exit(1)'
+          curl -fs -H "$TH" -XPUT -d '{"date":"2030-06-03","on":true}' $B/team/avail | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.mine[0]!=="2030-06-03"||d.counts["2030-06-03"]!==1)process.exit(1)'
+          curl -fs -H "$H" -XDELETE $B/admin/users/$(USR teamv) >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$TV >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$RV >/dev/null; curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$NV >/dev/null
           # 개인 지정 봉사자를 지워도 일정이 전체 공개로 바뀌지 않음

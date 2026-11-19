@@ -419,6 +419,91 @@ function addUnitColumns(db) {
       created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
+    -- 팀 봉사자(교육·검수): 담당 수도회(추가 전달 물량의 일정 한 줄)마다 교육 상태·결과·제작 진행, 연락처는 관리자만 입력
+    CREATE TABLE IF NOT EXISTS team_org_info (
+      schedule_id INTEGER PRIMARY KEY REFERENCES vol_schedules(id) ON DELETE CASCADE,
+      contact     TEXT NOT NULL DEFAULT '',
+      helper      TEXT NOT NULL DEFAULT '',
+      status      TEXT NOT NULL DEFAULT 'plan' CHECK (status IN ('plan', 'done', 'delay')),
+      attend      INTEGER,
+      result_note TEXT NOT NULL DEFAULT '',
+      made_qty    INTEGER,
+      made_due    TEXT NOT NULL DEFAULT '',
+      updated_by  TEXT NOT NULL DEFAULT '',
+      updated_at  TEXT
+    );
+    -- 수도회 문의와 답변
+    CREATE TABLE IF NOT EXISTS team_inquiries (
+      id          INTEGER PRIMARY KEY,
+      schedule_id INTEGER NOT NULL REFERENCES vol_schedules(id) ON DELETE CASCADE,
+      date        TEXT NOT NULL,
+      question    TEXT NOT NULL,
+      answer      TEXT NOT NULL DEFAULT '',
+      done        INTEGER NOT NULL DEFAULT 0,
+      created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    -- 이슈 등록 (일반 · 실 품질), 관리자가 처리 상태와 답을 적음, 사진 4장
+    CREATE TABLE IF NOT EXISTS team_issues (
+      id          INTEGER PRIMARY KEY,
+      kind        TEXT NOT NULL DEFAULT 'general' CHECK (kind IN ('general', 'thread')),
+      schedule_id INTEGER REFERENCES vol_schedules(id) ON DELETE SET NULL,
+      title       TEXT NOT NULL,
+      body        TEXT NOT NULL DEFAULT '',
+      status      TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'doing', 'done')),
+      reply       TEXT NOT NULL DEFAULT '',
+      created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS team_issue_photos (
+      id         INTEGER PRIMARY KEY,
+      issue_id   INTEGER NOT NULL REFERENCES team_issues(id) ON DELETE CASCADE,
+      mime       TEXT NOT NULL,
+      data       BLOB NOT NULL,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    -- 검수 일일 작업 기록, 검수 근무일(필요 인원)과 신청, 봉사 가능한 날
+    CREATE TABLE IF NOT EXISTS team_daily (
+      id         INTEGER PRIMARY KEY,
+      date       TEXT NOT NULL,
+      qty        INTEGER NOT NULL DEFAULT 0,
+      workers    TEXT NOT NULL DEFAULT '',
+      note       TEXT NOT NULL DEFAULT '',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS team_shifts (
+      id         INTEGER PRIMARY KEY,
+      date       TEXT NOT NULL,
+      start_time TEXT NOT NULL DEFAULT '',
+      need       INTEGER NOT NULL DEFAULT 1,
+      note       TEXT NOT NULL DEFAULT '',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS team_shift_users (
+      shift_id INTEGER NOT NULL REFERENCES team_shifts(id) ON DELETE CASCADE,
+      user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      PRIMARY KEY (shift_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS team_avail (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      date    TEXT NOT NULL,
+      PRIMARY KEY (user_id, date)
+    );
+    -- 자료실: 교육 자료 · 검수 기준 · 기타 (파일은 링크로)
+    CREATE TABLE IF NOT EXISTS team_docs (
+      id         INTEGER PRIMARY KEY,
+      category   TEXT NOT NULL DEFAULT 'etc' CHECK (category IN ('edu', 'inspect', 'etc')),
+      title      TEXT NOT NULL,
+      url        TEXT NOT NULL DEFAULT '',
+      note       TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     CREATE TABLE IF NOT EXISTS inspections (
       id          INTEGER PRIMARY KEY,
       item_id     INTEGER NOT NULL REFERENCES project_items(id) ON DELETE CASCADE,
@@ -602,6 +687,10 @@ function addUnitColumns(db) {
   if (!has("project_processes", "area")) db.exec("ALTER TABLE project_processes ADD COLUMN area TEXT NOT NULL DEFAULT ''");
   // 봉사자 계정: 직원 화면·API 를 쓰지 않음 (role 은 member, 서버 입구에서 막음)
   if (!has("users", "volunteer")) db.exec("ALTER TABLE users ADD COLUMN volunteer INTEGER NOT NULL DEFAULT 0");
+  // 봉사자 구분: dept = 부서 봉사자(물류, 예전 봉사자 화면), team = 팀 봉사자(교육·검수)
+  if (!has("users", "vol_kind")) db.exec("ALTER TABLE users ADD COLUMN vol_kind TEXT NOT NULL DEFAULT 'dept'");
+  // 검수 불합격품 처리: '' 정하지 않음 · return 수도회로 반송 · fix 현장 재작업
+  if (!has("inspections", "rework")) db.exec("ALTER TABLE inspections ADD COLUMN rework TEXT NOT NULL DEFAULT ''");
   if (!has("users", "note")) {
     db.exec("ALTER TABLE users ADD COLUMN note TEXT NOT NULL DEFAULT ''");
     db.exec("UPDATE users SET note = '직책: ' || title WHERE title <> ''");
