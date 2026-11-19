@@ -1884,3 +1884,53 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .tcal__needset { flex-wrap: nowrap; }
 .team-needadd { margin: 4px 0 8px; flex-wrap: wrap; }
 .team-needadd select { width: auto; max-width: 280px; min-width: 0; padding: 4px 8px; }
+
+/* ---------- 휴대폰·패드 정리 (봉사자 화면) ---------- */
+/* 동그란 표시(태그)는 옆 글·버튼과 가운데 줄 맞춤 */
+.card__head .stock-tag, .actions .stock-tag, .filters .stock-tag, .team-issue__head .stock-tag, .tcal__list .stock-tag { align-self: center; }
+.team-tag { display: inline-flex; align-items: center; line-height: 1.5; }
+/* 목록 기본 들여쓰기 없애기 (박스 안에 맞게) */
+.vol-sched-list, .team-days, .tcal__list, .team-inq { list-style: none; margin: 0; padding: 0; }
+.vol__card .team-days { padding: 0; }
+.card.team-days { padding: 4px 16px; }
+/* 입력 칸과 작은 버튼 높이 맞추기 */
+.tcal__needset input, .team-needadd select { height: 30px; box-sizing: border-box; }
+.side__account .avatar { flex-shrink: 0; }
+@media (max-width: 640px) {
+  /* 요약 칸은 두 줄씩 */
+  .team-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .team-tile { padding: 10px 12px; gap: 2px; }
+  .team-tile strong { font-size: 18px; }
+  .team-tile .small { font-size: 11.5px; line-height: 1.35; }
+  .team-day { grid-template-columns: 1fr; gap: 6px; }
+  .vol-sched { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .filters { gap: 8px; }
+  .filters .search { flex: 1 1 100%; }
+  .filters__end { flex-basis: 100%; margin-left: 0; text-align: left; }
+  .card__head { flex-wrap: wrap; gap: 6px; }
+  .vol__kind { padding: 3px 8px; font-size: 11.5px; }
+  .mobilebar .brand span { font-size: 16px; }
+  /* 표는 줄마다 카드로 (머리글은 칸 앞에 이름으로) — 입출고 대장 표는 옆으로 밀어 보기 */
+  .shell--vol .table-wrap:not(:has(.stock-table)) { overflow: visible; }
+  .shell--vol .table:not(.stock-table) thead { display: none; }
+  .shell--vol .table:not(.stock-table), .shell--vol .table:not(.stock-table) tbody, .shell--vol .table:not(.stock-table) tfoot { display: block; width: 100%; }
+  .shell--vol .table:not(.stock-table) tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 2px 12px; padding: 10px 12px; border-bottom: 1px solid var(--line-2); }
+  .shell--vol .table:not(.stock-table) td, .shell--vol .table:not(.stock-table) th { display: block; padding: 0; border: 0; text-align: left; white-space: normal; min-width: 0; }
+  .shell--vol .table:not(.stock-table) td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 600; color: var(--muted); }
+  .shell--vol .table:not(.stock-table) td.num { text-align: left; }
+  .shell--vol .table:not(.stock-table) td:nth-child(2), .shell--vol .table:not(.stock-table) th[colspan] { grid-column: 1 / -1; }
+  .shell--vol .table:not(.stock-table) td[data-label=""]::before, .shell--vol .table:not(.stock-table) td:empty { display: none; }
+  .shell--vol .table:not(.stock-table) tfoot tr { background: var(--surface-2); }
+  .shell--vol .table:not(.stock-table) input { max-width: 100%; }
+}
+@media (min-width: 641px) and (max-width: 1024px) {
+  /* 패드: 요약 칸 세 줄, 달력 칸 조금 낮게 */
+  .team-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .tcal__cell { min-height: 72px; }
+}
+.card__head .actions { align-items: center; }
+.card__head .actions .link-btn { line-height: 30px; }
+/* 알림 권유 띠 (화면 아래) */
+.push-ask { position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 60; width: min(560px, calc(100vw - 24px)); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; padding: 12px 14px; border-radius: 14px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-lg); }
+.push-ask p { margin: 0; flex: 1 1 260px; font-size: 13.5px; }
+.app-guide { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 13.5px; }

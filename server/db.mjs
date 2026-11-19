@@ -495,6 +495,15 @@ function addUnitColumns(db) {
       date    TEXT NOT NULL,
       PRIMARY KEY (user_id, date)
     );
+    -- 알림(웹 푸시) 구독: 기기(브라우저·앱)마다 하나, 계정을 지우면 함께 지움
+    CREATE TABLE IF NOT EXISTS push_subs (
+      id         INTEGER PRIMARY KEY,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      endpoint   TEXT NOT NULL UNIQUE,
+      p256dh     TEXT NOT NULL,
+      auth       TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
     -- 날짜별 봉사 필요 인원 (리더 봉사자·관리자가 정함)
     CREATE TABLE IF NOT EXISTS team_day_need (
       date       TEXT PRIMARY KEY,

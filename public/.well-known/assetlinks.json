@@ -1,0 +1,8 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "app.vercel.pschedule",
+    "sha256_cert_fingerprints": ["15:A0:89:79:14:87:9C:DD:65:87:8F:25:A6:9A:58:BE:04:1D:B9:E5:76:CF:CC:06:CD:C7:3B:2B:1D:68:C8:EA"]
+  }
+}]

@@ -676,7 +676,9 @@
       authBrand(),
       h("h1", { class: "auth__title", text: "어느 쪽으로 로그인할까요?" }),
       err, pick("staff"), pick("volunteer"), pick("team"),
-      h("p", { class: "auth__foot", text: "계정이 없거나 비밀번호를 잊었다면 관리자에게 문의해 주세요." })
+      h("p", { class: "auth__foot", text: "계정이 없거나 비밀번호를 잊었다면 관리자에게 문의해 주세요." }),
+      // 앱 설치 안내 (앱으로 열었으면 숨김)
+      isStandalone() ? null : h("p", { class: "auth__foot auth__app" }, isIos() ? "아이폰·아이패드: 사파리 '공유 → 홈 화면에 추가'로 앱처럼 쓸 수 있어요." : [h("a", { class: "link-btn", href: "/download/pschedule.apk", download: "pschedule.apk", text: "안드로이드 앱(APK) 내려받기" }), " · 아이폰·아이패드는 사파리 '공유 → 홈 화면에 추가'"])
     ])));
   }
 
@@ -718,7 +720,7 @@
   }
 
   async function logout(expired) {
-    if (!expired && state.token) api("/logout", { method: "POST" }).catch(() => {});
+    if (!expired && state.token) { await pushOff(true).catch(() => {}); api("/logout", { method: "POST" }).catch(() => {}); }
     state.token = "";
     state.user = null;
     state.peek = null;
@@ -792,6 +794,7 @@
     const account = h("button", { class: "side__account", type: "button" }, [avatar(state.user.id), h("span", { class: "side__who" }, [h("strong", { text: state.user.name }),
       h("small", { text: personSub(state.user) || (isAdmin() ? "" : "소속 없음") }), isAdmin() ? h("small", { class: "side__adminmark" }, [icon("lock"), "관리자 권한"]) : null])]);
     account.addEventListener("click", () => popover(account, h("div", { class: "pop__list" }, [
+      h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); toggleNav(false); appDialog(); } }, "알림 · 앱 설치"),
       h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); openDialog("비밀번호 변경", passwordForm(closeDialog)); } }, "비밀번호 변경"),
       h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); logout(); } }, "로그아웃")
     ])));
@@ -5260,6 +5263,7 @@
     const kindBtn = () => h("button", { class: "vol__kind" + (other ? " is-switch" : ""), type: "button", disabled: !other, title: other ? `${other === "team" ? "팀 봉사자" : "부서 봉사자"} 화면으로 바꾸기` : kindLabel, "aria-label": other ? `지금 ${kindLabel}. 누르면 ${other === "team" ? "팀 봉사자" : "부서 봉사자"} 화면으로` : kindLabel, onclick: () => { if (other) quiet(switchVol()); } }, [h("span", { text: kindLabel }), other ? h("span", { class: "vol__kind-swap", "aria-hidden": "true", text: "⇄" }) : null]);
     account.addEventListener("click", () => popover(account, h("div", { class: "pop__list" }, [
       other ? h("button", { type: "button", class: "pop__item", onclick: () => quiet(switchVol()) }, other === "team" ? "팀 봉사자 화면으로" : "부서 봉사자 화면으로") : null,
+      h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); toggleNav(false); appDialog(); } }, "알림 · 앱 설치"),
       h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); openDialog("비밀번호 변경", passwordForm(closeDialog)); } }, "비밀번호 변경"),
       h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); logout(); } }, "로그아웃")
     ])));
@@ -6950,6 +6954,23 @@
     try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("volunteers", failed(e)); }
   }
 
+  // 휴대폰에서 표를 카드처럼 보일 때 칸 이름을 붙이려고, 표가 그려질 때마다 머리글 글자를 칸(data-label)에 넣어 둠
+  function labelTables(root) {
+    for (const t of root.querySelectorAll("table.table:not(.stock-table)")) {
+      const heads = [...t.querySelectorAll("thead th")].map((th) => th.textContent.replace(/[↕▲▼]/g, "").trim());
+      if (!heads.length) continue;
+      for (const tr of t.querySelectorAll("tbody tr, tfoot tr")) {
+        let col = 0;
+        for (const cell of tr.children) {
+          if (cell.tagName === "TD" && !cell.hasAttribute("data-label")) cell.setAttribute("data-label", cell.colSpan > 1 ? "" : heads[col] || "");
+          col += cell.colSpan || 1;
+        }
+      }
+    }
+  }
+  let labelQueued = false;
+  new MutationObserver(() => { if (labelQueued) return; labelQueued = true; requestAnimationFrame(() => { labelQueued = false; labelTables(document); }); }).observe(document.body, { childList: true, subtree: true });
+
   /* ---------- 시작 ---------- */
   function render() {
     if (!state.user) return;
@@ -6994,6 +7015,86 @@
     setCategories(r.categories);
     layout.main = null;
     render();
+    quiet(pushBoot());
+  }
+
+  /* ---------- 앱 설치(PWA)와 알림(웹 푸시) ---------- */
+  const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  const isIos = () => !/Android/i.test(navigator.userAgent) && (/iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1)); // 아이패드는 맥처럼 보여서 터치로 구분
+  const isStandalone = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  const isAndroid = () => /Android/i.test(navigator.userAgent);
+  const APK_URL = "/download/pschedule.apk";
+  const b64uToBytes = (s) => { const b = atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)); return Uint8Array.from(b, (c) => c.charCodeAt(0)); };
+  async function swReg() { return "serviceWorker" in navigator ? navigator.serviceWorker.register("/sw.js") : null; }
+  async function pushSub() { if (!pushSupported()) return null; const reg = await navigator.serviceWorker.getRegistration(); return reg ? reg.pushManager.getSubscription() : null; }
+  async function pushOn() {
+    if (!pushSupported()) throw new Error(isIos() && !isStandalone() ? "아이폰·아이패드는 사파리에서 '공유 → 홈 화면에 추가'로 설치한 앱에서 알림을 켤 수 있어요." : "이 브라우저는 알림을 지원하지 않아요.");
+    const perm = await Notification.requestPermission();
+    if (perm !== "granted") throw new Error("알림이 허용되지 않았어요. 브라우저(앱) 설정에서 P-Schedule 알림을 허용해 주세요.");
+    const reg = await swReg(); await navigator.serviceWorker.ready;
+    const { key } = await api("/push/key");
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) });
+    await api("/push/subscribe", { method: "POST", body: sub.toJSON() });
+    store.set("ps.pushAsked", "1");
+  }
+  // quietServerOnly: 로그아웃 때는 서버 구독만 지우고 기기 권한은 그대로
+  async function pushOff(quietServerOnly) {
+    const sub = await pushSub();
+    if (!sub) return;
+    await api("/push/unsubscribe", { method: "POST", body: { endpoint: sub.endpoint } }).catch(() => {});
+    if (!quietServerOnly) await sub.unsubscribe();
+  }
+  // 로그인 때: 서비스 워커 등록, 이미 켠 기기면 지금 계정으로 다시 묶고, 아니면 한 번 권유
+  async function pushBoot() {
+    await swReg().catch(() => null);
+    if (pushSupported() && Notification.permission === "granted" && (await pushSub())) return pushOn().catch(() => {});
+    if (store.get("ps.pushAsked", "") || document.querySelector(".push-ask")) return;
+    const canPush = pushSupported() && Notification.permission === "default";
+    const iosGuide = isIos() && !isStandalone();
+    if (!canPush && !iosGuide) return;
+    const close = () => { store.set("ps.pushAsked", "1"); bar.remove(); };
+    const bar = h("div", { class: "push-ask", role: "dialog", "aria-label": "알림 받기" }, [
+      h("p", { text: iosGuide ? "아이폰·아이패드는 사파리 '공유 → 홈 화면에 추가'로 설치하면 앱처럼 쓰고 알림도 받을 수 있어요." : "알림을 켜면 새 공지·게시판·교육 일정·이슈 답을 바로 받아요." }),
+      h("div", { class: "actions" }, [
+        canPush ? h("button", { class: "btn btn--primary btn--sm", type: "button", text: "알림 켜기", onclick: async () => { try { await pushOn(); toast("알림을 켰어요."); close(); } catch (e) { toast(e.message); close(); } } }) : null,
+        h("button", { class: "btn btn--ghost btn--sm", type: "button", text: canPush ? "나중에" : "알겠어요", onclick: close })
+      ])
+    ]);
+    document.body.append(bar);
+  }
+  // 계정 메뉴 '알림 · 앱 설치': 이 기기의 알림 상태와 켜기·끄기·시험, 앱 설치 안내
+  async function appDialog() {
+    const box = h("div", { class: "stack" });
+    const draw = async () => {
+      const sub = await pushSub().catch(() => null);
+      const perm = "Notification" in window ? Notification.permission : "unsupported";
+      const state1 = !pushSupported() ? (isIos() && !isStandalone() ? "아이폰·아이패드는 홈 화면에 추가한 앱에서만 알림을 켤 수 있어요." : "이 브라우저는 알림을 지원하지 않아요.")
+        : perm === "denied" ? "이 기기에서 알림이 막혀 있어요. 브라우저(앱) 설정 → 사이트 설정 → 알림에서 P-Schedule을 허용해 주세요."
+          : sub ? "이 기기에서 알림을 받고 있어요." : "이 기기에서는 알림이 꺼져 있어요.";
+      fill(box,
+        h("section", { class: "stack stack--sm" }, [
+          h("h3", { class: "team-sec", text: "알림" }),
+          h("p", { class: "small", text: state1 }),
+          h("p", { class: "muted small", text: "새 공지, 게시판 새 글·내 글 댓글, 팀 봉사자 교육 일정·필요 인원, 이슈 처리·답이 오면 알려 줘요. 기기마다 따로 켜요." }),
+          h("div", { class: "actions actions--start" }, [
+            pushSupported() && perm !== "denied" && !sub ? h("button", { class: "btn btn--primary btn--sm", type: "button", text: "알림 켜기", onclick: async () => { try { await pushOn(); toast("알림을 켰어요."); } catch (e) { toast(e.message); } draw(); } }) : null,
+            sub ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "시험 알림 보내기", onclick: () => act(() => api("/push/test", { method: "POST" }), "시험 알림을 보냈어요. 잠시 뒤 알림이 와요.") }) : null,
+            sub ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "알림 끄기", onclick: async () => { await pushOff(); toast("이 기기 알림을 껐어요."); draw(); } }) : null
+          ])
+        ]),
+        h("section", { class: "stack stack--sm" }, [
+          h("h3", { class: "team-sec", text: "앱으로 쓰기" }),
+          h("p", { class: "small", text: isStandalone() ? "지금 앱으로 쓰고 있어요." : "휴대폰·패드에 설치하면 주소창 없이 앱처럼 써요. 사이트가 바뀌면 앱도 바로 바뀌어요." }),
+          h("ul", { class: "app-guide" }, [
+            h("li", {}, [h("strong", { text: "안드로이드: " }), h("a", { class: "link-btn", href: APK_URL, download: "pschedule.apk", text: "앱(APK) 내려받기" }), " → 내려받은 파일을 열어 설치 (처음이면 '출처를 알 수 없는 앱' 설치를 한 번 허용해요). 크롬 메뉴의 '앱 설치'로도 돼요."]),
+            h("li", {}, [h("strong", { text: "아이폰·아이패드: " }), "사파리에서 이 사이트를 열고 '공유 → 홈 화면에 추가'. 설치한 앱에서 알림을 켤 수 있어요."]),
+            h("li", {}, [h("strong", { text: "PC: " }), "크롬·엣지 주소창 오른쪽의 설치 버튼"])
+          ])
+        ]));
+    };
+    openDialog("알림 · 앱 설치", box);
+    await draw();
   }
 
   (async function start() {

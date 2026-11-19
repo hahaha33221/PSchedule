@@ -25,7 +25,7 @@ jobs:
 
       - name: 비공개 파일이 커밋되지 않았는지 확인
         run: |
-          leaked=$(git ls-files | grep -Ei '\.(db|sqlite)$|^private/|^data/|(^|/)\.env$' || true)
+          leaked=$(git ls-files | grep -Ei '\.(db|sqlite|jks|keystore)$|^private/|^data/|(^|/)\.env$|keystore\.properties$' || true)
           if [ -n "$leaked" ]; then
             echo "::error::비공개 파일이 저장소에 포함되어 있어요: $leaked"
             exit 1
@@ -33,7 +33,8 @@ jobs:
 
       - name: 문법 검사
         run: |
-          for f in public/app.js server/*.mjs tools/*.mjs; do node --check "$f"; done
+          for f in public/app.js public/sw.js server/*.mjs tools/*.mjs; do node --check "$f"; done
+          node -e 'JSON.parse(require("fs").readFileSync("public/manifest.webmanifest","utf8"));JSON.parse(require("fs").readFileSync("public/.well-known/assetlinks.json","utf8"))'
           bash -n tools/pull-backups.sh
 
       - name: iCal 가져오기 검사
@@ -706,6 +707,17 @@ jobs:
           curl -fs -H "$(bearer "$BT")" $B/me | node -e 'const u=JSON.parse(require("fs").readFileSync(0)).user;if(u.role!=="admin"||u.volKind!==null||u.volKinds.length)process.exit(1)'
           curl -fs -H "$H" -XDELETE $B/board/$BX >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/users/$(USR bothv) >/dev/null
+          # 알림(웹 푸시): 암호화가 RFC 8291 예시와 같고, 구독은 알려진 푸시 서비스 주소만, 봉사자도 구독함, 로그아웃 전에 지움
+          node --input-type=module -e 'import { encryptPayload } from "./server/push.mjs"; const o = encryptPayload("When I grow up, I want to be a watermelon", "BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4", "BTBZMqHH6r4Tts7J_aSIgg", { salt: "DGv6ra1nlYgDCS1FRnbzlw", asPrivate: "yfWPiYE-n46HLnH0KqZOF1fJJU3MYrct3AELtAQ-oRw" }).toString("base64url"); if (o !== "DGv6ra1nlYgDCS1FRnbzlwAAEABBBP4z9KsN6nGRTbVYI_c7VJSPQTBtkgcy27mlmlMoZIIgDll6e3vCYLocInmYWAmS6TlzAC8wEqKK6PBru3jl7A_yl95bQpu6cVPTpK4Mqgkf1CXztLVBSt2Ks3oZwbuwXPXLWyouBWLVWGNWQexSgSxsj_Qulcy4a-fN") process.exit(1)'
+          curl -fs -H "$TH" $B/push/key | node -e 'const k=JSON.parse(require("fs").readFileSync(0)).key;if(Buffer.from(k,"base64url").length!==65)process.exit(1)'
+          PK=BCVxsr7N_eNgVRqvHtD0zTZsEc6-VV-JvLexhqUzORcxaOzi6-AYWXvTBHm4bjyPjs7Vd8pZGH6SRpkNtoIAiw4
+          J="{\"endpoint\":\"https://evil.example.com/x\",\"keys\":{\"p256dh\":\"$PK\",\"auth\":\"BTBZMqHH6r4Tts7J_aSIgg\"}}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d "$J" $B/push/subscribe)" = 400
+          J="{\"endpoint\":\"https://fcm.googleapis.com/fcm/send/ci-test\",\"keys\":{\"p256dh\":\"x\",\"auth\":\"y\"}}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d "$J" $B/push/subscribe)" = 400
+          J="{\"endpoint\":\"https://fcm.googleapis.com/fcm/send/ci-test\",\"keys\":{\"p256dh\":\"$PK\",\"auth\":\"BTBZMqHH6r4Tts7J_aSIgg\"}}"; curl -fs -H "$TH" -XPOST -d "$J" $B/push/subscribe | grep -q '"ok":true'
+          curl -fs -H "$VH" -XPOST -d "$J" $B/push/subscribe | grep -q '"ok":true'
+          J="{\"endpoint\":\"https://fcm.googleapis.com/fcm/send/ci-test\"}"; curl -fs -H "$VH" -XPOST -d "$J" $B/push/unsubscribe | grep -q '"ok":true'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST $B/push/test)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' $B/push/key)" = 401
           curl -fs -H "$H" -XDELETE $B/admin/users/$(USR teamv) >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$TV >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$RV >/dev/null; curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$NV >/dev/null

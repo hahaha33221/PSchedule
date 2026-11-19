@@ -1,0 +1,44 @@
+// P-Schedule 안드로이드 앱: 사이트(https://pschedule.vercel.app)를 주소창 없이 여는 TWA(Trusted Web Activity)
+// 사이트를 고치면 앱도 바로 바뀜 (앱을 다시 만들 필요 없음). 알림은 사이트의 웹 푸시를 앱 알림으로 받음.
+// 서명 키는 저장소 밖(~/.pschedule-android/keystore.properties)에 둠 — 커밋하지 않음
+plugins { id "com.android.application" }
+
+def keyProps = new Properties()
+def keyFile = new File(System.getProperty("user.home"), ".pschedule-android/keystore.properties")
+if (keyFile.exists()) keyFile.withInputStream { keyProps.load(it) }
+
+android {
+    namespace "app.vercel.pschedule"
+    compileSdk 35
+    defaultConfig {
+        applicationId "app.vercel.pschedule"
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName "1.0"
+    }
+    signingConfigs {
+        release {
+            if (keyFile.exists()) {
+                storeFile new File(keyProps["storeFile"])
+                storePassword keyProps["storePassword"]
+                keyAlias keyProps["keyAlias"]
+                keyPassword keyProps["keyPassword"]
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation "com.google.androidbrowserhelper:androidbrowserhelper:2.5.0"
+}

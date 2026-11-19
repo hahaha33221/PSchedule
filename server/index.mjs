@@ -18,6 +18,7 @@ import crypto from "node:crypto";
 import { parseOutline, importOutline, cleanContact, openDb, ensureAdmin, verifyPassword, hashPassword, tempPassword } from "./db.mjs";
 import { createCalendarSync, checkUrl, maskUrl } from "./calendars.mjs";
 import { startAutoBackup, listBackups, backupNow, pruneBackups } from "./backup.mjs";
+import { vapidKeys, sendPush, pushEndpointOk } from "./push.mjs";
 
 const PORT = Number(process.env.PORT) || 8787;
 const DATA_DIR = resolve(process.env.DATA_DIR || "data");
@@ -45,6 +46,9 @@ const CATEGORY_DEPTH = 3; // 대분류 › 중분류 › 소분류
 const UNIT_DEPTH = 5;     // 조직도는 5단계까지 (위원회 › 본부 › 부 › 분과 › 팀)
 
 const db = openDb(join(DATA_DIR, "pschedule.db"));
+// 알림(웹 푸시): 서버 키는 처음 한 번 만들어 설정에 둠
+const VAPID = vapidKeys(db);
+const PUSH_SUBJECT = process.env.PUSH_SUBJECT || "https://pschedule.vercel.app";
 
 /* ---------- 보이는 범위 (팀별 제한) ----------
  * 멤버: 자기 소속 조직과 그 아래 팀의 항목 + 다른 팀이어도 내가 관련된 것 (만든 것, 참석하는 회의, 맡은 할 일, 쓴 메모,
@@ -1306,7 +1310,13 @@ function boardInput(b) {
 // 봉사자 입구와 관리자 쪽에서 같이 씀. 처리했으면 true
 async function boardRoute(req, res, user, path, method) {
   if (path === "/api/board" && method === "GET") { send(res, 200, { posts: q.boardPosts.all().map((b) => boardPostOut(b, user)) }); return true; }
-  if (path === "/api/board" && method === "POST") { const id = Number(q.addBoardPost.run(...boardInput(await readJson(req)), user.id).lastInsertRowid); send(res, 201, { id }); return true; }
+  if (path === "/api/board" && method === "POST") {
+    const v = boardInput(await readJson(req));
+    const id = Number(q.addBoardPost.run(...v, user.id).lastInsertRowid);
+    // 새 글: 봉사자·관리자에게 (비밀글은 관리자에게만, 제목도 숨김)
+    notify(allUsers().filter((u) => u.id !== user.id && boardCan(u) && (!v[3] || u.role === "admin")).map((u) => u.id), "게시판 새 글", v[3] ? "비밀글이 올라왔어요" : v[1], (s) => (s.volunteer ? `/#/vboard/${id}` : `/#/board/${id}`));
+    send(res, 201, { id }); return true;
+  }
   const m = path.match(/^\/api\/board\/(\d+)(\/comments)?$/);
   const cm = path.match(/^\/api\/board-comments\/(\d+)$/);
   if (m) {
@@ -1317,6 +1327,7 @@ async function boardRoute(req, res, user, path, method) {
       if (method !== "POST") { send(res, 405, { error: "Method not allowed" }); return true; }
       if (!see) { send(res, 403, { error: "비밀글에는 댓글을 달 수 없어요." }); return true; }
       q.addBoardComment.run(b.id, text((await readJson(req)).body, 1000, "댓글", true), user.id);
+      if (b.created_by && b.created_by !== user.id) notify([b.created_by], "내 글에 댓글", b.secret ? "비밀글에 댓글이 달렸어요" : b.title, (s) => (s.volunteer ? `/#/vboard/${b.id}` : `/#/board/${b.id}`));
     } else if (method === "PATCH" || method === "DELETE") {
       if (b.created_by !== user.id && user.role !== "admin") { send(res, 403, { error: "쓴 사람과 관리자만 고치거나 지울 수 있어요." }); return true; }
       if (method === "DELETE") { q.delBoardPost.run(b.id); send(res, 200, { ok: true }); return true; }
@@ -1465,6 +1476,7 @@ async function teamRoute(req, res, user, path, method) {
       q.teamOrgUpsert.run(id, "", text(b.helper, 80, "담당 봉사자") || "", "plan", null, "", null, "", user.name);
       return id;
     });
+    if (date) notify(teamVolunteerIds().filter((x) => x !== user.id), "새 교육 일정", `${date.slice(5).replace("-", "/")} ${org}`, "/#/tcal");
     return ok(201, { id, orgs: teamOrgRows(admin) });
   }
   const om = path.match(/^\/api\/team\/orgs\/(\d+)(\/inquiries)?$/);
@@ -1502,6 +1514,7 @@ async function teamRoute(req, res, user, path, method) {
         if (has(b, "date")) {
           if (!isDate(b.date)) throw bad("교육 날짜를 확인해 주세요.");
           db.prepare("UPDATE vol_schedules SET date = ?, start_time = ?, table_only = 0 WHERE id = ?").run(b.date, has(b, "startTime") ? optTime(b.startTime) : s.start_time, s.id);
+          if (b.date !== s.date || s.table_only) notify(teamVolunteerIds().filter((x) => x !== user.id), "교육 일정 변경", `${b.date.slice(5).replace("-", "/")} ${s.title.split(" · ").pop()}`, "/#/tcal");
         }
         q.teamOrgUpsert.run(s.id, has(b, "contact") ? text(b.contact, 300, "연락처") || "" : f.contact || "", has(b, "helper") ? text(b.helper, 80, "담당 봉사자") || "" : f.helper || "", status,
           has(b, "attend") ? teamQty(b.attend, "참석 인원") : f.attend ?? null, has(b, "resultNote") ? text(b.resultNote, 1000, "특이사항") || "" : f.result_note || "",
@@ -1588,7 +1601,9 @@ async function teamRoute(req, res, user, path, method) {
     const need = teamQty(b.need, "필요 인원");
     if (need != null && need > 500) throw bad("필요 인원은 500명까지 적을 수 있어요.");
     if (need && !eduDays().has(b.date)) throw bad("교육 일정이 있는 날만 필요 인원을 정할 수 있어요.");
+    const had = q.teamDayNeeds.all(b.date).find((x) => x.date === b.date);
     if (!need) q.delTeamDayNeed.run(b.date); else q.setTeamDayNeed.run(b.date, need, text(b.note, 200, "메모") || "", user.name);
+    if (need && (!had || had.need !== need)) notify(teamVolunteerIds().filter((x) => x !== user.id), "봉사자를 찾아요", `${b.date.slice(5).replace("-", "/")} ${need}명 필요`, "/#/thome");
     return ok(200, availOut());
   }
   // 제품 회수: 수도회에서 완성품을 받은 기록 (팀 봉사자 입력, 지우기는 적은 사람·리더·관리자)
@@ -1626,7 +1641,12 @@ async function teamRoute(req, res, user, path, method) {
     return [kind, sid, text(b.title, 120, "제목", true), text(b.body, 2000, "내용") || ""];
   };
   if (path === "/api/team/issues" && method === "GET") return ok(200, { issues: issues() });
-  if (path === "/api/team/issues" && method === "POST") { const id = Number(q.addTeamIssue.run(...issueIn(await readJson(req)), user.id).lastInsertRowid); return ok(201, { id, issues: issues() }); }
+  if (path === "/api/team/issues" && method === "POST") {
+    const v = issueIn(await readJson(req));
+    const id = Number(q.addTeamIssue.run(...v, user.id).lastInsertRowid);
+    notify(adminIds().filter((x) => x !== user.id), "새 이슈", v[2], "/#/volunteers/team");
+    return ok(201, { id, issues: issues() });
+  }
   const im = path.match(/^\/api\/team\/issues\/(\d+)(\/photos)?$/);
   if (im) {
     const x = q.teamIssue.get(Number(im[1]));
@@ -1648,7 +1668,9 @@ async function teamRoute(req, res, user, path, method) {
       if (has(b, "status")) {
         if (!admin) return ok(403, { error: "처리 상태는 관리자가 바꿔요." });
         if (!["new", "doing", "done"].includes(b.status)) throw bad("처리 상태를 확인해 주세요.");
-        q.setTeamIssueStatus.run(b.status, has(b, "reply") ? text(b.reply, 1000, "답") || "" : x.reply, x.id);
+        const reply = has(b, "reply") ? text(b.reply, 1000, "답") || "" : x.reply;
+        q.setTeamIssueStatus.run(b.status, reply, x.id);
+        if (x.created_by && x.created_by !== user.id && (b.status !== x.status || reply !== x.reply)) notify([x.created_by], `이슈 ${{ new: "접수", doing: "처리 중", done: "완료" }[b.status]}`, x.title, "/#/tissues");
         return ok(200, { issues: issues() });
       }
       if (!own && !admin) return ok(403, { error: "올린 사람과 관리자만 고칠 수 있어요." });
@@ -1798,6 +1820,20 @@ function ledgerOut(l, p, user) {
 const NOTICE_AUDIENCES = ["all", "staff", "lead", "admin"];
 const noticeAudiences = (u) => (u.volunteer ? ["all"] : u.role === "admin" ? NOTICE_AUDIENCES : u.director ? ["all", "staff", "lead"] : ["all", "staff"]);
 const noticeVisible = (u, n) => noticeAudiences(u).includes(n.audience);
+// ---- 알림 보내기: 받는 사람(계정 id)마다 그 사람 화면에 맞는 주소로. 기다리지 않고 뒤에서 보냄
+// url(u) 은 받는 사람 계정으로 주소를 고름 (직원 화면 #/notices · 봉사자 화면 #/vnotices 등)
+function notify(userIds, title, body, url) {
+  const ids = [...new Set(userIds)].filter(Boolean);
+  if (!ids.length) return;
+  const subs = db.prepare(`SELECT s.*, u.volunteer, u.vol_kind FROM push_subs s JOIN users u ON u.id = s.user_id WHERE s.user_id IN (${ids.map(() => "?").join(",")})`).all(...ids);
+  if (!subs.length) return;
+  Promise.all(subs.map((s) => sendPush(db, VAPID, s, { title, body: String(body || "").slice(0, 140), url: typeof url === "function" ? url(s) : url || "/", tag: title }, PUSH_SUBJECT)))
+    .then((r) => console.log(`[push] ${r.filter((c) => c >= 200 && c < 300).length}/${r.length}`))
+    .catch(() => {});
+}
+const allUsers = () => db.prepare("SELECT * FROM users").all();
+const teamVolunteerIds = () => allUsers().filter((u) => u.volunteer && (u.vol_kind === "team" || u.vol_kind === "both")).map((u) => u.id);
+const adminIds = () => allUsers().filter((u) => u.role === "admin").map((u) => u.id);
 const unreadOf = (u) => q.unreadNotices.get(JSON.stringify(noticeAudiences(u)), u.id).n;
 // 수정 기록: 사람이 읽는 한 줄로 남김
 const logStock = (ledgerId, action, summary, user) => q.addStockHistory.run(ledgerId, action, String(summary).slice(0, 500), user.id, user.name);
@@ -1953,6 +1989,26 @@ async function api(req, res, path) {
 
   const user = auth(req);
   if (!user) return send(res, 401, { error: "로그인이 필요해요." });
+  // 알림 구독 (직원·봉사자 모두): 기기마다 하나, 같은 주소는 지금 계정으로 옮김
+  if (path === "/api/push/key" && method === "GET") return send(res, 200, { key: VAPID.publicKey });
+  if (path === "/api/push/subscribe" && method === "POST") {
+    const b = await readJson(req);
+    const endpoint = String(b.endpoint || ""), p256dh = String(b.keys?.p256dh || ""), authKey = String(b.keys?.auth || "");
+    if (!pushEndpointOk(endpoint)) throw bad("알림 주소를 확인할 수 없어요.");
+    if (!/^[A-Za-z0-9_-]{80,100}$/.test(p256dh) || !/^[A-Za-z0-9_-]{16,40}$/.test(authKey)) throw bad("알림 키를 확인할 수 없어요.");
+    db.prepare("INSERT INTO push_subs (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?) ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, p256dh = excluded.p256dh, auth = excluded.auth").run(user.id, endpoint, p256dh, authKey);
+    return send(res, 200, { ok: true });
+  }
+  if (path === "/api/push/unsubscribe" && method === "POST") {
+    db.prepare("DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?").run(String((await readJson(req)).endpoint || ""), user.id);
+    return send(res, 200, { ok: true });
+  }
+  if (path === "/api/push/test" && method === "POST") {
+    const n = db.prepare("SELECT COUNT(*) AS n FROM push_subs WHERE user_id = ?").get(user.id).n;
+    if (!n) return send(res, 400, { error: "이 계정에 켜 둔 알림이 없어요." });
+    notify([user.id], "P-Schedule 알림 시험", "알림이 잘 와요.", "/");
+    return send(res, 200, { ok: true, devices: n });
+  }
   // 봉사자: 내 계정 정보·비밀번호·로그아웃과 봉사자 전용 API 만. 직원 데이터(조직도·연락처·일정 등)는 입구에서 막음
   if (user.volunteer) {
     // 부서·팀 봉사자 권한이 둘 다 있으면 다시 로그인 없이 쪽을 바꿈 (이 세션만)
@@ -2606,6 +2662,7 @@ async function api(req, res, path) {
     if (!isAdmin) return send(res, 403, { error: "공지는 관리자만 쓸 수 있어요." });
     const r = q.addNotice.run(...noticeInput(await readJson(req)), user.id);
     q.readNotice.run(user.id, Number(r.lastInsertRowid)); // 쓴 사람은 읽은 것으로
+    { const n = q.notice.get(Number(r.lastInsertRowid)); if (n) notify(allUsers().filter((u) => u.id !== user.id && noticeVisible(u, n)).map((u) => u.id), "새 공지", n.title, (s) => (s.volunteer ? `/#/vnotices/${n.id}` : `/#/notices/${n.id}`)); }
     return send(res, 201, { id: Number(r.lastInsertRowid) });
   }
   const nm = path.match(/^\/api\/notices\/(\d+)(\/comments)?$/);

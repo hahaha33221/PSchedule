@@ -23,3 +23,11 @@ private/
 
 # 내부 기획 문서 (봉사자 화면 구성안 등), 커밋하지 않음
 Rosary_Site_*.md
+
+# 안드로이드 앱 빌드 결과·서명 키 (키는 ~/.pschedule-android 에만)
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.jks
+*.keystore
