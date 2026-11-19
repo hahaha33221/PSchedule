@@ -644,7 +644,7 @@ jobs:
           SH=$(curl -fs -H "$TH" -XPOST -d '{"date":"2030-06-02","need":2}' $B/team/shifts | node -pe 'JSON.parse(require("fs").readFileSync(0)).shifts.find(s=>s.date==="2030-06-02").id')
           curl -fs -H "$TH" -XPOST -d '{"on":true}' $B/team/shifts/$SH/signup | node -e 'const s=JSON.parse(require("fs").readFileSync(0)).shifts.find(x=>x.id==='$SH');if(!s.mine||s.people[0]!=="팀봉사")process.exit(1)'
           curl -fs -H "$TH" -XPOST -d '{"date":"2030-06-02","qty":40}' $B/team/daily | node -e 'if(JSON.parse(require("fs").readFileSync(0)).daily[0].qty!==40)process.exit(1)'
-          curl -fs -H "$TH" -XPUT -d '{"date":"2030-06-03","on":true}' $B/team/avail | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.mine[0]!=="2030-06-03"||d.counts["2030-06-03"]!==1)process.exit(1)'
+          curl -fs -H "$TH" -XPUT -d '{"date":"2030-06-03","on":true}' $B/team/avail | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.mine[0]!=="2030-06-03"||d.counts["2030-06-03"]!==1||d.people["2030-06-03"].join()!=="봉사")process.exit(1)'
           # 봉사자 권한 겹치기(부서·팀): 둘 다 로그인 가능, 세션마다 한쪽 권한만, 메뉴에서 바꿈, 없는 권한으로는 못 바꿈. 관리자는 겹치지 않음
           BPW=$(curl -fs -H "$H" -XPOST -d '{"login":"bothv","name":"겸직봉사","role":"volunteer","volKinds":["dept","team"]}' $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).password')
           curl -fs -H "$H" $B/admin/users | node -e 'const u=JSON.parse(require("fs").readFileSync(0)).users.find(x=>x.login==="bothv");if(u.volKinds.join()!=="dept,team")process.exit(1)'

@@ -390,6 +390,7 @@ const q = {
   teamShiftLeave: db.prepare("DELETE FROM team_shift_users WHERE shift_id = ? AND user_id = ?"),
   teamAvailMine: db.prepare("SELECT date FROM team_avail WHERE user_id = ? AND date >= ? ORDER BY date"),
   teamAvailCounts: db.prepare("SELECT date, COUNT(*) AS n FROM team_avail WHERE date >= ? GROUP BY date"),
+  teamAvailPeople: db.prepare("SELECT a.date, u.name FROM team_avail a JOIN users u ON u.id = a.user_id WHERE a.date >= ? ORDER BY a.date, u.name"),
   addTeamAvail: db.prepare("INSERT OR IGNORE INTO team_avail (user_id, date) VALUES (?, ?)"),
   delTeamAvail: db.prepare("DELETE FROM team_avail WHERE user_id = ? AND date = ?"),
   teamDocs: db.prepare("SELECT * FROM team_docs ORDER BY category, id"),
@@ -1389,6 +1390,13 @@ async function inspectionRoute(req, res, user, path, method, base) {
 // 관리자도 같은 API 를 씀 (연락처 입력·이슈 처리·자료실 관리는 관리자만)
 const today = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10); // 한국 날짜
 const TEAM_STATUS = ["plan", "done", "delay"];
+// 성 빼고 이름만: 띄어 쓴 한글 이름은 마지막 낱말(영문은 첫 낱말), 한글 2~3자는 첫 글자, 4자 이상은 앞 두 글자(남궁·선우 같은 두 글자 성)를 뺌
+const givenName = (name) => {
+  const n = String(name || "").trim();
+  if (/\s/.test(n)) { const w = n.split(/\s+/); return /[A-Za-z]/.test(n) ? w[0] : w.pop(); } // 영문은 앞 낱말이 이름
+  if (!/^[가-힣]+$/.test(n) || n.length < 2) return n;
+  return n.length >= 4 ? n.slice(2) : n.slice(1);
+};
 const teamQty = (v, label) => { if (v === "" || v == null) return null; const n = Number(v); if (!Number.isInteger(n) || n < 0 || n > 100000000) throw bad(`${label}은 0 이상의 숫자로 적어 주세요.`); return n; };
 const optDate = (v, label) => { if (v === "" || v == null) return ""; if (!isDate(v)) throw bad(`${label}를 확인해 주세요.`); return v; };
 const optTime = (v) => { const t = v == null ? "" : String(v); if (t && !/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) throw bad("시간을 확인해 주세요."); return t; };
@@ -1513,12 +1521,18 @@ async function teamRoute(req, res, user, path, method) {
     return ok(405, { error: "Method not allowed" });
   }
   // 봉사 가능한 날 (내 것만 고침, 다른 사람은 날짜별 인원 수만)
-  if (path === "/api/team/avail" && method === "GET") return ok(200, { mine: q.teamAvailMine.all(user.id, today()).map((x) => x.date), counts: Object.fromEntries(q.teamAvailCounts.all(today()).map((x) => [x.date, x.n])) });
+  // 봉사 가능한 날: 날짜별로 성을 뺀 이름만 (팀 봉사자와 관리자에게만)
+  const availOut = () => {
+    const people = {};
+    for (const x of q.teamAvailPeople.all(today())) (people[x.date] ||= []).push(givenName(x.name));
+    return { mine: q.teamAvailMine.all(user.id, today()).map((x) => x.date), counts: Object.fromEntries(Object.entries(people).map(([d, l]) => [d, l.length])), people };
+  };
+  if (path === "/api/team/avail" && method === "GET") return ok(200, availOut());
   if (path === "/api/team/avail" && method === "PUT") {
     const b = await readJson(req);
     if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
     if (b.on) q.addTeamAvail.run(user.id, b.date); else q.delTeamAvail.run(user.id, b.date);
-    return ok(200, { mine: q.teamAvailMine.all(user.id, today()).map((x) => x.date), counts: Object.fromEntries(q.teamAvailCounts.all(today()).map((x) => [x.date, x.n])) });
+    return ok(200, availOut());
   }
   // 이슈: 봉사자가 등록(사진 4장), 관리자가 처리 상태·답
   const issueIn = (b) => {

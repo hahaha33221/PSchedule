@@ -6105,43 +6105,64 @@
       ])
     ];
   }
-  // 캘린더: 한 달씩, 교육 일정 · 검수 근무일 · 내가 봉사 가능한 날
+  // 캘린더: 달력 모양(한 달), 날짜를 누르면 아래에 그날 교육·검수 근무와 '봉사 가능'(성 뺀 이름)
   async function teamCalendar() {
     document.title = `캘린더 · ${TITLE}`;
     const [o, sh, av] = await Promise.all([api("/team/orgs"), api("/team/shifts"), api("/team/avail")]);
-    let avail = av, month = today().slice(0, 7);
+    let avail = av, month = today().slice(0, 7), picked = today();
     const box = h("div", { class: "stack" });
+    const eduOf = (ymd) => o.orgs.filter((x) => !x.tableOnly && x.date === ymd), shiftsOf = (ymd) => sh.shifts.filter((x) => x.date === ymd);
     const draw = () => {
       const [y, m] = month.split("-").map(Number);
-      const days = new Date(y, m, 0).getDate();
-      const list = [];
+      const days = new Date(y, m, 0).getDate(), first = new Date(y, m - 1, 1).getDay();
+      const ymdOf = (d) => `${month}-${String(d).padStart(2, "0")}`;
+      const cells = [];
+      for (let i = 0; i < first; i++) cells.push(h("div", { class: "tcal__cell is-blank", "aria-hidden": "true" }));
       for (let d = 1; d <= days; d++) {
-        const ymd = `${month}-${String(d).padStart(2, "0")}`;
-        const edu = o.orgs.filter((x) => !x.tableOnly && x.date === ymd), shifts = sh.shifts.filter((x) => x.date === ymd);
-        const mine = avail.mine.includes(ymd), cnt = avail.counts[ymd] || 0, past = ymd < today();
-        if (!edu.length && !shifts.length && !mine && past) continue;
-        list.push(h("li", { class: "team-day" + (ymd === today() ? " is-today" : "") + (past ? " is-past" : "") }, [
-          h("div", { class: "team-day__when" }, h("strong", { text: volDay(ymd) })),
-          h("div", { class: "team-day__what" }, [
-            ...edu.map((x) => h("div", {}, [statusTag("교육", "is-edu"), ` ${x.org}`, h("small", { class: "muted", text: [x.startTime, x.place, x.helper ? `담당 ${x.helper}` : ""].filter(Boolean).map((t) => ` · ${t}`).join("") })])),
-            ...shifts.map((x) => h("div", {}, [statusTag("검수 근무", "is-insp"), ` ${x.startTime || ""} 필요 ${x.need}명 · 신청 ${x.people.length}명`, x.mine ? h("small", { class: "muted", text: " · 내가 신청" }) : null])),
-            !edu.length && !shifts.length ? h("span", { class: "muted small", text: cnt ? `봉사 가능 ${cnt}명` : "" }) : cnt ? h("small", { class: "muted", text: `봉사 가능 ${cnt}명` }) : null
-          ]),
-          past ? h("span") : h("button", { class: "btn btn--sm " + (mine ? "btn--primary" : "btn--ghost"), type: "button", "aria-pressed": String(mine), text: mine ? "봉사 가능 ✓" : "봉사 가능", onclick: async () => { avail = await act(() => api("/team/avail", { method: "PUT", body: { date: ymd, on: !mine } })); draw(); } })
+        const ymd = ymdOf(d), edu = eduOf(ymd), shifts = shiftsOf(ymd), people = avail.people?.[ymd] || [], dow = (first + d - 1) % 7;
+        cells.push(h("button", {
+          type: "button", class: "tcal__cell" + (ymd === today() ? " is-today" : "") + (ymd === picked ? " is-picked" : "") + (ymd < today() ? " is-past" : "") + (dow === 0 ? " is-sun" : dow === 6 ? " is-sat" : ""),
+          "aria-pressed": String(ymd === picked), "aria-label": `${volDay(ymd)}${edu.length ? ` 교육 ${edu.length}건` : ""}${shifts.length ? ` 검수 근무 ${shifts.length}건` : ""}${people.length ? ` 봉사 가능 ${people.length}명` : ""}`,
+          onclick: () => { picked = ymd; draw(); }
+        }, [
+          h("span", { class: "tcal__num", text: String(d) }),
+          ...edu.slice(0, 2).map((x) => h("span", { class: "tcal__ev is-edu", text: x.org })),
+          edu.length > 2 ? h("span", { class: "tcal__more", text: `+${edu.length - 2}` }) : null,
+          ...shifts.map((x) => h("span", { class: "tcal__ev is-insp", text: `검수 ${x.people.length}/${x.need}` })),
+          people.length ? h("span", { class: "tcal__avail" + (avail.mine.includes(ymd) ? " is-mine" : ""), text: `가능 ${people.length}` }) : null
         ]));
       }
-      const shift = (n) => { const d = new Date(y, m - 1 + n, 1); month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; draw(); };
+      const shift = (n) => { const d = new Date(y, m - 1 + n, 1); month = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`; picked = month === today().slice(0, 7) ? today() : `${month}-01`; draw(); };
+      // 고른 날 자세히
+      const edu = eduOf(picked), shifts = shiftsOf(picked), people = avail.people?.[picked] || [], mine = avail.mine.includes(picked), past = picked < today();
+      const detail = h("section", { class: "card vol__card tcal__detail" }, [
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: volDay(picked) }), picked === today() ? statusTag("오늘", "is-plan") : null]),
+        edu.length || shifts.length ? h("ul", { class: "tcal__list" }, [
+          ...edu.map((x) => h("li", {}, [statusTag("교육", "is-edu"), h("strong", { text: ` ${x.org}` }), h("small", { class: "muted", text: [x.startTime, x.place, x.helper ? `담당 ${x.helper}` : "", TEAM_STATUS[x.status]].filter(Boolean).map((t) => ` · ${t}`).join("") })])),
+          ...shifts.map((x) => h("li", {}, [statusTag("검수 근무", "is-insp"), ` ${x.startTime || ""} 필요 ${x.need}명 · 신청 ${x.people.length}명`, x.people.length ? h("small", { class: "muted", text: ` (${x.people.join(", ")})` }) : null, h("a", { class: "link-btn small", href: "#/tinsp/shifts", text: " 근무 신청" })]))
+        ]) : h("p", { class: "muted small", text: "이날은 교육·검수 일정이 없어요." }),
+        h("div", { class: "tcal__availbox" }, [
+          h("div", {}, [h("strong", { text: "봉사 가능" }), h("span", { class: "muted small", text: people.length ? ` ${people.length}명` : " 아직 없어요" })]),
+          people.length ? h("div", { class: "tcal__names" }, people.map((n) => h("span", { class: "tcal__name", text: n }))) : null,
+          past ? h("p", { class: "muted small", text: "지난 날은 바꿀 수 없어요." }) : h("button", { class: "btn btn--sm " + (mine ? "btn--primary" : "btn--ghost"), type: "button", "aria-pressed": String(mine), text: mine ? "봉사 가능 ✓ (누르면 취소)" : "이날 봉사할 수 있어요", onclick: async () => { avail = await act(() => api("/team/avail", { method: "PUT", body: { date: picked, on: !mine } })); draw(); } })
+        ])
+      ]);
       fill(box,
         h("div", { class: "filters" }, [
           h("button", { class: "icon-btn", type: "button", "aria-label": "이전 달", html: ICON.left, onclick: () => shift(-1) }),
           h("strong", { text: `${y}년 ${m}월` }),
           h("button", { class: "icon-btn", type: "button", "aria-label": "다음 달", html: ICON.right, onclick: () => shift(1) }),
-          h("span", { class: "muted small filters__end", text: "봉사할 수 있는 날에 '봉사 가능'을 눌러 주세요. 다른 사람에게는 인원 수만 보여요." })
+          month !== today().slice(0, 7) ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "오늘", onclick: () => { month = today().slice(0, 7); picked = today(); draw(); } }) : null,
+          h("span", { class: "muted small filters__end", text: "날짜를 누르면 아래에 그날 일정과 봉사 가능한 사람이 나와요." })
         ]),
-        list.length ? h("ul", { class: "card team-days" }, list) : h("div", { class: "card empty", text: "이 달에는 일정이 없어요." }));
+        h("div", { class: "card tcal" }, [
+          h("div", { class: "tcal__head" }, ["일", "월", "화", "수", "목", "금", "토"].map((t, i) => h("span", { class: i === 0 ? "is-sun" : i === 6 ? "is-sat" : null, text: t }))),
+          h("div", { class: "tcal__grid" }, cells)
+        ]),
+        detail);
     };
     draw();
-    return [...teamHead("캘린더", "교육 일정과 검수 근무일, 내가 봉사할 수 있는 날을 봐요."), box];
+    return [...teamHead("캘린더", "교육 일정과 검수 근무일을 보고, 봉사할 수 있는 날을 표시해요."), box];
   }
   // 담당 수도회 · 교육 · 문의 · 원자재 배분(조회) · 제작 진행
   async function teamOrgs() {
