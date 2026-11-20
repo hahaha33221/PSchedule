@@ -33,7 +33,8 @@ const BACKUP_DIR = resolve(process.env.BACKUP_DIR || join(DATA_DIR, "backups"));
 const BACKUP_KEEP_DAYS = process.env.BACKUP_KEEP_DAYS === undefined ? 30 : Number(process.env.BACKUP_KEEP_DAYS) || 0;
 const BACKUP_HOUR = Number(process.env.BACKUP_HOUR ?? 4);
 
-const SESSION_DAYS = 14; // 로그인 유지 기간
+const SESSION_DAYS = 30; // 자동 로그인 유지 기간 (쓰는 동안 계속 늘어남)
+const SESSION_SHORT_HOURS = 12; // 자동 로그인을 끈 로그인 (창을 닫으면 화면에서도 지움)
 const PASSWORD_MIN = 6, PASSWORD_MAX = 64;
 const MAX_BODY = 64 * 1024;
 const LIMITS = {
@@ -75,10 +76,11 @@ const q = {
   userByLogin: db.prepare("SELECT * FROM users WHERE login = ?"),
   userById: db.prepare("SELECT * FROM users WHERE id = ?"),
   session: db.prepare(`
-    SELECT u.id, u.login, u.role, u.director, u.volunteer, u.vol_kind, u.vol_leader, s.vol_mode, u.name, u.unit_id, u.pw_changed, u.pw_hash FROM sessions s
+    SELECT u.id, u.login, u.role, u.director, u.volunteer, u.vol_kind, u.vol_leader, s.vol_mode, s.remember, s.expires_at, u.name, u.unit_id, u.pw_changed, u.pw_hash FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.token_hash = ? AND s.expires_at > ?`),
-  addSession: db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at, vol_mode) VALUES (?, ?, ?, ?)"),
+  addSession: db.prepare("INSERT INTO sessions (token_hash, user_id, expires_at, vol_mode, remember) VALUES (?, ?, ?, ?, ?)"),
+  extendSession: db.prepare("UPDATE sessions SET expires_at = ? WHERE token_hash = ?"),
   setSessionMode: db.prepare("UPDATE sessions SET vol_mode = ? WHERE token_hash = ?"),
   delSession: db.prepare("DELETE FROM sessions WHERE token_hash = ?"),
   delOtherSessions: db.prepare("DELETE FROM sessions WHERE user_id = ? AND token_hash <> ?"),
@@ -600,8 +602,12 @@ function readJson(req) {
 function auth(req) {
   const m = String(req.headers.authorization || "").match(/^Bearer\s+(\S+)$/i);
   if (!m) return null;
-  const u = q.session.get(sha256(m[1]), Date.now());
+  const hash = sha256(m[1]), now = Date.now();
+  const u = q.session.get(hash, now);
   if (!u) return null;
+  // 자동 로그인: 쓰는 동안은 끊기지 않게, 남은 기간이 절반 아래면 다시 30일로
+  if (u.remember && u.expires_at - now < (SESSION_DAYS / 2) * 86400 * 1000) q.extendSession.run(now + SESSION_DAYS * 86400 * 1000, hash);
+  delete u.remember; delete u.expires_at;
   u.vol_kinds = volKindsOf(u);
   if (u.volunteer) u.vol_kind = u.vol_kinds.includes(u.vol_mode) ? u.vol_mode : u.vol_kinds[0]; // 지금 쓰는 쪽 하나만 권한으로
   return u;
@@ -1960,7 +1966,8 @@ async function api(req, res, path) {
   if (path === "/api/health" && method === "GET") return send(res, 200, { ok: true });
 
   if (path === "/api/login" && method === "POST") {
-    const { login, password, as } = await readJson(req);
+    const { login, password, as, remember: rememberIn } = await readJson(req);
+    const remember = rememberIn !== false; // 예전 화면(값 없음)은 자동 로그인처럼
     const id = normalizeLogin(login);
     const keys = [`id+ip:${id}|${clientIp(req)}`, "id:" + id, "real:" + realIp(req)];
     if (tooMany(...keys)) return send(res, 429, { error: "로그인 시도가 너무 많아요. 10분 뒤에 다시 시도해 주세요." });
@@ -1981,8 +1988,8 @@ async function api(req, res, path) {
     }
     const volMode = !user.volunteer ? "" : as === "team" ? "team" : as === "volunteer" ? "dept" : kinds[0];
     const token = crypto.randomBytes(32).toString("base64url");
-    const expiresAt = Date.now() + SESSION_DAYS * 86400 * 1000;
-    q.addSession.run(sha256(token), user.id, expiresAt, volMode);
+    const expiresAt = Date.now() + (remember ? SESSION_DAYS * 86400 * 1000 : SESSION_SHORT_HOURS * 3600 * 1000);
+    q.addSession.run(sha256(token), user.id, expiresAt, volMode, remember ? 1 : 0);
     q.touchLogin.run(user.id);
     return send(res, 200, { token, expiresAt, user: publicUser({ ...user, vol_kinds: kinds, vol_kind: volMode || user.vol_kind }) });
   }

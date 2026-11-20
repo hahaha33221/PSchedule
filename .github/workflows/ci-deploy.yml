@@ -50,6 +50,15 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' "$B/events?from=2026-01-01&to=2026-01-31")" = 401
           T=$(curl -fs -XPOST -H 'content-type: application/json' -d '{"login":"master","password":"ci-pass-1"}' $B/login | node -pe 'JSON.parse(require("fs").readFileSync(0)).token')
           H="Authorization: Bearer $T"
+          # 자동 로그인: 켜면(값 없음 포함) 30일, 끄면 12시간 세션. 끈 세션도 바로 쓸 수 있음
+          ttl() { curl -fs -XPOST -H 'content-type: application/json' -d "$1" $B/login | node -pe 'const r=JSON.parse(require("fs").readFileSync(0));Math.round((r.expiresAt-Date.now())/3600000)'; }
+          test "$(ttl '{"login":"master","password":"ci-pass-1","remember":true}')" -ge 719
+          test "$(ttl '{"login":"master","password":"ci-pass-1"}')" -ge 719
+          test "$(ttl '{"login":"master","password":"ci-pass-1","remember":false}')" -le 12
+          ST=$(curl -fs -XPOST -H 'content-type: application/json' -d '{"login":"master","password":"ci-pass-1","remember":false}' $B/login | node -pe 'JSON.parse(require("fs").readFileSync(0)).token')
+          curl -fs -H "Authorization: Bearer $ST" $B/me | grep -q '"login":"master"'
+          curl -fs -H "Authorization: Bearer $ST" -XPOST $B/logout >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $ST" $B/me)" = 401
           curl -fs -H "$H" -XPOST -d '{"title":"테스트","startDate":"2026-01-10"}' $B/events | grep -q '"id":1'
           curl -fs -H "$H" -XPOST -d '{"body":"댓글"}' $B/events/1/comments | grep -q '댓글'
           curl -fs -H "$H" "$B/events?from=2026-01-01&to=2026-01-31" | grep -q '"comments":1'

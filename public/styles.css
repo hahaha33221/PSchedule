@@ -258,6 +258,9 @@ td > .badge:first-child { margin-left: 0; }
 .auth__card > .muted { margin: -6px 0 6px; }
 .auth__title { font-size: 20px; }
 .auth__back { align-self: center; font-size: 13px; }
+.auth__opts { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 14px; }
+.auth__opts .check { font-weight: 400; }
+.auth__note { margin: -6px 0 0; }
 .auth__pick { display: flex; align-items: center; gap: 12px; width: 100%; padding: 14px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
 .auth__pick:hover, .auth__pick:focus-visible { border-color: var(--primary); background: var(--primary-soft); }
 .auth__pick-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }

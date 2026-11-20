@@ -33,8 +33,24 @@
     }
   };
 
+  // 로그인 토큰: 자동 로그인이면 localStorage(브라우저를 닫아도 유지), 아니면 sessionStorage(창을 닫으면 사라짐)
+  const tokenStore = {
+    get() {
+      try { return localStorage.getItem("ps.token") || sessionStorage.getItem("ps.token") || ""; } catch (e) { return ""; }
+    },
+    set(token, keep) {
+      try {
+        (keep ? sessionStorage : localStorage).removeItem("ps.token");
+        (keep ? localStorage : sessionStorage).setItem("ps.token", token);
+      } catch (e) { /* 저장 불가 환경 무시 */ }
+    },
+    clear() {
+      try { localStorage.removeItem("ps.token"); sessionStorage.removeItem("ps.token"); } catch (e) { /* 무시 */ }
+    }
+  };
+
   const state = {
-    token: store.get("ps.token", ""),
+    token: tokenStore.get(),
     user: null,
     team: [],
     tags: [],
@@ -629,13 +645,25 @@
     const info = LOGIN_AS[mode];
     volunteerTheme(mode !== "staff", mode === "team");
     const err = errorLine();
-    const login = h("input", { name: "login", autocomplete: "username", autocapitalize: "none", spellcheck: "false", required: true, value: keepId || "" });
+    const savedId = store.get("ps.savedId", "");
+    const login = h("input", { name: "login", autocomplete: "username", autocapitalize: "none", spellcheck: "false", required: true, value: keepId || savedId });
     const pw = h("input", { name: "password", type: "password", autocomplete: "current-password", required: true });
     const submit = h("button", { class: "btn btn--primary btn--block", type: "submit", text: "로그인" });
+    // 아이디 저장: 이 기기에 아이디만 기억 (비밀번호는 저장하지 않음)
+    // 자동 로그인: 브라우저·앱을 닫아도 로그인 유지 (끄면 창을 닫을 때 로그아웃). 처음에는 설치한 앱에서만 켜 둠
+    const remId = h("input", { type: "checkbox", checked: !!savedId });
+    const autoPref = store.get("ps.autoLogin", "");
+    const auto = h("input", { type: "checkbox", checked: autoPref ? autoPref === "1" : isStandalone() });
+    const opts = h("div", { class: "auth__opts" }, [
+      h("label", { class: "check" }, [remId, "아이디 저장"]),
+      h("label", { class: "check", title: "공용 PC 에서는 끄세요" }, [auto, "자동 로그인"])
+    ]);
+    const autoNote = h("p", { class: "auth__note muted small", text: "공용 PC·다른 사람 기기에서는 자동 로그인을 끄세요.", hidden: !auto.checked });
+    auto.addEventListener("change", () => { autoNote.hidden = !auto.checked; });
     const form = h("form", { class: "auth__card stack", novalidate: true }, [
       authBrand(),
       h("h1", { class: "auth__title", text: info.title }),
-      field("아이디", login), field("비밀번호", pw), err, submit,
+      field("아이디", login), field("비밀번호", pw), opts, autoNote, err, submit,
       h("button", { class: "link-btn auth__back", type: "button", text: "로그인 종류 다시 고르기", onclick: () => { store.remove("ps.loginAs"); renderLoginChoice(); } }),
       h("p", { class: "auth__foot", text: "계정이 없거나 비밀번호를 잊었다면 관리자에게 문의해 주세요." })
     ]);
@@ -645,9 +673,11 @@
       if (!login.value.trim() || !pw.value) return showError(err, "아이디와 비밀번호를 적어 주세요.");
       busy(submit, async () => {
         try {
-          const r = await api("/login", { method: "POST", body: { login: login.value, password: pw.value, as: mode } });
+          const r = await api("/login", { method: "POST", body: { login: login.value, password: pw.value, as: mode, remember: auto.checked } });
           state.token = r.token;
-          store.set("ps.token", r.token);
+          tokenStore.set(r.token, auto.checked);
+          store.set("ps.autoLogin", auto.checked ? "1" : "0");
+          if (remId.checked) store.set("ps.savedId", login.value.trim()); else store.remove("ps.savedId");
           store.set("ps.loginAs", mode);
           await boot();
         } catch (ex) {
@@ -661,7 +691,7 @@
       });
     });
     app.replaceChildren(h("main", { class: "auth" }, form));
-    (keepId ? pw : login).focus();
+    (keepId || savedId ? pw : login).focus();
   }
   function renderLoginChoice(message) {
     volunteerTheme(false);
@@ -725,7 +755,7 @@
     state.user = null;
     state.peek = null;
     state.volMenu = null;
-    store.remove("ps.token");
+    tokenStore.clear();
     closeDialog();
     closePop();
     renderLogin(expired ? "로그인 시간이 지났어요. 다시 로그인해 주세요." : "");
