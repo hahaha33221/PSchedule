@@ -1111,7 +1111,9 @@
     // 관리자 전용 화면: 맨 위 주황 줄
     fill(layout.main, ADMIN_PAGES.has(name) ? h("div", { class: "admin-bar", "aria-hidden": "true" }) : null, bar, content);
   }
-  const loading = () => h("div", { class: "loading", text: "불러오는 중…" });
+  // 불러오는 중: P-Schedule 로고가 살짝 움직이며 표시
+  const loading = (full) => h("div", { class: "loading" + (full ? " loading--full" : ""), role: "status" }, h("div", { class: "loading__inner" }, [
+    h("img", { class: "loading__logo", src: "favicon.svg", alt: "" }), h("span", { class: "loading__text", text: "불러오는 중…" })]));
   const failed = (e) => h("div", { class: "card empty", text: e.message });
 
   // 고친 뒤: 지금 화면과 패널을 다시 불러옴
@@ -7039,7 +7041,7 @@
   window.addEventListener("hashchange", render);
 
   async function boot() {
-    app.replaceChildren(h("div", { class: "loading loading--full", text: "불러오는 중…" }));
+    app.replaceChildren(loading(true));
     const r = await api("/me");
     state.user = r.user; state.team = r.team; state.units = r.units || []; state.tags = r.tags; state.calendars = r.calendars || []; state.rooms = r.rooms || []; state.unreadNotices = r.unreadNotices || 0;
     setCategories(r.categories);

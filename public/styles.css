@@ -119,7 +119,14 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .card__title { font-size: 16px; font-weight: 700; display: inline-flex; align-items: center; gap: 6px; }
 .empty { color: var(--muted); text-align: center; padding: 28px 16px; margin: 0; }
 .loading { color: var(--muted); padding: 40px 0; text-align: center; }
-.loading--full { min-height: 100dvh; display: grid; place-items: center; }
+.loading__inner { display: inline-flex; flex-direction: column; align-items: center; gap: 10px; }
+.loading__logo { width: 36px; height: 36px; animation: logo-bob 1.1s ease-in-out infinite; }
+.loading__text { font-size: 13px; }
+.loading--full { min-height: 100dvh; display: grid; place-items: center; padding: 0; }
+.loading--full .loading__logo { width: 64px; height: 64px; }
+.loading--full .loading__text { font-size: 14px; font-weight: 600; letter-spacing: .02em; }
+@keyframes logo-bob { 0%, 100% { transform: translateY(0) scale(1); opacity: 1; } 50% { transform: translateY(-6px) scale(1.04); opacity: .75; } }
+@media (prefers-reduced-motion: reduce) { .loading__logo { animation: pulse 1.6s ease-in-out infinite; } }
 .count { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .count--lg { background: var(--surface-3); color: var(--ink-2); }
 
