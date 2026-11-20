@@ -7081,20 +7081,26 @@
     if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToBytes(key) });
     await api("/push/subscribe", { method: "POST", body: sub.toJSON() });
     store.set("ps.pushAsked", "1");
+    store.set("ps.pushWanted", "1"); // 이 기기에서 알림을 켜 둠 (브라우저가 구독을 끊어도 다시 이어 붙임)
   }
   // 이미 구독한 기기: 권한을 다시 묻지 않고 서버에 지금 계정으로 다시 묶음 (로그아웃 때 서버 쪽만 지워서, 다시 로그인하면 여기서 되살림)
   async function pushRebind(sub) { await api("/push/subscribe", { method: "POST", body: sub.toJSON() }); }
   // quietServerOnly: 로그아웃 때는 서버 구독만 지우고 기기 권한은 그대로
   async function pushOff(quietServerOnly) {
+    if (!quietServerOnly) store.remove("ps.pushWanted");
     const sub = await pushSub();
     if (!sub) return;
     await api("/push/unsubscribe", { method: "POST", body: { endpoint: sub.endpoint } }).catch(() => {});
-    if (!quietServerOnly) await sub.unsubscribe();
+    if (!quietServerOnly) { await sub.unsubscribe(); store.remove("ps.pushWanted"); }
   }
   // 로그인 때: 서비스 워커 등록, 이미 켠 기기면 지금 계정으로 다시 묶고, 아니면 한 번 권유
   async function pushBoot() {
     await swReg().catch(() => null);
-    if (pushSupported() && Notification.permission === "granted") { const sub = await pushSub(); if (sub) return pushRebind(sub); }
+    if (pushSupported() && Notification.permission === "granted") {
+      const sub = await pushSub();
+      if (sub) return pushRebind(sub);
+      if (store.get("ps.pushWanted", "")) return pushOn(); // 켜 뒀는데 브라우저가 구독을 끊음 → 다시 구독
+    }
     if (store.get("ps.pushAsked", "") || document.querySelector(".push-ask")) return;
     const canPush = pushSupported() && Notification.permission === "default";
     const iosGuide = isIos() && !isStandalone();
@@ -7149,6 +7155,8 @@
     const box = h("div", { class: "stack" });
     const draw = async () => {
       let sub = await pushSub().catch(() => null);
+      // 켜 둔 기기인데 브라우저가 구독을 끊었으면(권한은 그대로) 알아서 다시 켬 → '알림 켜기'를 또 누르지 않아도 됨
+      if (!sub && pushSupported() && Notification.permission === "granted" && store.get("ps.pushWanted", "")) sub = await pushOn().then(pushSub, () => null);
       // 기기에는 구독이 있는데 서버에 없을 수 있어(로그아웃 등) 열 때마다 다시 묶음. 실패하면 꺼진 것으로 보여 줌
       if (sub && !(await pushRebind(sub).then(() => true, () => false))) sub = null;
       const prefs = await api("/push/prefs").catch(() => null);

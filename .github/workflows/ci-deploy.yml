@@ -727,6 +727,8 @@ jobs:
           J="{\"endpoint\":\"https://fcm.googleapis.com/fcm/send/ci-test\"}"; curl -fs -H "$VH" -XPOST -d "$J" $B/push/unsubscribe | grep -q '"ok":true'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST $B/push/test)" = 400
           test "$(curl -s -o /dev/null -w '%{http_code}' $B/push/key)" = 401
+          # 기기 알림 보고: 로그인 없이 받지만 등록된 구독 주소만 기록, 늘 204
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H 'content-type: application/json' -XPOST -d '{"endpoint":"https://fcm.googleapis.com/fcm/send/none","stage":"shown"}' $B/push/report)" = 204
           # 알림 종류별 설정: 팀 봉사자는 교육·필요 인원·이슈 답까지, 직원 관리자는 새 이슈. 모르는 종류는 버림
           curl -fs -H "$TH" $B/push/prefs | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(!d.kinds.includes("edu")||!d.kinds.includes("issue_reply")||d.off.length)process.exit(1)'
           curl -fs -H "$TH" -XPUT -d '{"off":["edu","need","zzz"]}' $B/push/prefs | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.off.join()!=="edu,need")process.exit(1)'

@@ -2011,6 +2011,18 @@ async function api(req, res, path) {
     return send(res, 200, { token, expiresAt, user: publicUser({ ...user, vol_kinds: kinds, vol_kind: volMode || user.vol_kind }) });
   }
 
+  // 기기 서비스 워커의 알림 보고: 받은 알림을 띄웠는지. 등록된 구독 주소만, 접속지마다 10분에 10번까지 (로그인 없이: 서비스 워커는 토큰이 없음)
+  if (path === "/api/push/report" && method === "POST") {
+    const b = await readJson(req);
+    const sub = typeof b.endpoint === "string" && db.prepare("SELECT id FROM push_subs WHERE endpoint = ?").get(b.endpoint);
+    const key = "push-report:" + realIp(req);
+    if (sub && !tooMany(key)) {
+      recordFail(key);
+      const stage = ["shown", "retry", "fail"].includes(b.stage) ? b.stage : "?";
+      console.log(`[push] 기기 #${sub.id} ${stage} ${String(b.msg || "").replace(/[^\w .:=()-]/g, "").slice(0, 160)}`);
+    }
+    return send(res, 204);
+  }
   const user = auth(req);
   if (!user) return send(res, 401, { error: "로그인이 필요해요." });
   // 알림 구독 (직원·봉사자 모두): 기기마다 하나, 같은 주소는 지금 계정으로 옮김
