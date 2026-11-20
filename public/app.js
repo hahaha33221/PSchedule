@@ -6517,9 +6517,46 @@
     const addDialog = () => teamEduDialog("", (r) => { orgs = r.orgs; draw(); });
     let qv = "", st = "";
     const box = h("div", { class: "stack" });
+    // 수도회 목록: 교육(방문 일정) 줄을 수도회 이름으로 묶어 한 줄씩. 줄을 누르면 아래 교육 목록을 그 수도회로 거름
+    const orgListCard = () => {
+      const t = today(), groups = new Map();
+      for (const o of orgs) {
+        const key = o.org.trim();
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(o);
+      }
+      const uniq = (xs) => [...new Set(xs.map((x) => String(x || "").trim()).filter(Boolean))];
+      const rows = [...groups].map(([name, list]) => {
+        const next = list.filter((o) => !o.tableOnly && o.date >= t).sort((a, b) => (a.date < b.date ? -1 : 1))[0];
+        const sum = (k) => list.reduce((n, o) => n + (o[k] || 0), 0);
+        return { name, list, no: Math.min(...list.map((o) => o.no)), places: uniq(list.map((o) => o.place)), helpers: uniq(list.flatMap((o) => String(o.helper || "").split(/[,·]/))),
+          contact: list.map((o) => o.contact).find((c) => c && c.trim()) || "", done: list.filter((o) => o.status === "done").length, next, undated: list.some((o) => o.tableOnly),
+          req: list.some((o) => o.reqQty != null) ? sum("reqQty") : null, thread: sum("threadQty"), cross: sum("crossQty"), open: sum("openInquiries") };
+      }).sort((a, b) => a.no - b.no);
+      const pick = (name) => { qv = name; st = ""; draw(); listBox.scrollIntoView({ block: "start", behavior: "smooth" }); };
+      return h("section", { class: "team-orglist" }, [
+        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "수도회 목록" }), h("span", { class: "muted small", text: `${rows.length}곳 · 줄을 누르면 아래 교육 목록에서 그 수도회만 보여요` })]),
+        rows.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table team-orgs team-orglist__table" }, [
+          h("thead", {}, h("tr", {}, ["번호", "수도회", "장소", "연락처", "담당 봉사자", "교육", "다음 교육", "요청", "실·십자가 받음"].map((x) => h("th", { text: x })))),
+          h("tbody", {}, rows.map((r) => h("tr", { class: "stock-row" + (qv === r.name ? " is-picked" : ""), tabindex: "0", title: "이 수도회의 교육만 보기", onclick: () => pick(r.name), onkeydown: (e) => { if (e.key === "Enter") pick(r.name); } }, [
+            h("td", { class: "num muted", text: String(rows.indexOf(r) + 1) }),
+            h("td", {}, [h("strong", { text: r.name }), r.open ? h("span", { class: "stock-tag vol-visits__tag", text: `문의 ${r.open}` }) : null]),
+            h("td", { text: r.places.join(", ") || "-" }),
+            h("td", { class: "team-orglist__contact", text: r.contact ? r.contact.replace(/\s*\n\s*/g, " · ") : "-" }),
+            h("td", { text: r.helpers.join(", ") || "-" }),
+            h("td", { class: "nowrap", text: `${r.list.length}회${r.done ? ` (완료 ${r.done})` : ""}` }),
+            h("td", { class: "nowrap", text: r.next ? `${shortDate(r.next.date)}${r.next.startTime ? ` ${r.next.startTime}` : ""}` : r.undated ? "미정" : "-" }),
+            h("td", { class: "num", text: r.req != null ? fmtN(r.req) : "-" }),
+            h("td", { class: "num nowrap", text: r.thread || r.cross ? `${fmtN(r.thread)} · ${fmtN(r.cross)}` : "-" })
+          ])))
+        ])) : h("div", { class: "card empty", text: "아직 담당 수도회가 없어요." })
+      ]);
+    };
     const draw = () => {
       const shown = orgs.filter((o) => (!st || o.status === st) && (!qv || `${o.org} ${o.place} ${o.helper}`.replace(/\s/g, "").includes(qv.replace(/\s/g, ""))));
       fill(box,
+        orgListCard(),
+        h("div", { class: "card__head team-orglist__next" }, [h("h2", { class: "card__title", text: "수도회 교육" }), qv ? h("button", { class: "link-btn small", type: "button", text: `'${qv}' 거름 풀기`, onclick: () => { qv = ""; draw(); } }) : null]),
         h("div", { class: "filters" }, [
           canAdd ? h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: addDialog }, [icon("plus"), "교육 등록"]) : null,
           h("label", { class: "search" }, [icon("search"), h("input", { type: "search", placeholder: "수도회·장소·담당 검색", "aria-label": "수도회 검색", value: qv, oninput: (e) => { qv = e.target.value.trim(); drawList(); } })]),

@@ -2042,3 +2042,9 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .vm-foot__btns { display: flex; gap: 8px; }
 .vm-foot__btns .btn--primary { flex: 1; justify-content: center; min-height: 48px; font-size: 16px; }
 .vm-foot__btns .btn--danger-outline { min-height: 48px; }
+/* 팀 봉사자 수도회·교육: 위쪽 수도회 목록 */
+.team-orglist { display: flex; flex-direction: column; gap: 8px; }
+.team-orglist .card__head { flex-wrap: wrap; gap: 4px 10px; }
+.team-orglist__table tr.is-picked td { background: var(--primary-soft); }
+.team-orglist__contact { min-width: 140px; white-space: pre-line; }
+.team-orglist__next { margin-top: 12px; flex-wrap: wrap; gap: 4px 10px; }
