@@ -83,7 +83,16 @@ export async function sendPush(db, vapid, sub, message, subject) {
       method: "POST", signal: ctl.signal, body,
       headers: { Authorization: vapidAuth(vapid, sub.endpoint, subject), "Content-Encoding": "aes128gcm", "Content-Type": "application/octet-stream", TTL: "86400", Urgency: "normal" }
     });
-    if (r.status === 404 || r.status === 410) db.prepare("DELETE FROM push_subs WHERE id = ?").run(sub.id);
+    const gone = r.status === 404 || r.status === 410;
+    if (gone) db.prepare("DELETE FROM push_subs WHERE id = ?").run(sub.id);
+    // 실패하면 원인을 남김: 응답 코드·푸시 서비스 이름·서비스가 준 이유 (알림 내용·구독 주소·계정은 남기지 않음)
+    if (r.status < 200 || r.status >= 300) {
+      const reason = (await r.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 160);
+      console.log(`[push] 실패 ${r.status} ${new URL(sub.endpoint).hostname}${gone ? " (구독 지움)" : ""} ${reason}`);
+    }
     return r.status;
-  } catch { return 0; } finally { clearTimeout(t); }
+  } catch (e) {
+    console.log(`[push] 실패 연결 ${new URL(sub.endpoint).hostname} ${e?.name === "AbortError" ? "시간 초과" : String(e?.message || e).slice(0, 120)}`);
+    return 0;
+  } finally { clearTimeout(t); }
 }

@@ -1834,7 +1834,10 @@ function notify(userIds, title, body, url) {
   const subs = db.prepare(`SELECT s.*, u.volunteer, u.vol_kind FROM push_subs s JOIN users u ON u.id = s.user_id WHERE s.user_id IN (${ids.map(() => "?").join(",")})`).all(...ids);
   if (!subs.length) return;
   Promise.all(subs.map((s) => sendPush(db, VAPID, s, { title, body: String(body || "").slice(0, 140), url: typeof url === "function" ? url(s) : url || "/", tag: title }, PUSH_SUBJECT)))
-    .then((r) => console.log(`[push] ${r.filter((c) => c >= 200 && c < 300).length}/${r.length}`))
+    .then((r) => {
+      const codes = Object.entries(r.reduce((m, c) => ((m[c] = (m[c] || 0) + 1), m), {})).map(([c, n]) => `${c === "0" ? "연결 실패" : c}×${n}`).join(", ");
+      console.log(`[push] ${title}: ${r.filter((c) => c >= 200 && c < 300).length}/${r.length} 성공 (${codes})`);
+    })
     .catch(() => {});
 }
 const allUsers = () => db.prepare("SELECT * FROM users").all();
