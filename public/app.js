@@ -2033,6 +2033,17 @@
     ]);
     const memoList = h("div", { class: "today-memos__list" });
     const memoBox = h("div", { class: "card today-memos" }, [h("h2", { class: "card__title", text: "메모" }), quickMemo(day), memoList]);
+    // 이름(검색어)마다 시간이 겹치는 일정: 겹치는 것끼리 맨 위로 모으고 '시간 겹침' 표시
+    // 끝 시간이 없으면 30분짜리로 봄. 종일 일정·할 일·메모는 시간이 없어 비교하지 않음
+    const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ""); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
+    function withClashes(results) {
+      const timed = results.map((x, i) => { const a = toMin(x.time); if (a == null || x.type === "task" || x.type === "memo") return null; const e = toMin(x.endTime); return { i, a, b: e != null && e > a ? e : a + 30 }; }).filter(Boolean);
+      const hit = new Map();
+      for (const p of timed) for (const o of timed) if (p.i !== o.i && p.a < o.b && o.a < p.b) { if (!hit.has(p.i)) hit.set(p.i, []); hit.get(p.i).push(results[o.i].title); }
+      if (!hit.size) return { list: results, clashes: 0 };
+      const top = [...hit.keys()].sort((i, j) => toMin(results[i].time) - toMin(results[j].time) || i - j).map((i) => ({ ...results[i], clash: hit.get(i) }));
+      return { list: [...top, ...results.filter((_, i) => !hit.has(i))], clashes: hit.size };
+    }
     // 이름으로 모아 보기: 공통 검색어 + 내 검색어, 그날 걸린 일정·할 일·메모
     const findBox = h("section", { class: "card today-find" }, loading());
     let findDay = day; // 이 칸만 앞뒤 날짜로 옮겨 볼 수 있음 (아래 일정은 그대로)
@@ -2066,8 +2077,9 @@
         const when = kind.when ? kind.when(x) : kind.label;
         // 제목이 아닌 곳(설명·안건·메모 등)에서 찾은 것은 + 로 표시
         const extra = x.field && x.field !== "제목";
-        return h("li", {}, h("button", { class: "today-find__row today-find__row--" + (FIND_KINDS[x.type] ? x.type : "event"), type: "button", "data-peek": key, title: extra ? `${x.field}에 '${x.keyword || ""}'이(가) 들어 있어요` : null, onclick: () => { const [t, id] = key.split(":"); openPeek(t, t === "day" ? id : Number(id)); } }, [
+        return h("li", {}, h("button", { class: "today-find__row today-find__row--" + (FIND_KINDS[x.type] ? x.type : "event") + (x.clash ? " is-clash" : ""), type: "button", "data-peek": key, title: extra ? `${x.field}에 '${x.keyword || ""}'이(가) 들어 있어요` : null, onclick: () => { const [t, id] = key.split(":"); openPeek(t, t === "day" ? id : Number(id)); } }, [
           h("span", { class: "today-find__kind", text: kind.label }),
+          x.clash ? h("span", { class: "today-find__clash", title: `${x.clash.join(", ")}와(과) 시간이 겹쳐요`, text: "시간 겹침" }) : null,
           h("span", { class: "today-find__title", text: x.title }),
           extra ? h("span", { class: "today-find__plus", "aria-label": `${x.field}에서 찾음`, text: "+" }) : null,
           kind.when ? h("span", { class: "today-find__time", text: when }) : null
@@ -2088,10 +2100,10 @@
         ]),
         open ? h("div", { class: "today-find__chips" }, [...r.common.map((k) => chip(k, false)), ...r.mine.map((k) => chip(k, true)), add]) : null,
         open ? h("div", { class: "today-find__chips today-find__chips--ex" }, [h("span", { class: "muted small", text: "제외" }), ...r.excludes.map(exChip), exAdd, r.excludes.length ? null : h("span", { class: "muted small", text: "이 말이 들어간 것은 결과에서 빼요" })]) : null,
-        open ? h("div", { class: "today-find__groups" }, r.groups.map((g) => h("div", { class: "today-find__group" }, [
-          h("h3", {}, [g.keyword, h("span", { class: "muted small", text: ` ${g.results.length}건${g.excluded ? ` (제외 ${g.excluded})` : ""}` })]),
-          g.results.length ? h("ul", { class: "today-find__list" }, g.results.map((x) => row({ ...x, keyword: g.keyword }))) : h("p", { class: "muted small", text: g.excluded ? "제외어로 모두 빠졌어요." : "이 날 걸린 것이 없어요." })
-        ]))) : null,
+        open ? h("div", { class: "today-find__groups" }, r.groups.map((g) => { const { list, clashes } = withClashes(g.results); return h("div", { class: "today-find__group" + (clashes ? " has-clash" : "") }, [
+          h("h3", {}, [g.keyword, h("span", { class: "muted small", text: ` ${g.results.length}건${g.excluded ? ` (제외 ${g.excluded})` : ""}` }), clashes ? h("span", { class: "today-find__clashsum", text: `시간 겹침 ${clashes}건` }) : null]),
+          g.results.length ? h("ul", { class: "today-find__list" }, list.map((x) => row({ ...x, keyword: g.keyword }))) : h("p", { class: "muted small", text: g.excluded ? "제외어로 모두 빠졌어요." : "이 날 걸린 것이 없어요." })
+        ]); })) : null,
         open && r.groups.some((g) => g.results.some((x) => x.field && x.field !== "제목")) ? h("p", { class: "muted small today-find__legend" }, [h("span", { class: "today-find__plus", text: "+" }), " 제목이 아닌 내용(설명·안건·메모 등)에서 찾은 것"]) : null
       );
       markPeeked();
@@ -7098,12 +7110,48 @@
     document.body.append(bar);
   }
   // 계정 메뉴 '알림 · 앱 설치': 이 기기의 알림 상태와 켜기·끄기·시험, 앱 설치 안내
+  // 알림 종류별 켜기·끄기: 계정마다 저장 (모든 기기에 같이 적용), 바꾸면 바로 저장
+  const PUSH_KIND_LABEL = {
+    notice: ["새 공지", "볼 수 있는 공지가 올라오면"],
+    board: ["게시판 새 글", "게시판에 새 글이 올라오면"],
+    comment: ["내 글 댓글", "내가 쓴 게시판 글에 댓글이 달리면"],
+    edu: ["교육 일정", "팀 봉사자 교육이 새로 잡히거나 날짜가 바뀌면"],
+    need: ["봉사자 필요 인원", "리더가 날짜별 필요 인원을 정하면"],
+    issue_new: ["새 이슈", "팀 봉사자가 이슈를 올리면"],
+    issue_reply: ["이슈 처리·답", "내가 올린 이슈의 상태나 답이 바뀌면"]
+  };
+  function pushPrefsBox(p) {
+    const box = h("section", { class: "stack stack--sm push-prefs" });
+    const draw = () => {
+      const save = async (off) => { const r = await act(() => api("/push/prefs", { method: "PUT", body: { off } })); p.off = r.off; draw(); };
+      const allOn = p.kinds.every((k) => !p.off.includes(k)), allOff = p.kinds.every((k) => p.off.includes(k));
+      fill(box,
+        h("div", { class: "push-prefs__head" }, [
+          h("h3", { class: "team-sec", text: "받을 알림" }),
+          h("div", { class: "actions" }, [
+            h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "전체 켜기", disabled: allOn, onclick: () => save(p.off.filter((k) => !p.kinds.includes(k))) }),
+            h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "전체 끄기", disabled: allOff, onclick: () => save([...new Set([...p.off, ...p.kinds])]) })
+          ])
+        ]),
+        h("ul", { class: "push-prefs__list" }, p.kinds.map((k) => {
+          const on = !p.off.includes(k);
+          const c = h("input", { type: "checkbox", checked: on, "aria-describedby": `pp-${k}` });
+          c.addEventListener("change", () => save(c.checked ? p.off.filter((x) => x !== k) : [...p.off, k]));
+          return h("li", {}, h("label", { class: "push-prefs__item" }, [c, h("span", {}, [h("strong", { text: PUSH_KIND_LABEL[k][0] }), h("small", { class: "muted", id: `pp-${k}`, text: PUSH_KIND_LABEL[k][1] })])]));
+        })),
+        h("p", { class: "muted small", text: "이 계정으로 알림을 켠 모든 기기에 똑같이 적용돼요." })
+      );
+    };
+    draw();
+    return box;
+  }
   async function appDialog() {
     const box = h("div", { class: "stack" });
     const draw = async () => {
       let sub = await pushSub().catch(() => null);
       // 기기에는 구독이 있는데 서버에 없을 수 있어(로그아웃 등) 열 때마다 다시 묶음. 실패하면 꺼진 것으로 보여 줌
       if (sub && !(await pushRebind(sub).then(() => true, () => false))) sub = null;
+      const prefs = await api("/push/prefs").catch(() => null);
       const perm = "Notification" in window ? Notification.permission : "unsupported";
       const state1 = !pushSupported() ? (isIos() && !isStandalone() ? "아이폰·아이패드는 홈 화면에 추가한 앱에서만 알림을 켤 수 있어요." : "이 브라우저는 알림을 지원하지 않아요.")
         : perm === "denied" ? "이 기기에서 알림이 막혀 있어요. 브라우저(앱) 설정 → 사이트 설정 → 알림에서 P-Schedule을 허용해 주세요."
@@ -7119,6 +7167,7 @@
             sub ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "알림 끄기", onclick: async () => { await pushOff(); toast("이 기기 알림을 껐어요."); draw(); } }) : null
           ])
         ]),
+        prefs ? pushPrefsBox(prefs) : null,
         h("section", { class: "stack stack--sm" }, [
           h("h3", { class: "team-sec", text: "앱으로 쓰기" }),
           h("p", { class: "small", text: isStandalone() ? "지금 앱으로 쓰고 있어요." : "휴대폰·패드에 설치하면 주소창 없이 앱처럼 써요. 사이트가 바뀌면 앱도 바로 바뀌어요." }),

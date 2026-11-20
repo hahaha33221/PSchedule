@@ -1320,7 +1320,7 @@ async function boardRoute(req, res, user, path, method) {
     const v = boardInput(await readJson(req));
     const id = Number(q.addBoardPost.run(...v, user.id).lastInsertRowid);
     // 새 글: 봉사자·관리자에게 (비밀글은 관리자에게만, 제목도 숨김)
-    notify(allUsers().filter((u) => u.id !== user.id && boardCan(u) && (!v[3] || u.role === "admin")).map((u) => u.id), "게시판 새 글", v[3] ? "비밀글이 올라왔어요" : v[1], (s) => (s.volunteer ? `/#/vboard/${id}` : `/#/board/${id}`));
+    notify(allUsers().filter((u) => u.id !== user.id && boardCan(u) && (!v[3] || u.role === "admin")).map((u) => u.id), "게시판 새 글", v[3] ? "비밀글이 올라왔어요" : v[1], (s) => (s.volunteer ? `/#/vboard/${id}` : `/#/board/${id}`), "board");
     send(res, 201, { id }); return true;
   }
   const m = path.match(/^\/api\/board\/(\d+)(\/comments)?$/);
@@ -1333,7 +1333,7 @@ async function boardRoute(req, res, user, path, method) {
       if (method !== "POST") { send(res, 405, { error: "Method not allowed" }); return true; }
       if (!see) { send(res, 403, { error: "비밀글에는 댓글을 달 수 없어요." }); return true; }
       q.addBoardComment.run(b.id, text((await readJson(req)).body, 1000, "댓글", true), user.id);
-      if (b.created_by && b.created_by !== user.id) notify([b.created_by], "내 글에 댓글", b.secret ? "비밀글에 댓글이 달렸어요" : b.title, (s) => (s.volunteer ? `/#/vboard/${b.id}` : `/#/board/${b.id}`));
+      if (b.created_by && b.created_by !== user.id) notify([b.created_by], "내 글에 댓글", b.secret ? "비밀글에 댓글이 달렸어요" : b.title, (s) => (s.volunteer ? `/#/vboard/${b.id}` : `/#/board/${b.id}`), "comment");
     } else if (method === "PATCH" || method === "DELETE") {
       if (b.created_by !== user.id && user.role !== "admin") { send(res, 403, { error: "쓴 사람과 관리자만 고치거나 지울 수 있어요." }); return true; }
       if (method === "DELETE") { q.delBoardPost.run(b.id); send(res, 200, { ok: true }); return true; }
@@ -1482,7 +1482,7 @@ async function teamRoute(req, res, user, path, method) {
       q.teamOrgUpsert.run(id, "", text(b.helper, 80, "담당 봉사자") || "", "plan", null, "", null, "", user.name);
       return id;
     });
-    if (date) notify(teamVolunteerIds().filter((x) => x !== user.id), "새 교육 일정", `${date.slice(5).replace("-", "/")} ${org}`, "/#/tcal");
+    if (date) notify(teamVolunteerIds().filter((x) => x !== user.id), "새 교육 일정", `${date.slice(5).replace("-", "/")} ${org}`, "/#/tcal", "edu");
     return ok(201, { id, orgs: teamOrgRows(admin) });
   }
   const om = path.match(/^\/api\/team\/orgs\/(\d+)(\/inquiries)?$/);
@@ -1520,7 +1520,7 @@ async function teamRoute(req, res, user, path, method) {
         if (has(b, "date")) {
           if (!isDate(b.date)) throw bad("교육 날짜를 확인해 주세요.");
           db.prepare("UPDATE vol_schedules SET date = ?, start_time = ?, table_only = 0 WHERE id = ?").run(b.date, has(b, "startTime") ? optTime(b.startTime) : s.start_time, s.id);
-          if (b.date !== s.date || s.table_only) notify(teamVolunteerIds().filter((x) => x !== user.id), "교육 일정 변경", `${b.date.slice(5).replace("-", "/")} ${s.title.split(" · ").pop()}`, "/#/tcal");
+          if (b.date !== s.date || s.table_only) notify(teamVolunteerIds().filter((x) => x !== user.id), "교육 일정 변경", `${b.date.slice(5).replace("-", "/")} ${s.title.split(" · ").pop()}`, "/#/tcal", "edu");
         }
         q.teamOrgUpsert.run(s.id, has(b, "contact") ? text(b.contact, 300, "연락처") || "" : f.contact || "", has(b, "helper") ? text(b.helper, 80, "담당 봉사자") || "" : f.helper || "", status,
           has(b, "attend") ? teamQty(b.attend, "참석 인원") : f.attend ?? null, has(b, "resultNote") ? text(b.resultNote, 1000, "특이사항") || "" : f.result_note || "",
@@ -1609,7 +1609,7 @@ async function teamRoute(req, res, user, path, method) {
     if (need && !eduDays().has(b.date)) throw bad("교육 일정이 있는 날만 필요 인원을 정할 수 있어요.");
     const had = q.teamDayNeeds.all(b.date).find((x) => x.date === b.date);
     if (!need) q.delTeamDayNeed.run(b.date); else q.setTeamDayNeed.run(b.date, need, text(b.note, 200, "메모") || "", user.name);
-    if (need && (!had || had.need !== need)) notify(teamVolunteerIds().filter((x) => x !== user.id), "봉사자를 찾아요", `${b.date.slice(5).replace("-", "/")} ${need}명 필요`, "/#/thome");
+    if (need && (!had || had.need !== need)) notify(teamVolunteerIds().filter((x) => x !== user.id), "봉사자를 찾아요", `${b.date.slice(5).replace("-", "/")} ${need}명 필요`, "/#/thome", "need");
     return ok(200, availOut());
   }
   // 제품 회수: 수도회에서 완성품을 받은 기록 (팀 봉사자 입력, 지우기는 적은 사람·리더·관리자)
@@ -1650,7 +1650,7 @@ async function teamRoute(req, res, user, path, method) {
   if (path === "/api/team/issues" && method === "POST") {
     const v = issueIn(await readJson(req));
     const id = Number(q.addTeamIssue.run(...v, user.id).lastInsertRowid);
-    notify(adminIds().filter((x) => x !== user.id), "새 이슈", v[2], "/#/volunteers/team");
+    notify(adminIds().filter((x) => x !== user.id), "새 이슈", v[2], "/#/volunteers/team", "issue_new");
     return ok(201, { id, issues: issues() });
   }
   const im = path.match(/^\/api\/team\/issues\/(\d+)(\/photos)?$/);
@@ -1676,7 +1676,7 @@ async function teamRoute(req, res, user, path, method) {
         if (!["new", "doing", "done"].includes(b.status)) throw bad("처리 상태를 확인해 주세요.");
         const reply = has(b, "reply") ? text(b.reply, 1000, "답") || "" : x.reply;
         q.setTeamIssueStatus.run(b.status, reply, x.id);
-        if (x.created_by && x.created_by !== user.id && (b.status !== x.status || reply !== x.reply)) notify([x.created_by], `이슈 ${{ new: "접수", doing: "처리 중", done: "완료" }[b.status]}`, x.title, "/#/tissues");
+        if (x.created_by && x.created_by !== user.id && (b.status !== x.status || reply !== x.reply)) notify([x.created_by], `이슈 ${{ new: "접수", doing: "처리 중", done: "완료" }[b.status]}`, x.title, "/#/tissues", "issue_reply");
         return ok(200, { issues: issues() });
       }
       if (!own && !admin) return ok(403, { error: "올린 사람과 관리자만 고칠 수 있어요." });
@@ -1828,8 +1828,22 @@ const noticeAudiences = (u) => (u.volunteer ? ["all"] : u.role === "admin" ? NOT
 const noticeVisible = (u, n) => noticeAudiences(u).includes(n.audience);
 // ---- 알림 보내기: 받는 사람(계정 id)마다 그 사람 화면에 맞는 주소로. 기다리지 않고 뒤에서 보냄
 // url(u) 은 받는 사람 계정으로 주소를 고름 (직원 화면 #/notices · 봉사자 화면 #/vnotices 등)
-function notify(userIds, title, body, url) {
-  const ids = [...new Set(userIds)].filter(Boolean);
+// 알림 종류: 사람마다 끈 종류(users.push_off)는 보내지 않음. kind 가 없으면(시험 알림) 늘 보냄
+const PUSH_KINDS = ["notice", "board", "comment", "edu", "need", "issue_new", "issue_reply"];
+const pushOffOf = (u) => { try { const v = JSON.parse(u.push_off || "[]"); return Array.isArray(v) ? v.filter((k) => PUSH_KINDS.includes(k)) : []; } catch { return []; } };
+// 계정마다 받을 수 있는 알림 종류 (화면에 보여 줄 것)
+const pushKindsFor = (u) => {
+  if (u.role === "admin" && !u.volunteer) return ["notice", "board", "comment", "issue_new"];
+  if (!u.volunteer) return ["notice"];
+  const team = volKindsOf(u).includes("team");
+  return ["notice", "board", "comment", ...(team ? ["edu", "need", "issue_reply"] : [])];
+};
+function notify(userIds, title, body, url, kind) {
+  let ids = [...new Set(userIds)].filter(Boolean);
+  if (kind && ids.length) {
+    const off = new Set(db.prepare(`SELECT id, push_off FROM users WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids).filter((u) => pushOffOf(u).includes(kind)).map((u) => u.id));
+    ids = ids.filter((id) => !off.has(id));
+  }
   if (!ids.length) return;
   const subs = db.prepare(`SELECT s.*, u.volunteer, u.vol_kind FROM push_subs s JOIN users u ON u.id = s.user_id WHERE s.user_id IN (${ids.map(() => "?").join(",")})`).all(...ids);
   if (!subs.length) return;
@@ -2012,6 +2026,18 @@ async function api(req, res, path) {
   if (path === "/api/push/unsubscribe" && method === "POST") {
     db.prepare("DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?").run(String((await readJson(req)).endpoint || ""), user.id);
     return send(res, 200, { ok: true });
+  }
+  // 알림 종류별 켜기·끄기 (계정마다, 모든 기기에 적용)
+  if (path === "/api/push/prefs" && method === "GET") {
+    const me = q.userById.get(user.id); // 봉사자 권한 둘이면 지금 쓰는 쪽과 상관없이 둘 다의 알림
+    return send(res, 200, { kinds: pushKindsFor(me), off: pushOffOf(me) });
+  }
+  if (path === "/api/push/prefs" && method === "PUT") {
+    const b = await readJson(req);
+    if (!Array.isArray(b.off)) throw bad("알림 설정을 확인해 주세요.");
+    const off = [...new Set(b.off.map(String))].filter((k) => PUSH_KINDS.includes(k));
+    db.prepare("UPDATE users SET push_off = ? WHERE id = ?").run(JSON.stringify(off), user.id);
+    return send(res, 200, { kinds: pushKindsFor(q.userById.get(user.id)), off });
   }
   if (path === "/api/push/test" && method === "POST") {
     const n = db.prepare("SELECT COUNT(*) AS n FROM push_subs WHERE user_id = ?").get(user.id).n;
@@ -2672,7 +2698,7 @@ async function api(req, res, path) {
     if (!isAdmin) return send(res, 403, { error: "공지는 관리자만 쓸 수 있어요." });
     const r = q.addNotice.run(...noticeInput(await readJson(req)), user.id);
     q.readNotice.run(user.id, Number(r.lastInsertRowid)); // 쓴 사람은 읽은 것으로
-    { const n = q.notice.get(Number(r.lastInsertRowid)); if (n) notify(allUsers().filter((u) => u.id !== user.id && noticeVisible(u, n)).map((u) => u.id), "새 공지", n.title, (s) => (s.volunteer ? `/#/vnotices/${n.id}` : `/#/notices/${n.id}`)); }
+    { const n = q.notice.get(Number(r.lastInsertRowid)); if (n) notify(allUsers().filter((u) => u.id !== user.id && noticeVisible(u, n)).map((u) => u.id), "새 공지", n.title, (s) => (s.volunteer ? `/#/vnotices/${n.id}` : `/#/notices/${n.id}`), "notice"); }
     return send(res, 201, { id: Number(r.lastInsertRowid) });
   }
   const nm = path.match(/^\/api\/notices\/(\d+)(\/comments)?$/);
