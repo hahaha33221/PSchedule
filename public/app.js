@@ -7070,6 +7070,8 @@
     await api("/push/subscribe", { method: "POST", body: sub.toJSON() });
     store.set("ps.pushAsked", "1");
   }
+  // 이미 구독한 기기: 권한을 다시 묻지 않고 서버에 지금 계정으로 다시 묶음 (로그아웃 때 서버 쪽만 지워서, 다시 로그인하면 여기서 되살림)
+  async function pushRebind(sub) { await api("/push/subscribe", { method: "POST", body: sub.toJSON() }); }
   // quietServerOnly: 로그아웃 때는 서버 구독만 지우고 기기 권한은 그대로
   async function pushOff(quietServerOnly) {
     const sub = await pushSub();
@@ -7080,7 +7082,7 @@
   // 로그인 때: 서비스 워커 등록, 이미 켠 기기면 지금 계정으로 다시 묶고, 아니면 한 번 권유
   async function pushBoot() {
     await swReg().catch(() => null);
-    if (pushSupported() && Notification.permission === "granted" && (await pushSub())) return pushOn().catch(() => {});
+    if (pushSupported() && Notification.permission === "granted") { const sub = await pushSub(); if (sub) return pushRebind(sub); }
     if (store.get("ps.pushAsked", "") || document.querySelector(".push-ask")) return;
     const canPush = pushSupported() && Notification.permission === "default";
     const iosGuide = isIos() && !isStandalone();
@@ -7099,7 +7101,9 @@
   async function appDialog() {
     const box = h("div", { class: "stack" });
     const draw = async () => {
-      const sub = await pushSub().catch(() => null);
+      let sub = await pushSub().catch(() => null);
+      // 기기에는 구독이 있는데 서버에 없을 수 있어(로그아웃 등) 열 때마다 다시 묶음. 실패하면 꺼진 것으로 보여 줌
+      if (sub && !(await pushRebind(sub).then(() => true, () => false))) sub = null;
       const perm = "Notification" in window ? Notification.permission : "unsupported";
       const state1 = !pushSupported() ? (isIos() && !isStandalone() ? "아이폰·아이패드는 홈 화면에 추가한 앱에서만 알림을 켤 수 있어요." : "이 브라우저는 알림을 지원하지 않아요.")
         : perm === "denied" ? "이 기기에서 알림이 막혀 있어요. 브라우저(앱) 설정 → 사이트 설정 → 알림에서 P-Schedule을 허용해 주세요."
