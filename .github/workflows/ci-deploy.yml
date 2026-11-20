@@ -553,6 +553,9 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPUT -d '{"menu":["in"]}' $B/admin/vol-menu)" = 403
           curl -fs -H "$H" -XPUT -d '{"menu":["in","out","req","nope"]}' $B/admin/vol-menu | grep -q '"menu":\["req","in","out"\]'
           curl -fs -H "$VH" $B/volunteer/menu | grep -q '"menu":\["req","in","out"\]'
+          # 새 입고·출고 화면(moves2)은 기본으로 꺼져 있고 관리자가 켤 수 있음
+          curl -fs -H "$H" $B/admin/vol-menu | grep -q '"keys":\[[^]]*"moves2"'
+          curl -fs -H "$H" -XPUT -d '{"menu":["in","out","moves2"]}' $B/admin/vol-menu | grep -q '"menu":\["in","out","moves2"\]'
           curl -fs -H "$H" -XPUT -d '{"menu":["home","notices","in","out"]}' $B/admin/vol-menu >/dev/null
           # 회의실 목록: 관리자만 등록, 같은 이름은 하나로, 직원은 /api/me 로 받음
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPUT -d '{"rooms":["A604호"]}' $B/admin/rooms)" = 403

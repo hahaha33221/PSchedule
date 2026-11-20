@@ -1887,7 +1887,7 @@ function inspectInput(v, label) {
   return n;
 }
 // 봉사자에게 보일 메뉴 (관리자가 단계적으로 엶). 저장 안 했으면 입고·출고 중심
-const VOL_MENU_KEYS = ["home", "schedule", "training", "notices", "wbs", "req", "in", "out", "recovery"]; // 원자재 보유물량(material)은 없앰
+const VOL_MENU_KEYS = ["home", "schedule", "training", "notices", "wbs", "req", "in", "out", "recovery", "moves2"]; // moves2: 새 입고·출고 화면 (기본은 꺼 둠, 관리자가 켬) // 원자재 보유물량(material)은 없앰
 const VOL_MENU_DEFAULT = ["home", "notices", "in", "out"];
 // 회의실 목록 (관리자가 등록). 일정 장소 글자에 이름이 들어 있으면 그 회의실 예약으로 봄
 const meetingRooms = () => { try { const v = JSON.parse(q.setting.get("meeting_rooms")?.value || "[]"); return Array.isArray(v) ? v.filter((x) => typeof x === "string") : []; } catch { return []; } };

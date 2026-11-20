@@ -404,6 +404,7 @@
     dialogBody.replaceChildren(body);
     dialog.classList.toggle("dialog--wide", !!(opts && opts.wide));
     dialog.classList.toggle("dialog--admin", !!(opts && opts.admin));
+    if (opts && opts.tone) dialog.dataset.tone = opts.tone; else delete dialog.dataset.tone; // 입고(in)·출고(out) 색 띠
     if (!dialog.open) dialog.showModal();
     const first = dialogBody.querySelector("[autofocus]");
     if (first) first.focus();
@@ -5369,6 +5370,15 @@
       if (tab === "vstock") {
         if (id) {
           const [, , , open, editId] = location.hash.split("/");
+          if (volOn("moves2")) { // 새 입고·출고 화면: 대장 상세(5단계) 대신 입고·출고 화면에서 바로 적기·고치기
+            const [{ ledgers }, d] = await Promise.all([api("/volunteer/stock"), api(`/volunteer/stock/${Number(id)}`)]);
+            const eid = open === "edit" ? Number(editId) || null : null;
+            const type = eid ? d.moves.find((x) => x.id === eid)?.type || "in" : open === "out" ? "out" : "in";
+            if (open) history.replaceState(null, "", `#/vstock/${id}`); // 새로고침해도 입력 창이 다시 열리지 않게
+            document.title = `입고 · 출고 · ${TITLE}`;
+            return show([h("nav", { class: "muted small" }, h("a", { href: "#/vstock", text: "입출고" })), h("h1", { class: "vol__hello", text: "입고 · 출고" }),
+              volMovesPage(type, ledgers, { ledgerId: Number(id), data: d, editId: eid, openNew: open === "in" || open === "out", switchable: true, isCurrent: () => seq === volSeq })]);
+          }
           return pageStock(Number(id), { show, open: open === "in" || open === "out" ? open : null, editId: open === "edit" ? Number(editId) || null : null, isCurrent: () => seq === volSeq });
         }
         const { ledgers } = await api("/volunteer/stock");
@@ -5602,6 +5612,7 @@
     if (view === "wbs") return [...head("WBS"), g.key === "rosary" ? volWbsRosary() : volWbs({ name: g.name }, visits)];
     if (view === "req") return [...head(`${g.name} 추가 전달 물량`), volVisits(visits, `${g.name} 추가 전달 물량`)];
     if (view === "in" || view === "out") {
+      if (volOn("moves2")) return [...head(view === "in" ? "입고" : "출고"), volMovesPage(view, ledgers, { cut: view === "out" && g.key === "rosary" ? visits : null })];
       const moves = volMoveCard(view, ledgers, await volLedgerDetails(ledgers));
       // 묵주 출고: 1) 실타래(창고) 입출고와 2) 자른실(제작 수도회) 출고를 나눠서
       if (view === "out" && g.key === "rosary") { const t = moves.querySelector(".card__title"); if (t) t.textContent = "1) 실타래 입출고 · 출고"; return [...head("출고"), moves, volCutCard(visits)]; }
@@ -6083,6 +6094,210 @@
         ]);
       })) : h("p", { class: "muted", text: "아직 입력할 수 있는 대장이 없어요." })
     ]);
+  }
+  // ---- 새 입고·출고 화면 (휴대폰 기준). 관리자가 '메뉴 공개'에서 '새 입고·출고 화면'을 켜면 봉사자에게 보임
+  // 데이터·API 는 그대로: /volunteer/stock/:id, .../moves, /volunteer/stock-moves/:id, .../photos
+  const vmPhotoCache = new Map();
+  const vmPhotoSrc = (pid) => { if (!vmPhotoCache.has(pid)) vmPhotoCache.set(pid, fetch(API + `/volunteer/stock-photos/${pid}`, { headers: { Authorization: "Bearer " + state.token } }).then((r) => (r.ok ? r.blob() : null)).then((b) => (b ? URL.createObjectURL(b) : null)).catch(() => null)); return vmPhotoCache.get(pid); };
+  const vmPhotoImg = (pid) => { const img = h("img", { class: "move-photo", alt: "기록 사진" }); vmPhotoSrc(pid).then((u) => { if (u) img.src = u; }); return img; };
+  const vmSum = (m) => Object.values(m.qty || {}).reduce((n, v) => n + (Number(v) || 0), 0);
+  const vmDay = (s) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) ? volDay(s) : String(s || "-"));
+  const VM_PAGE = 10, VM_PHOTO_MAX = 4;
+  // type: "in"|"out". opts: ledgerId(처음 고를 대장) · data(미리 받은 대장) · editId(바로 고칠 기록) · openNew(바로 적기) · cut(묵주 자른실 출고 일정) · switchable(입고·출고 전환) · isCurrent
+  function volMovesPage(type, ledgers, opts = {}) {
+    const box = h("div", { class: "vm" });
+    let lid = opts.ledgerId && ledgers.some((l) => l.id === opts.ledgerId) ? opts.ledgerId : Number(store.get("ps.vmLedger", 0));
+    if (!ledgers.some((l) => l.id === lid)) lid = ledgers[0]?.id || null;
+    let data = opts.data && opts.data.ledger?.id === lid ? opts.data : null, shown = VM_PAGE, flash = null, part = "moves";
+    const label = () => (type === "in" ? "입고" : "출고");
+    const sumType = (t, oid) => (data?.moves || []).filter((m) => m.type === t).reduce((n, m) => n + (oid ? Number(m.qty[oid]) || 0 : vmSum(m)), 0);
+    const leftOf = (oid) => sumType("in", oid) - sumType("out", oid);
+    const load = async () => { try { data = lid ? await api(`/volunteer/stock/${lid}`) : null; } catch (e) { if (e.status !== 401) box.replaceChildren(failed(e)); throw e; } };
+    const apply = (r) => { data = r; draw(); };
+    const tabs = (list, cur, pick) => h("div", { class: "vm-seg", role: "tablist" }, list.map(([k, t]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === cur), text: t, onclick: () => pick(k) })));
+    function draw() {
+      const kids = [];
+      if (opts.switchable) kids.push(tabs([["in", "입고"], ["out", "출고"]], type, (k) => { type = k; shown = VM_PAGE; draw(); }));
+      if (opts.cut) {
+        kids.push(tabs([["moves", "실타래 출고"], ["cut", "자른실 출고"]], part, (k) => { part = k; draw(); }));
+        kids.push(h("p", { class: "muted small vm-note", text: "두 기록은 서로 연결되지 않아요. 실타래가 창고에서 나갔으면 '실타래 출고'에도 적어 주세요." }));
+        if (part === "cut") {
+          const cut = volCutCard(opts.cut);
+          const t = cut.querySelector(".card__title"); if (t) t.textContent = "자른실 출고";
+          for (const p of cut.querySelectorAll("p.muted")) if (p.textContent.includes("1) 실타래 입출고")) p.textContent = "자른실은 제작 수도회에 보낸 실이에요. 값은 '추가 전달 물량 › 수량 입력'에서 고쳐요. 창고의 실타래(타래 단위)는 '실타래 출고' 탭에 적어요.";
+          kids.push(cut); return box.replaceChildren(...kids);
+        }
+      }
+      if (!ledgers.length) { kids.push(h("div", { class: "card empty", text: "아직 입력할 수 있는 대장이 없어요. 관리자에게 문의해 주세요." })); return box.replaceChildren(...kids); }
+      if (ledgers.length > 1) {
+        const sel = h("select", { "aria-label": "대장 고르기", onchange: () => { lid = Number(sel.value); store.set("ps.vmLedger", String(lid)); data = null; shown = VM_PAGE; draw(); load().then(draw, () => {}); } }, ledgers.map((l) => h("option", { value: String(l.id), text: l.name })));
+        sel.value = String(lid);
+        kids.push(h("label", { class: "vm-pick" }, [h("span", { class: "muted small", text: "대장" }), sel]));
+      }
+      if (!data) { kids.push(loading()); return box.replaceChildren(...kids); }
+      const { ledger: l, options, moves } = data;
+      const unit = l.unit;
+      const list = moves.filter((m) => m.type === type).sort((a, b) => (a.date === b.date ? b.id - a.id : a.date < b.date ? 1 : -1));
+      const month = today().slice(0, 7);
+      const stock = sumType("in") - sumType("out");
+      const stat = (t, n, warn) => h("div", { class: "vm-stat" + (warn ? " is-warn" : "") }, [h("span", { text: t }), h("strong", { text: fmtN(n) }), h("small", { text: unit })]);
+      kids.push(h("section", { class: "card vm-sum" }, [
+        h("h2", { class: "vm-sum__name", text: l.name }),
+        h("div", { class: "vm-stats" }, [stat(`${label()} 합계`, sumType(type)), stat("재고", stock, stock < 0), stat(`이번 달 ${label()}`, list.filter((m) => String(m.date).startsWith(month)).reduce((n, m) => n + vmSum(m), 0))]),
+        options.length ? h("details", { class: "vm-opts" }, [
+          h("summary", {}, [h("span", { text: "품목별 재고" }), h("span", { class: "vm-opts__peek muted", text: options.slice(0, 3).map((o) => `${o.name} ${fmtN(leftOf(o.id))}`).join(" · ") + (options.length > 3 ? " …" : "") })]),
+          h("ul", {}, options.map((o) => h("li", {}, [h("span", { text: o.name }), h("span", { class: "muted small", text: `입고 ${fmtN(sumType("in", o.id))} · 출고 ${fmtN(sumType("out", o.id))}` }), h("strong", { class: leftOf(o.id) < 0 ? "stock-minus" : null, text: fmtN(leftOf(o.id)) })])))
+        ]) : h("p", { class: "muted small", text: "아직 품목이 없어요. 관리자에게 문의해 주세요." })
+      ]));
+      const card = (m) => {
+        const parts = options.filter((o) => Number(m.qty[o.id])).map((o) => `${o.name} ${fmtN(m.qty[o.id])}`).join(" · ");
+        const tags = [
+          type === "out" && m.handler ? h("span", { class: "vm-tag", text: `전달 ${m.handler}` }) : null,
+          m.mine ? h("span", { class: "vm-tag is-mine", text: "내 기록" }) : null,
+          m.photos?.length ? h("span", { class: "vm-tag", text: `사진 ${m.photos.length}` }) : null,
+          m.inspectBad ? h("span", { class: "vm-tag is-bad", text: `불량 ${fmtN(m.inspectBad)}` }) : null,
+          m.issue ? h("span", { class: "vm-tag is-bad", text: "이슈 있음" }) : null
+        ].filter(Boolean);
+        return h("li", {}, h("button", { type: "button", class: "vm-card" + (m.id === flash ? " is-new" : ""), "aria-label": `${vmDay(m.date)} ${label()} ${fmtN(vmSum(m))}${unit} 고치기`, onclick: () => sheet(m) }, [
+          h("span", { class: "vm-card__top" }, [h("strong", { class: "vm-card__date", text: vmDay(m.date) }), h("strong", { class: "vm-card__qty", text: `${fmtN(vmSum(m))} ${unit}` })]),
+          parts ? h("span", { class: "vm-card__parts small", text: parts }) : null,
+          tags.length ? h("span", { class: "vm-card__tags" }, tags) : null,
+          m.note ? h("span", { class: "vm-card__note small", text: m.note }) : null,
+        ]));
+      };
+      kids.push(h("section", { class: "vm-records" }, [
+        h("div", { class: "vm-head" }, [h("h2", { text: `${label()} 기록 ${list.length}건` }),
+          h("button", { class: `btn btn--primary vm-add vm-add--${type}`, type: "button", onclick: () => sheet(null) }, [icon("plus"), `${label()} 적기`])]),
+        list.length ? h("ul", { class: "vm-list" }, list.slice(0, shown).map(card)) : h("div", { class: "card empty", text: `아직 ${label()} 기록이 없어요. 아래 '${label()} 적기'를 눌러 첫 기록을 남겨 주세요.` }),
+        list.length > shown ? h("button", { class: "btn btn--ghost vm-more", type: "button", text: `더 보기 (${list.length - shown}건 남음)`, onclick: () => { shown += VM_PAGE; draw(); } }) : null,
+        list.length ? h("p", { class: "muted small", text: "기록을 누르면 고치거나 지울 수 있어요. 누가 언제 고쳤는지 직원 화면에 남아요." }) : null
+      ]));
+      box.replaceChildren(...kids);
+    }
+    // 입력 판: 휴대폰에서는 아래에서 올라오는 판, PC 에서는 가운데 창 (대화상자 하나를 같이 씀)
+    function sheet(m) {
+      const { ledger: l, options } = data;
+      const t = type, lab = label(), unit = l.unit;
+      const err = errorLine();
+      const date = h("input", { type: "date", value: m?.date || today(), "aria-label": `${lab}일` });
+      const handler = h("input", { value: m?.handler ?? (t === "out" ? state.user.name : ""), maxlength: "40" });
+      const note = h("textarea", { rows: "2", maxlength: "500" }, m?.note || "");
+      const issue = h("textarea", { rows: "2", maxlength: "500", placeholder: "예: 10개 중 2개 불량, 박스 파손, 수량 부족" }, m?.issue || "");
+      const insOk = h("input", { type: "number", min: "0", inputmode: "numeric", value: m?.inspectOk ?? "" });
+      const insBad = h("input", { type: "number", min: "0", inputmode: "numeric", value: m?.inspectBad ?? "" });
+      const qtyOf = (mv, oid) => Number(mv.qty[oid]) || 0;
+      const leftWithout = (oid) => data.moves.reduce((n, x) => (m && x.id === m.id ? n : n + (x.type === "in" ? qtyOf(x, oid) : -qtyOf(x, oid))), 0);
+      const rows = options.map((o) => {
+        const inp = h("input", { type: "number", min: "0", inputmode: "numeric", placeholder: "0", value: m?.qty[o.id] || "", "aria-label": `${o.name} 수량`, oninput: () => upd() });
+        const warn = h("span", { class: "vm-row__warn", hidden: true });
+        const step = (d) => { const v = Math.max(0, (Number(inp.value) || 0) + d); inp.value = v ? String(v) : ""; upd(); };
+        return { o, inp, warn, el: h("div", { class: "vm-row" }, [
+          h("div", { class: "vm-row__name" }, [h("strong", { text: o.name }), h("span", { class: "muted small", text: `재고 ${fmtN(leftWithout(o.id))}` }), warn]),
+          h("div", { class: "vm-step" }, [h("button", { type: "button", class: "vm-step__btn", "aria-label": `${o.name} 1 빼기`, text: "−", onclick: () => step(-1) }), inp, h("button", { type: "button", class: "vm-step__btn", "aria-label": `${o.name} 1 더하기`, text: "+", onclick: () => step(1) })])
+        ]) };
+      });
+      // 사진: 고르면 바로 줄여 두고, 저장할 때 올림. 새 기록은 1장 이상
+      const needPhoto = !m;
+      const pending = [];
+      let kept = m ? [...m.photos] : [], savedId = null;
+      const photoBox = h("div", { class: "move-photos" });
+      const pickers = ["camera", "album"].map((k) => h("input", { type: "file", accept: "image/*", hidden: true, multiple: k === "album", ...(k === "camera" ? { capture: "environment" } : {}) }));
+      const photoBtns = h("div", { class: "vm-photo-btns" }, [
+        h("button", { class: "btn btn--ghost", type: "button", onclick: () => pickers[0].click() }, [icon("plus"), "사진 찍기"]),
+        h("button", { class: "btn btn--ghost", type: "button", onclick: () => pickers[1].click() }, [icon("note"), "앨범에서 고르기"]), ...pickers]);
+      const photoHint = h("small", { class: "muted" });
+      const drawPhotos = () => {
+        photoBox.replaceChildren(
+          ...kept.map((pid) => h("span", { class: "move-photos__item" }, [
+            h("a", { href: "#", "aria-label": "사진 크게 보기", onclick: (e) => { e.preventDefault(); vmPhotoSrc(pid).then((u) => { if (u) window.open(u, "_blank", "noopener"); }); } }, vmPhotoImg(pid)),
+            h("button", { class: "move-photos__x", type: "button", "aria-label": "사진 지우기", html: ICON.close, onclick: async () => {
+              if (!confirm("이 사진을 지울까요?")) return;
+              const r = await act(() => api(`/volunteer/stock-photos/${pid}`, { method: "DELETE" }));
+              kept = kept.filter((x) => x !== pid); apply(r); drawPhotos();
+            } })])),
+          ...pending.map((b, i) => h("span", { class: "move-photos__item is-new" }, [h("img", { class: "move-photo", alt: "올릴 사진", src: URL.createObjectURL(b) }), h("button", { class: "move-photos__x", type: "button", "aria-label": "고른 사진 빼기", html: ICON.close, onclick: () => { pending.splice(i, 1); drawPhotos(); } })]))
+        );
+        photoBtns.hidden = kept.length + pending.length >= VM_PHOTO_MAX;
+        photoHint.textContent = photoBtns.hidden ? `사진은 ${VM_PHOTO_MAX}장까지예요.` : `${VM_PHOTO_MAX}장까지, 올릴 때 자동으로 작게 줄여요.`;
+        upd();
+      };
+      for (const fin of pickers) fin.addEventListener("change", async () => {
+        const files = [...fin.files]; fin.value = "";
+        for (const f of files) {
+          if (kept.length + pending.length >= VM_PHOTO_MAX) { showError(err, `사진은 ${VM_PHOTO_MAX}장까지 올릴 수 있어요.`); break; }
+          try { pending.push(await shrinkImage(f)); showError(err, ""); } catch (ex) { showError(err, ex.message); }
+        }
+        drawPhotos();
+      });
+      const sumLine = h("p", { class: "vm-foot__sum" });
+      const total = h("p", { class: "vm-total" });
+      function upd() {
+        const n = rows.reduce((s, x) => s + (Number(x.inp.value) || 0), 0);
+        for (const x of rows) {
+          const over = t === "out" ? (Number(x.inp.value) || 0) - leftWithout(x.o.id) : 0;
+          x.warn.hidden = over <= 0; x.warn.textContent = over > 0 ? `재고보다 ${fmtN(over)}${unit} 많아요` : "";
+        }
+        const photos = kept.length + pending.length;
+        total.textContent = `합계 ${fmtN(n)} ${unit}`;
+        sumLine.replaceChildren(`합계 ${fmtN(n)} ${unit} · `, h("span", { class: needPhoto && !photos ? "is-bad" : null, text: needPhoto && !photos ? "사진 0장 (1장 이상 필요)" : `사진 ${photos}장` }));
+      }
+      const extraOpen = !!(m && (m.note || m.issue || m.inspectOk != null || m.inspectBad != null));
+      const ok = h("button", { class: "btn btn--primary", type: "submit", text: m ? "저장하기" : `${lab} 저장하기` });
+      const form = h("form", { class: "vm-form", novalidate: true }, [
+        h("div", { class: "row2" }, [field(`${lab}일`, date), t === "out" ? field("전달자", handler) : null]),
+        h("div", { class: "field" }, [h("span", { class: "field__label", text: "수량" }),
+          rows.length ? h("div", { class: "vm-rows" }, rows.map((x) => x.el)) : h("p", { class: "muted small", text: "아직 품목이 없어요. 관리자에게 문의해 주세요." }), total]),
+        h("div", { class: "field" }, [h("span", { class: "field__label" }, [t === "in" ? "영수증·사진" : "출고 사진", needPhoto ? h("span", { class: "vm-need", text: " (1장 이상 필요)" }) : " (선택)"]), photoBox, photoBtns, photoHint]),
+        h("details", { class: "vm-extra", open: extraOpen }, [h("summary", { text: t === "in" ? "검수 · 비고 · 이슈 (선택)" : "비고 · 이슈 (선택)" }), h("div", { class: "stack" }, [
+          t === "in" ? h("div", { class: "row2" }, [field("검수 합격", insOk), field("검수 불량", insBad, "불량이 있으면 이슈에도 적어 주세요.")]) : null,
+          field("비고", note),
+          field("이슈 (문제가 된 점)", issue, "이 날짜·물량에 문제가 있었으면 적어 주세요.")
+        ])]),
+        h("div", { class: "vm-foot" }, [err, sumLine, h("div", { class: "vm-foot__btns" }, [
+          m ? h("button", { class: "btn btn--danger-outline", type: "button", text: "지우기", onclick: async () => {
+            if (!confirm(`${vmDay(m.date)} ${lab} 기록을 지울까요? 사진도 함께 지워져요.`)) return;
+            const r = await act(() => api(`/volunteer/stock-moves/${m.id}`, { method: "DELETE" }));
+            closeDialog(); apply(r); toast(`${lab} 기록을 지웠어요.`);
+          } }) : null, ok])])
+      ]);
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        busy(ok, async () => {
+          try {
+            if (!date.value) return showError(err, "날짜를 골라 주세요.");
+            if (!rows.some((x) => Number(x.inp.value) > 0)) return showError(err, "수량을 하나 이상 적어 주세요.");
+            const over = t === "out" ? rows.filter((x) => Number(x.inp.value) > leftWithout(x.o.id)) : [];
+            if (over.length && !confirm(`재고보다 많이 출고해요: ${over.map((x) => `${x.o.name} (재고 ${fmtN(leftWithout(x.o.id))})`).join(", ")}\n그래도 저장할까요?`)) return;
+            if (needPhoto && !savedId && !pending.length) return showError(err, t === "in" ? "영수증이나 사진을 1장 이상 올려 주세요." : "출고 사진을 1장 이상 올려 주세요.");
+            const qty = Object.fromEntries(rows.map((x) => [x.o.id, x.inp.value]));
+            const body = { date: date.value, handler: handler.value, note: note.value, issue: issue.value, qty, ...(t === "in" ? { inspectOk: insOk.value, inspectBad: insBad.value } : {}) };
+            // 기록이 한 번 저장되면 (사진 올리기가 실패해도) 다시 누를 때는 기록을 또 만들지 않고 사진만 올림
+            let r = savedId ? null : await api(m ? `/volunteer/stock-moves/${m.id}` : `/volunteer/stock/${l.id}/moves`, { method: m ? "PATCH" : "POST", body: m ? body : { ...body, type: t } });
+            if (r) { savedId = m ? m.id : r.newMoveId; data = r; }
+            while (pending.length) {
+              try { r = await api(`/volunteer/stock-moves/${savedId}/photos`, { method: "POST", body: { data: await blobToBase64(pending[0]) } }); }
+              catch (ex) { drawPhotos(); draw(); return showError(err, `기록은 저장했어요. 사진을 올리지 못했어요: ${ex.message} 다시 '${ok.textContent}'를 누르면 남은 사진만 올려요.`); }
+              pending.shift(); data = r;
+            }
+            closeDialog();
+            flash = savedId; draw();
+            toast(m ? `${lab} 기록을 고쳤어요.` : `${lab}를 저장했어요.`);
+            box.querySelector(".vm-card.is-new")?.scrollIntoView({ block: "center", behavior: "smooth" });
+          } catch (ex) { showError(err, ex.message); }
+        });
+      });
+      drawPhotos();
+      openDialog(`${lab} ${m ? "고치기" : "적기"} · ${l.name}`, form, { tone: t });
+    }
+    const start = () => {
+      draw();
+      if (opts.isCurrent && !opts.isCurrent()) return;
+      const em = opts.editId && data?.moves.find((x) => x.id === opts.editId);
+      if (opts.editId && !em) toast("그 기록을 찾을 수 없어요. 이미 지워졌을 수 있어요.");
+      if (em) sheet(em); else if (opts.openNew && data) sheet(null);
+    };
+    if (data || !lid) start(); else { draw(); load().then(start, () => {}); }
+    return box;
   }
   function volProject({ project, items, visits = [] }, only, ledgers, details) {
     const kids = (pid) => items.filter((i) => i.parentId === pid);
@@ -6917,7 +7132,7 @@
         ])))
       ])) : h("div", { class: "card empty", text: "아직 봉사자가 적은 완제품 기록이 없어요." });
       // 메뉴 공개: 고른 메뉴만 봉사자 화면에 보임 (단계적으로 엶)
-      const MENU_LABEL = { home: "대시보드", schedule: "일정", training: "기본 교육", notices: "공지", wbs: "WBS", req: "추가 전달 물량", in: "입고", out: "출고", recovery: "완제품·제품 관리" };
+      const MENU_LABEL = { home: "대시보드", schedule: "일정", training: "기본 교육", notices: "공지", wbs: "WBS", req: "추가 전달 물량", in: "입고", out: "출고", recovery: "완제품·제품 관리", moves2: "새 입고·출고 화면 (휴대폰용)" };
       const menuView = volMenuSet ? (() => {
         const boxes = volMenuSet.keys.map((k) => ({ k, el: h("input", { type: "checkbox", checked: volMenuSet.menu.includes(k) }) }));
         const ok = h("button", { class: "btn btn--primary", type: "button", text: "저장", onclick: () => busy(ok, async () => {
