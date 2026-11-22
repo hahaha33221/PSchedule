@@ -2102,3 +2102,30 @@ th.num .sort-th__btn { justify-content: flex-end; }
 }
 .preview-bar .btn--ghost, .theme-volunteer .preview-bar .btn--ghost { background: transparent; color: #fff; border: 1px solid rgba(255, 255, 255, .5); }
 @media (min-width: 641px) { .vm > .vm-add { align-self: flex-start; } }
+/* 수도회·물류 (직원·관리자) */
+.ops-tabs { display: flex; flex-wrap: nowrap; overflow-x: auto; gap: 4px; margin: 4px 0 14px; scrollbar-width: thin; }
+.ops-tabs .seg__btn { flex: 0 0 auto; white-space: nowrap; }
+.ops-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 8px 0 16px; }
+.ops-kpi { display: flex; flex-direction: column; gap: 4px; padding: 14px; }
+.ops-kpi strong { font-size: 24px; font-variant-numeric: tabular-nums; }
+.ops-kpi span { font-size: 12.5px; color: var(--muted); }
+.ops-kpi.is-warn { border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); }
+.ops-kpi.is-warn strong { color: var(--danger); }
+.ops-flowcard { padding: 14px 16px; margin-bottom: 16px; }
+.ops-flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+.ops-stage { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 10px; }
+.ops-stage strong { font-size: 22px; }
+.ops-stage span { font-size: 12.5px; color: var(--muted); }
+.ops-stage.is-issue { border-color: color-mix(in srgb, var(--danger) 55%, var(--line)); }
+.ops-stage.is-issue strong { color: var(--danger); }
+.ops-flow__arrow { position: absolute; right: -9px; top: 12px; font-size: 13px; color: var(--muted); }
+.ops-bar { display: block; height: 6px; min-width: 60px; border-radius: 3px; background: var(--surface-2); overflow: hidden; }
+.ops-bar b { display: block; height: 100%; background: var(--primary); }
+.ops-stage.is-issue .ops-bar b { background: var(--danger); }
+.ops-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin: 16px 0; }
+.ops-perms th.c, .ops-perms td.c { text-align: center; }
+.ops-staffon { display: flex; align-items: center; gap: 10px; padding: 12px 14px; margin-bottom: 12px; }
+@media (max-width: 640px) { .ops-flow { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ops-flow__arrow { display: none; } }
+.ops-tabs { display: flex; max-width: 100%; }
+.ops-tabs .seg__link { flex: 0 0 auto; white-space: nowrap; min-height: 36px; display: inline-flex; align-items: center; }
+.ops-tabs .seg__link.is-active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, .1); }

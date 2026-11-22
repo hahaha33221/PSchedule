@@ -884,6 +884,7 @@
       { id: "projects", label: "프로젝트", icon: "folder", kids: [
         { id: "stock", label: "입출고 관리", icon: "db" }
       ] },
+      ...(opsSees() ? [{ id: "ops", label: "수도회·물류", icon: "db" }] : []), // 직원은 권한표에서 켜야 보임
       { id: "orgchart", label: "조직도", icon: "org" },
       { id: "contacts", label: "연락처", icon: "phone" },
       { id: "notices", label: "공지", icon: "bell", badge: state.unreadNotices } // 맨 아래, 안 읽은 공지 수
@@ -7001,7 +7002,7 @@
 
   /* ---------- 봉사자 관리 (관리자): 일정·기본 교육 등록, 이수 현황 ---------- */
   // ---- 검수 기록 화면: 관리자 '봉사자 관리 › 검수 관리'와 팀 봉사자 '검수'가 같이 씀. base 는 "/admin" 또는 "/team"
-  const REWORK_LABEL = { "": "정하지 않음", return: "수도회로 반송", fix: "현장 재작업" };
+  const REWORK_LABEL = { "": "정하지 않음", return: "수도회로 반송", fix: "현장 재작업", hold: "보관", discard: "폐기" };
   function inspModule(base, redraw, intro) {
     let insp = null; // { groups, types, inspections }
     const inspFilter = { from: "", to: "", stage: "", item: "" };
@@ -7458,6 +7459,10 @@
       ]);
       fill(box,
         h("div", { class: "vm-stats" }, [vmStat("내 조", mine.length), vmStat("배정 물량", mine.reduce((n, g) => n + g.assigns.filter((a) => a.status !== "done").reduce((k, a) => k + (a.qty || 0), 0), 0)), vmStat("남은 배정", mine.reduce((n, g) => n + g.assigns.filter((a) => a.status !== "done").length, 0))]),
+        d.canEdit && d.waiting?.length ? h("section", { class: "card vm-sum" }, [h("h2", { class: "vm-sum__name", text: `배정 대기 물량 ${d.waiting.length}건` }), opsHint("택배 수신·회수로 들어온 물량이에요. 조를 고르면 남은 수량이 그 조에 배정돼요."),
+          h("ul", { class: "ops-assigns" }, d.waiting.map((w) => { const s = opsSel(d.groups.filter((g) => g.active).map((g) => [g.id, g.name]), "", "조 배정"); s.setAttribute("aria-label", `${w.org} 조 배정`);
+            s.addEventListener("change", async () => { if (!s.value) return; try { d = { ...d, ...(await api(`/ops/groups/${s.value}/assigns`, { method: "POST", body: { scheduleId: w.scheduleId, qty: Math.max(0, w.qty - w.checked) } })) }; d.waiting = d.waiting.filter((x) => x.id !== w.id); toast(`${w.org} 물량을 배정했어요.`); draw(); if (state.opsRefresh) quiet(state.opsRefresh()); } catch (ex) { toast(ex.message); s.value = ""; } });
+            return h("li", { class: "ops-assign" }, [h("span", {}, [h("strong", { text: w.org }), h("span", { class: "muted small", text: ` ${shortDate(w.date)} · ${fmtN(w.qty - w.checked)}개` })]), s]); }))]) : null,
         mine.length ? h("div", { class: "stack stack--sm" }, mine.map(gcard)) : h("div", { class: "card empty", text: "아직 속한 검수 조가 없어요. 리더에게 알려 주세요." }),
         others.length ? h("details", { class: "vm-opts" }, [h("summary", {}, `다른 조 ${others.length}개`), h("div", { class: "stack stack--sm" }, others.map(gcard))]) : null,
         d.canEdit ? opsAddBtn("검수 조 만들기", () => edit(null)) : null);
@@ -7564,6 +7569,227 @@
       case "df2": return volGroupPage(VOL_GROUPS[1], "recovery", { steps: true });
       default: return [h("div", { class: "card empty", text: "찾는 단계가 없어요." })];
     }
+  }
+  /* ---------- 수도회·물류 (직원·관리자): DB 설계 v2 2·3차 화면. 직원은 관리자가 권한표에서 '직원도 쓰기'를 켜야 보임 ---------- */
+  const OPS_TABS = [
+    ["dash", "대시보드", "dashboard"], ["mon", "수도회", "monasteries"], ["ship-in", "택배 수신", "shipments"], ["ship-out", "택배 발송", "shipments"],
+    ["stock", "재고·보관", "stock"], ["cut", "실자르기·타래", "cutting"], ["buy", "업체 구매", "purchases"], ["contacts", "연락 기록", "contacts"],
+    ["groups", "검수 조·배정", "groups"], ["criteria", "검수 기준", "criteria"], ["duties", "담당·역할", "duties"], ["perms", "권한표", null]
+  ];
+  async function loadOpsPerms() {
+    try { state.opsPerms = await api("/ops/perms"); } catch (e) { state.opsPerms = { mine: {} }; }
+    if (layout.nav) drawNav(navActive);
+  }
+  const opsSees = () => isAdmin() || Object.values(state.opsPerms?.mine || {}).some((x) => x.v);
+  async function pageOps() {
+    if (!state.opsPerms) await loadOpsPerms();
+    if (!opsSees()) return go("#/today");
+    document.title = `수도회·물류 · ${TITLE}`;
+    drawMini(null);
+    const mine = state.opsPerms.mine || {};
+    const tabs = OPS_TABS.filter(([, , k]) => (k ? isAdmin() || mine[k]?.v : isAdmin()));
+    const sub = tabs.some(([k]) => k === route().id) ? route().id : tabs[0][0];
+    setMain("ops", loading());
+    const seg = h("nav", { class: "seg ops-tabs", "aria-label": "수도회·물류 메뉴" }, tabs.map(([k, label]) => h("a", { class: "seg__link" + (k === sub ? " is-active" : ""), href: `#/ops/${k}`, "aria-selected": String(k === sub), "aria-current": k === sub ? "page" : null, text: label })));
+    let body;
+    try {
+      body = await ({
+        dash: opsDashboard, mon: opsMonasteries, "ship-in": () => opsShipments("in", !(isAdmin() || mine.shipments?.e)), "ship-out": () => opsShipments("out", !(isAdmin() || mine.shipments?.e)),
+        stock: opsStock, cut: opsCutting, buy: opsPurchases, contacts: () => opsContacts(false), groups: opsGroups, criteria: opsCriteria, duties: opsDuties, perms: opsPermsAdmin
+      }[sub])();
+    } catch (e) { if (e.status === 401) return; body = [failed(e)]; }
+    if (route().name !== "ops") return;
+    setMain("ops", [h("div", { class: "page-head" }, [h("h1", { text: "수도회·물류" }), isAdmin() && !state.opsPerms.staffOn ? h("span", { class: "stock-tag", title: "직원에게는 아직 안 보여요. 권한표에서 켤 수 있어요.", text: "관리자에게만 보임" }) : null]), seg, ...[].concat(body)]);
+    seg.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "center" });
+  }
+  // ---- 관리 대시보드
+  async function opsDashboard() {
+    const d = await api("/ops/dashboard");
+    const k = d.kpi, rate = k.checked ? (k.bad / k.checked) * 100 : 0;
+    const stages = [["edu_done", "교육완료"], ["making", "제작중"], ["recovered", "회수완료"], ["checked", "검수완료"], ["issue", "문제 있음"]];
+    const max = Math.max(1, ...stages.map(([s]) => d.stages[s] || 0));
+    const kpi = (n, label, warn) => h("div", { class: "card ops-kpi" + (warn ? " is-warn" : "") }, [h("strong", { text: n }), h("span", { text: label })]);
+    const pct = (a, b) => (b ? `${((a / b) * 100).toFixed(1)}%` : "-");
+    return [
+      h("p", { class: "muted small", text: `${d.date} 기준 · 수도회 진행 상황과 물량` }),
+      h("div", { class: "ops-kpis" }, [kpi(fmtN(k.reqQty), "요청 수량 (개)"), kpi(fmtN(k.inspectLeft), "검수 남은 수량"), kpi(`${rate.toFixed(1)}%`, `불량률 (검수 ${fmtN(k.checked)}개 중 ${fmtN(k.bad)}개)`, rate > 5), kpi(fmtN(k.lateFollowups), "기한 된 후속 조치", k.lateFollowups > 0), kpi(fmtN(k.lowStock), "안전재고 미달 품목", k.lowStock > 0)]),
+      h("section", { class: "card ops-flowcard" }, [h("h2", { class: "card__title", text: "수도회 진행 단계" }), h("div", { class: "ops-flow" }, stages.map(([s, t], i) => h("div", { class: "ops-stage" + (s === "issue" ? " is-issue" : "") }, [
+        h("strong", { text: fmtN(d.stages[s] || 0) }), h("span", { text: t }), h("i", { class: "ops-bar" }, h("b", { style: `width:${((d.stages[s] || 0) / max) * 100}%` })), i < 3 ? h("span", { class: "ops-flow__arrow", "aria-hidden": "true", text: "→" }) : null]))),
+        h("p", { class: "muted small", text: `아직 교육 전(등록)인 수도회 ${fmtN(d.stages.new || 0)}곳은 빠져 있어요.` })]),
+      h("section", { class: "stack stack--sm" }, [h("h2", { class: "card__title", text: "수도회별 물량" }), d.monasteries.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
+        h("thead", {}, h("tr", {}, ["수도회", "상태", "요청", "제작", "회수", "검수", "검수 진행", "합격률"].map((t) => h("th", { text: t })))),
+        h("tbody", {}, d.monasteries.map((m) => h("tr", {}, [h("td", {}, h("strong", { text: m.name })), h("td", {}, h("span", { class: "vm-tag" + (m.status === "issue" ? " is-bad" : ""), text: MON_STATUS[m.status] })),
+          h("td", { class: "num", text: fmtN(m.req) }), h("td", { class: "num", text: fmtN(m.made) }), h("td", { class: "num", text: fmtN(m.rec) }), h("td", { class: "num", text: fmtN(m.chk) }),
+          h("td", {}, h("i", { class: "ops-bar", title: pct(m.chk, m.rec) }, h("b", { style: `width:${m.rec ? Math.min(100, (m.chk / m.rec) * 100) : 0}%` }))), h("td", { class: "num", text: pct(m.pass, m.chk) })])))
+      ])) : h("div", { class: "card empty", text: "교육을 마친 수도회가 아직 없어요." })]),
+      h("div", { class: "ops-grid2" }, [
+        h("section", { class: "stack stack--sm" }, [h("h2", { class: "card__title", text: "도착 예정 택배" }), opsCards(d.incoming, (s) => opsCard(null, [opsTop(s.party, s.qty != null ? `${fmtN(s.qty)}개` : ""), opsLine([s.contents, s.trackingNo ? `송장 ${s.trackingNo}` : "", s.sentDate ? `발송 ${shortDate(s.sentDate)}` : ""].filter(Boolean).join(" · "))]), "도착 예정 택배가 없어요.")]),
+        h("section", { class: "stack stack--sm" }, [h("h2", { class: "card__title", text: "기한 된 후속 조치" }), opsCards(d.late, (c) => opsCard(null, [opsTop(c.target, c.dueDate ? shortDate(c.dueDate) : ""), opsLine(c.followUp), opsLine(c.author ? `적은 사람 ${c.author}` : "")], "is-warn"), "기한 된 후속 조치가 없어요.")])
+      ]),
+      d.low.length ? h("section", { class: "stack stack--sm" }, [h("h2", { class: "card__title", text: "안전재고 미달" }), opsCards(d.low, (x) => opsCard(null, [opsTop(`${x.ledger} · ${x.name}`, `${fmtN(x.qty)} / ${fmtN(x.safety)} ${x.unit}`)], "is-warn"), "")]) : null
+    ];
+  }
+  // ---- 재고·보관 (F09·F10): 품목별 재고·위치·안전재고, 위치 이동·실사 조정, 위치 등록(관리자)
+  const LOC_KIND = { all: "공용", raw: "원자재", finished: "완제품", inspect: "검수 대기" };
+  const REF_LABEL = { "": "직접 입력", move: "위치 이동", adjust: "실사 조정", cutting: "실자르기", handout: "타래 배분", purchase: "구매 입고", shipment: "택배", recovery: "회수", schedule: "방문 일정" };
+  async function opsStock() {
+    let d = await api("/ops/stock"), view = "items";
+    const box = h("div", { class: "vm" });
+    const locName = (id) => d.locations.find((x) => x.id === id)?.name || "위치 미정";
+    const draw = () => {
+      const all = d.ledgers.flatMap((l) => l.options.map((o) => ({ ...o, ledger: l, low: o.safety != null && o.qty < o.safety })));
+      fill(box,
+        h("div", { class: "vm-stats" }, [vmStat("품목", all.length), vmStat("안전재고 미달", all.filter((o) => o.low).length, all.some((o) => o.low)), vmStat("보관 위치", d.locations.filter((x) => x.active).length)]),
+        opsSeg([["items", "품목별 재고"], ["locs", "보관 위치"], ["moves", "최근 입출고"]], view, (k) => { view = k; draw(); }),
+        view === "items" ? h("div", { class: "stack stack--sm" }, d.ledgers.map((l) => h("section", { class: "stack stack--sm" }, [h("h2", { class: "card__title", text: `${l.name} (${l.unit})` }),
+          opsCards(l.options, (o) => opsCard(d.canEdit ? () => edit(l, o) : null, [opsTop(o.name, `${fmtN(o.qty)} ${l.unit}`),
+            opsLine(o.byLoc.length ? o.byLoc.map((x) => `${locName(x.locationId)} ${fmtN(x.qty)}`).join(" · ") : "위치 기록 없음"),
+            opsTags(o.safety != null ? opsTag(`안전재고 ${fmtN(o.safety)}`, o.qty < o.safety ? "is-bad" : "") : null, o.qty < (o.safety ?? -Infinity) ? opsTag("부족", "is-bad") : null)], o.safety != null && o.qty < o.safety ? "is-warn" : ""), "품목이 없어요.")])))
+        : view === "locs" ? h("div", { class: "stack stack--sm" }, [opsCards(d.locations, (x) => opsCard(d.canLocations ? () => locEdit(x) : null, [opsTop(x.name, LOC_KIND[x.kind]), opsLine([x.place, x.active ? "" : "쉼", x.note].filter(Boolean).join(" · ")),
+            opsLine(`${all.filter((o) => o.byLoc.some((b) => b.locationId === x.id)).length}개 품목`)]), "아직 보관 위치가 없어요. 관리자가 등록해요."), d.canLocations ? opsAddBtn("보관 위치 등록", () => locEdit(null)) : null])
+        : opsCards(d.moves, (m) => opsCard(null, [opsTop(`${shortDate(m.date)} · ${m.ledger}`, `${m.type === "in" ? "+" : "−"} ${m.items}`), opsTags(opsTag(REF_LABEL[m.refType] || m.refType), m.location ? opsTag(m.location) : null, m.toLocation ? opsTag(`→ ${m.toLocation}`) : null), m.note ? opsLine(m.note) : null]), "아직 입출고가 없어요."),
+        view === "items" && d.canEdit ? opsAddBtn("위치 이동·실사 조정", () => edit(null, null)) : null);
+    };
+    const edit = (l0, o0) => {
+      const opts = d.ledgers.flatMap((l) => l.options.map((o) => [`${l.id}:${o.id}`, `${l.name} · ${o.name} (${fmtN(o.qty)})`]));
+      const what = opsSel(opts, l0 ? `${l0.id}:${o0.id}` : "", "품목 고르기");
+      const mode = opsSel([["adjust", "실사 조정 (실제 센 수량)"], ["move", "위치 이동"], ["safety", "안전재고 정하기"]], "adjust");
+      const locs = d.locations.filter((x) => x.active).map((x) => [x.id, x.name]);
+      const from = opsSel(locs, "", "위치 미정"), to = opsSel(locs, "", "옮길 위치 고르기"), loc = opsSel(locs, "", "위치 전체");
+      const qty = h("input", { type: "number", min: "0", inputmode: "numeric" }), note = h("input", { maxlength: "300", placeholder: "사유·메모" });
+      const safety = h("input", { type: "number", min: "0", inputmode: "numeric", value: o0?.safety ?? "" });
+      const fMove = h("div", { class: "row2" }, [field("보낸 위치", from), field("받는 위치", to)]), fLoc = field("센 위치", loc, "위치를 고르면 그 위치 기록과 비교해요"), fQty = field("수량", qty), fSafe = field("안전재고 (비우면 안 봄)", safety), fNote = field("메모", note);
+      const sync = () => { fMove.hidden = mode.value !== "move"; fLoc.hidden = mode.value !== "adjust"; fSafe.hidden = mode.value !== "safety"; fQty.hidden = mode.value === "safety"; fNote.hidden = mode.value === "safety"; fQty.querySelector(".field__label").textContent = mode.value === "move" ? "옮길 수량" : "실제 센 수량"; };
+      mode.addEventListener("change", sync); sync();
+      opsSheet("재고 고치기", [field("품목", what), field("할 일", mode), fMove, fLoc, fQty, fSafe, fNote], {
+        save: async () => {
+          if (!what.value) throw new Error("품목을 골라 주세요.");
+          const [ledgerId, optionId] = what.value.split(":").map(Number);
+          if (mode.value === "safety") d = { ...d, ...(await api(`/ops/stock-options/${optionId}`, { method: "PATCH", body: { safetyQty: safety.value } })) };
+          else if (mode.value === "move") d = { ...d, ...(await api("/ops/stock/move", { method: "POST", body: { ledgerId, optionId, qty: qty.value, fromLocationId: from.value, toLocationId: to.value, note: note.value } })) };
+          else d = { ...d, ...(await api("/ops/stock/adjust", { method: "POST", body: { ledgerId, optionId, actualQty: qty.value, locationId: loc.value, note: note.value } })) };
+          toast("저장했어요."); draw();
+        }
+      });
+    };
+    const locEdit = (x) => {
+      const name = h("input", { value: x?.name || "", maxlength: "60", placeholder: "예: 본관 2층 자재실" }), place = h("input", { value: x?.place || "", maxlength: "80" });
+      const kind = opsSel(Object.entries(LOC_KIND), x?.kind || "all"), active = h("input", { type: "checkbox", checked: x ? x.active : true }), note = h("input", { value: x?.note || "", maxlength: "300" });
+      opsSheet(x ? "보관 위치 고치기" : "보관 위치 등록", [field("위치 이름", name), h("div", { class: "row2" }, [field("건물·방", place), field("용도", kind)]), h("label", { class: "check" }, [active, h("span", { text: "쓰는 위치" })]), field("메모", note)], {
+        save: async () => { d = { ...d, ...(await api(x ? `/ops/locations/${x.id}` : "/ops/locations", { method: x ? "PATCH" : "POST", body: { name: name.value, place: place.value, kind: kind.value, active: active.checked, note: note.value } })) }; toast("저장했어요."); draw(); }
+      });
+    };
+    draw();
+    return [opsHint("품목별 재고와 보관 위치를 봐요. 위치 이동은 출고·입고 두 줄로, 실사 조정은 차이만큼 입출고 기록에 남아요."), box];
+  }
+  // ---- 실자르기·타래 배분 (F07·F08)
+  async function opsCutting() {
+    let d = await api("/ops/cutting"), view = "jobs";
+    const box = h("div", { class: "vm" });
+    const optPairs = () => d.ledgers.flatMap((l) => l.options.map((o) => [`${l.id}:${o.id}`, `${l.name} · ${o.name} (${fmtN(o.qty)})`]));
+    const skeinTotal = () => d.ledgers.flatMap((l) => l.options).filter((o) => /타래|자른/.test(o.name)).reduce((n, o) => n + o.qty, 0);
+    const draw = () => fill(box,
+      h("div", { class: "vm-stats" }, [vmStat("이번 달 만든 타래", d.monthSkeins), vmStat("작업 기록", d.jobs.length), vmStat("배분", d.handouts.length)]),
+      opsSeg([["jobs", "작업 기록"], ["hand", "타래 배분"]], view, (k) => { view = k; draw(); }),
+      view === "jobs"
+        ? opsCards(d.jobs, (j) => opsCard(null, [opsTop(`${shortDate(j.date)}${j.thread ? ` · ${j.thread}` : ""}`, `${fmtN(j.skeinQty)}타래`), opsLine([j.rawQty != null ? `실 ${fmtN(j.rawQty)} 사용` : "", j.workers ? `작업 ${j.workers}` : "", j.location].filter(Boolean).join(" · ")), j.note ? opsLine(j.note) : null,
+            (isAdmin() || j.createdBy === state.user.id) && d.canEdit ? h("span", { class: "actions actions--start" }, h("button", { class: "link-btn small", type: "button", text: "지우기 (입출고도 되돌림)", onclick: async () => { if (!confirm("이 작업 기록과 함께 쌓인 입출고를 지울까요?")) return; d = { ...d, ...(await act(() => api(`/ops/cutting/${j.id}`, { method: "DELETE" }))) }; draw(); } })) : null]), "아직 실자르기 기록이 없어요.")
+        : opsCards(d.handouts, (x) => opsCard(null, [opsTop(`${shortDate(x.date)} · ${x.receiver}`, x.skeinQty ? `${fmtN(x.skeinQty)}타래` : ""), opsLine(Object.entries(x.supplies).map(([k, v]) => `${k} ${v}`).join(" · ")),
+            opsTags(opsTag(x.receiverType === "monastery" ? "수도회" : "실봉사자"), x.shipmentId ? opsTag(`택배 ${SHIP_STATUS[x.shipStatus] || "준비"}${x.trackingNo ? ` · ${x.trackingNo}` : ""}`, "is-mine") : opsTag("직접 전달")),
+            (isAdmin() || x.createdBy === state.user.id) && d.canEdit ? h("span", { class: "actions actions--start" }, h("button", { class: "link-btn small", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 배분 기록을 지울까요? 함께 쌓인 출고와 아직 보내지 않은 택배도 지워져요.")) return; d = { ...d, ...(await act(() => api(`/ops/handouts/${x.id}`, { method: "DELETE" }))) }; draw(); } })) : null]), "아직 타래 배분 기록이 없어요."),
+      d.canEdit ? opsAddBtn(view === "jobs" ? "실자르기 작업 기록" : "타래 배분", () => (view === "jobs" ? jobSheet() : handSheet())) : null);
+    const jobSheet = () => {
+      const date = h("input", { type: "date", value: today() }), raw = opsSel(optPairs(), "", "사용한 실 (선택)"), rawQty = h("input", { type: "number", min: "0", inputmode: "numeric" });
+      const sk = opsSel(optPairs(), "", "타래를 넣을 품목 (선택)"), skQty = h("input", { type: "number", min: "0", inputmode: "numeric" });
+      const loc = opsSel(d.locations.map((x) => [x.id, x.name]), "", "보관 위치 (선택)"), workers = h("input", { maxlength: "200", placeholder: "예: 김OO, 이OO" }), note = h("input", { maxlength: "300" });
+      opsSheet("실자르기 작업 기록", [field("작업일", date), h("div", { class: "row2" }, [field("사용한 실", raw), field("사용 수량", rawQty)]), h("div", { class: "row2" }, [field("만든 타래 → 품목", sk), field("만든 타래 수", skQty)]), field("타래 보관 위치", loc), field("작업자", workers), field("메모", note),
+        opsHint("저장하면 사용한 실은 출고, 만든 타래는 입고로 입출고 기록에 쌓여요.")], {
+        save: async () => { const [rl, ro] = raw.value ? raw.value.split(":") : [], [sl, so] = sk.value ? sk.value.split(":") : [];
+          d = { ...d, ...(await api("/ops/cutting", { method: "POST", body: { date: date.value, ledgerId: rl, optionId: ro, rawQty: rawQty.value, skeinLedgerId: sl, skeinOptionId: so, skeinQty: skQty.value, locationId: loc.value, workers: workers.value, note: note.value } })) }; toast("작업을 기록했어요."); draw(); }
+      });
+    };
+    const handSheet = () => {
+      const date = h("input", { type: "date", value: today() }), type = opsSel([["volunteer", "실봉사자"], ["monastery", "수도회"]], "volunteer");
+      const vol = opsSel(d.volunteers.map((x) => [x.id, x.name]), "", "봉사자 계정 (없으면 이름만)"), name = h("input", { maxlength: "80", placeholder: "받는 사람 이름" }), mon = opsSel(d.monasteries.map((x) => [x.id, x.name]), "", "수도회 고르기");
+      const fVol = h("div", { class: "row2" }, [field("봉사자", vol), field("이름 (계정 없을 때)", name)]), fMon = field("수도회", mon);
+      const sync = () => { fVol.hidden = type.value !== "volunteer"; fMon.hidden = type.value !== "monastery"; }; type.addEventListener("change", sync); sync();
+      const sk = opsSel(optPairs(), "", "타래 품목 (선택)"), qty = h("input", { type: "number", min: "0", inputmode: "numeric" });
+      const job = opsSel(d.jobs.map((j) => [j.id, `${shortDate(j.date)} 작업 ${j.skeinQty}타래`]), "", "어느 작업에서 (선택)");
+      const bags = h("input", { type: "number", min: "0", inputmode: "numeric", placeholder: "0" }), glue = h("input", { type: "number", min: "0", inputmode: "numeric", placeholder: "0" });
+      const parcel = h("input", { type: "checkbox" }), addr = h("input", { maxlength: "200", placeholder: "택배 주소 (수도회는 비우면 등록된 주소)" }), note = h("input", { maxlength: "300" });
+      opsSheet("타래 배분", [field("전달일", date), field("받는 쪽", type), fVol, fMon, h("div", { class: "row2" }, [field("타래 품목", sk), field("타래 수", qty)]), field("작업", job),
+        h("div", { class: "row2" }, [field("대형 비닐팩 (장)", bags), field("순간접착제 (개)", glue)]), h("label", { class: "check" }, [parcel, h("span", { text: "택배로 보내요 (택배 발송 '준비'로 넘김)" })]), field("주소", addr), field("메모", note),
+        opsHint("같은 이름의 품목 열이 있는 자재는 그 대장에서 출고돼요.")], {
+        save: async () => { const [sl, so] = sk.value ? sk.value.split(":") : []; const supplies = {}; if (Number(bags.value)) supplies["대형 비닐팩"] = bags.value; if (Number(glue.value)) supplies["순간접착제"] = glue.value;
+          d = { ...d, ...(await api("/ops/handouts", { method: "POST", body: { date: date.value, receiverType: type.value, userId: vol.value, receiverName: name.value, monasteryId: mon.value, skeinLedgerId: sl, skeinOptionId: so, skeinQty: qty.value, cuttingJobId: job.value, supplies, parcel: parcel.checked, address: addr.value, note: note.value } })) };
+          toast(parcel.checked ? "배분을 기록하고 택배 발송 준비로 넘겼어요." : "배분을 기록했어요."); draw(); }
+      });
+    };
+    draw();
+    return [opsHint("실자르기 작업과 타래 배분을 적어요. 사용한 실·만든 타래·나눠 준 타래가 입출고에 함께 쌓여요."), box];
+  }
+  // ---- 업체 구매 (F12)
+  const PUR = { request: "요청", approved: "승인", ordered: "주문", received: "입고", canceled: "취소" };
+  async function opsPurchases() {
+    let d = await api("/ops/purchases"), view = "open";
+    const box = h("div", { class: "vm" });
+    const next = { request: "approved", approved: "ordered", ordered: "received" };
+    const draw = () => {
+      const open = d.purchases.filter((p) => !["received", "canceled"].includes(p.status)), list = view === "open" ? open : d.purchases;
+      fill(box,
+        h("div", { class: "vm-stats" }, [vmStat("요청", d.purchases.filter((p) => p.status === "request").length), vmStat("주문 중", d.purchases.filter((p) => p.status === "ordered").length), vmStat("입고", d.purchases.filter((p) => p.status === "received").length)]),
+        opsSeg([["open", `진행 중 ${open.length}`], ["all", "전체"]], view, (k) => { view = k; draw(); }),
+        opsCards(list, (p) => opsCard(d.canEdit ? () => edit(p) : null, [opsTop(p.itemName, PUR[p.status]), opsLine([p.qty != null ? `${fmtN(p.qty)}${p.unit}` : "", p.vendor, p.amount != null ? `${fmtN(p.amount)}원` : ""].filter(Boolean).join(" · ")),
+          opsLine([p.expectedDate ? `입고 예정 ${shortDate(p.expectedDate)}` : "", p.orderDate ? `주문 ${shortDate(p.orderDate)}` : "", p.requester ? `요청 ${p.requester}` : ""].filter(Boolean).join(" · ")), p.reason ? h("span", { class: "vm-card__note small", text: p.reason }) : null]), view === "open" ? "진행 중인 구매가 없어요." : "아직 구매 기록이 없어요."),
+        d.canEdit ? opsAddBtn("구매 요청", () => edit(null)) : null);
+    };
+    const edit = (p) => {
+      const item = h("input", { value: p?.itemName || "", maxlength: "80", placeholder: "예: 대형 비닐팩" }), qty = h("input", { type: "number", min: "0", inputmode: "numeric", value: p?.qty ?? "" }), unit = h("input", { value: p?.unit || "", maxlength: "20", placeholder: "장·개" });
+      const vendor = opsSel(d.vendors.map((v) => [v.id, `${v.name}${v.org ? ` · ${v.org}` : ""}`]), p?.vendorId, "업체 (외부 연락처에서)"), amount = h("input", { type: "number", min: "0", inputmode: "numeric", value: p?.amount ?? "" });
+      const ledger = opsSel(d.ledgers.map((l) => [l.id, l.name]), p?.ledgerId, "입고할 대장 (입고 때 필요)"), expected = h("input", { type: "date", value: p?.expectedDate || "" }), reason = h("input", { value: p?.reason || "", maxlength: "300" }), note = h("input", { value: p?.note || "", maxlength: "500" });
+      const nx = p && next[p.status];
+      const opt = opsSel([], "", "품목 열"), loc = opsSel(d.locations.map((x) => [x.id, x.name]), "", "보관 위치 (선택)");
+      const fillOpt = () => { const l = d.ledgers.find((x) => String(x.id) === ledger.value); opt.replaceChildren(h("option", { value: "", text: "품목 열 고르기" }), ...(l?.options || []).map((o) => h("option", { value: String(o.id), text: o.name }))); const same = l?.options.find((o) => o.name === item.value); if (same) opt.value = String(same.id); };
+      ledger.addEventListener("change", fillOpt); fillOpt();
+      const fRecv = h("div", { class: "row2" }, [field("입고 품목 열", opt), field("보관 위치", loc)]);
+      fRecv.hidden = nx !== "received";
+      const locked = p && p.status === "received";
+      opsSheet(p ? `${p.itemName} · ${PUR[p.status]}` : "구매 요청", [field("품목", item), h("div", { class: "row2" }, [field("수량", qty), field("단위", unit)]), h("div", { class: "row2" }, [field("업체", vendor), field("금액 (원)", amount)]),
+        h("div", { class: "row2" }, [field("입고할 대장", ledger), field("입고 예정일", expected)]), field("요청 이유", reason), field("메모", note), fRecv,
+        nx ? opsHint(`저장하면 '${PUR[nx]}'(으)로 넘어가요.${nx === "approved" ? " 승인은 관리자만 해요." : nx === "received" ? " 입고하면 입출고 기록이 한 줄 생겨요." : ""}`) : null], locked ? {} : {
+        saveText: p ? (nx ? `${PUR[nx]} 처리` : "저장하기") : "요청하기",
+        save: async () => {
+          const body = { itemName: item.value, qty: qty.value, unit: unit.value, vendorId: vendor.value, amount: amount.value, ledgerId: ledger.value, expectedDate: expected.value, reason: reason.value, note: note.value, ...(nx ? { status: nx } : {}), ...(nx === "received" ? { optionId: opt.value, locationId: loc.value } : {}) };
+          d = { ...d, ...(await api(p ? `/ops/purchases/${p.id}` : "/ops/purchases", { method: p ? "PATCH" : "POST", body })) }; toast("저장했어요."); draw();
+        },
+        del: p && p.status !== "received" ? async () => { if (p.status !== "request") { if (!confirm("이 구매를 취소할까요?")) return false; d = { ...d, ...(await api(`/ops/purchases/${p.id}`, { method: "PATCH", body: { status: "canceled" } })) }; draw(); return; } if (!confirm("이 요청을 지울까요?")) return false; d = { ...d, ...(await api(`/ops/purchases/${p.id}`, { method: "DELETE" })) }; draw(); } : null
+      });
+    };
+    draw();
+    return [opsHint("요청 → 승인(관리자) → 주문 → 입고 순서로 처리해요. 입고하면 고른 대장에 입고 기록이 생겨요."), box];
+  }
+  // ---- 권한표 (F14): 메뉴 × 역할 (조회·등록), 직원 쓰기 켜기
+  async function opsPermsAdmin() {
+    let d = await api("/ops/perms");
+    const label = { dashboard: "대시보드", monasteries: "수도회 관리", contacts: "연락 기록", duties: "담당자·역할", criteria: "검수 기준", groups: "검수 조·배정", inspect: "검수 입력", cutting: "실자르기·타래", shipments: "택배 발송·수신", stock: "재고·보관", purchases: "업체 구매" };
+    const roleName = { staff: "직원", dept: "부서 봉사자", team: "팀 봉사자" };
+    const box = h("div", { class: "stack" });
+    const draw = () => {
+      const p = JSON.parse(JSON.stringify(d.perms));
+      const staffOn = h("input", { type: "checkbox", checked: d.staffOn });
+      const cell = (k, r, mode) => { const c = h("input", { type: "checkbox", checked: p[k][mode].includes(r), "aria-label": `${label[k]} ${roleName[r]} ${mode === "v" ? "조회" : "등록"}` }); c.addEventListener("change", () => { const a = new Set(p[k][mode]); c.checked ? a.add(r) : a.delete(r); p[k][mode] = [...a]; }); return c; };
+      const ok = h("button", { class: "btn btn--primary", type: "button", text: "권한 저장", onclick: () => busy(ok, async () => { d = await act(() => api("/ops/perms", { method: "PUT", body: { staffOn: staffOn.checked, perms: p } })); state.opsPerms = null; toast("권한을 저장했어요. 각자 새로고침하면 바뀌어요."); draw(); }) });
+      fill(box,
+        h("label", { class: "check card ops-staffon" }, [staffOn, h("span", {}, [h("strong", { text: "직원도 쓰기" }), h("small", { class: "muted", text: " 켜면 직원 계정이 아래 표의 '직원' 칸대로 '수도회·물류' 메뉴를 써요. 기본은 꺼짐." })])]),
+        h("div", { class: "card table-wrap" }, h("table", { class: "table ops-perms" }, [
+          h("thead", {}, [h("tr", {}, [h("th", { rowspan: "2", text: "메뉴" }), ...d.roles.map((r) => h("th", { colspan: "2", class: "c", text: roleName[r] }))]), h("tr", {}, d.roles.flatMap(() => [h("th", { class: "c", text: "조회" }), h("th", { class: "c", text: "등록" })]))]),
+          h("tbody", {}, d.keys.map((k) => h("tr", {}, [h("td", { text: label[k] }), ...d.roles.flatMap((r) => [h("td", { class: "c" }, cell(k, r, "v")), h("td", { class: "c" }, cell(k, r, "e"))])])))
+        ])),
+        opsHint("관리자는 늘 모두 봐요. 등록은 조회가 켜진 칸에서만 쓰여요. 검수 기준·검수 조의 등록은 팀 봉사자 중 리더만 해요. 수도회 연락처는 관리자만 적어요."),
+        h("div", { class: "actions actions--start" }, [ok, h("button", { class: "btn btn--ghost", type: "button", text: "기본값으로", onclick: () => { d = { ...d, perms: JSON.parse(JSON.stringify(d.defaults)) }; draw(); } })]));
+    };
+    draw();
+    return [opsHint("메뉴마다 역할별로 볼 수 있는지(조회)와 적을 수 있는지(등록)를 정해요. 기본값은 DB 설계 화면안의 메뉴 표예요."), box];
   }
   async function pageVolAdmin() {
     if (!isAdmin()) return go("#/today");
@@ -7782,6 +8008,7 @@
     volunteerTheme(state.user.role === "volunteer" || !!state.volPreview, state.volPreview ? state.volPreview === "team" : state.user.volKind === "team");
     if (state.user.mustChangePassword) { layout.main = null; return renderForcedPassword(); }
     if (state.user.role === "volunteer" || state.volPreview) { closeDialog(); closePop(); return renderVolunteer(); }
+    if (state.opsPerms === undefined) { state.opsPerms = null; quiet(loadOpsPerms()); } // 직원 메뉴 '수도회·물류' 를 보일지
     if (!layout.main || !app.contains(layout.main)) buildLayout();
     closeDialog();
     closePop();
@@ -7798,6 +8025,7 @@
     if (name === "notices") return pageNotices();
     if (name === "members") return pageMembers();
     if (name === "volunteers") return pageVolAdmin();
+    if (name === "ops") return pageOps();
     if (name === "board") return pageBoard(id);
     if (name === "org") return pageOrg();
     if (name === "stock" && id) return pageStock(Number(id));
