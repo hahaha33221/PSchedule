@@ -254,6 +254,7 @@ export function openDb(file) {
   addUnitColumns(db);
   cleanCalendarHtml(db);
   seedTags(db);
+  addOpsTables(db);
   return db;
 }
 
@@ -753,6 +754,158 @@ function addUnitColumns(db) {
   // 같은 이름 자리 구분: '' 아직 안 정함(같은 사람으로 셈), 이름과 같으면 같은 사람(겸직) 확인, '이름#자리id' 면 다른 사람(동명이인)
   if (!has("org_positions", "person")) db.exec("ALTER TABLE org_positions ADD COLUMN person TEXT NOT NULL DEFAULT ''");
   // org_units.contacts_private: 예전 연락처 비공개 설정. 해제 후 쓰지 않음 (이미 있는 DB 에 값만 남아 있음)
+}
+
+// DB 설계 v2 1차 (F01~F06): 수도회 기준정보·택배·업무 담당·검수 기준·검수 조·연락 기록
+// 기존 행은 지우거나 고치지 않음. 새 컬럼(연결)만 채움
+function addOpsTables(db) {
+  const has = (t, c) => db.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS monasteries (
+      id           INTEGER PRIMARY KEY,
+      name         TEXT NOT NULL UNIQUE,
+      short_name   TEXT NOT NULL DEFAULT '',
+      contact_name TEXT NOT NULL DEFAULT '',
+      phone        TEXT NOT NULL DEFAULT '',
+      address      TEXT NOT NULL DEFAULT '',
+      status       TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'edu_done', 'making', 'recovered', 'checked', 'issue')),
+      issue_note   TEXT NOT NULL DEFAULT '',
+      note         TEXT NOT NULL DEFAULT '',
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at   TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS shipments (
+      id                  INTEGER PRIMARY KEY,
+      direction           TEXT NOT NULL CHECK (direction IN ('out', 'in')),
+      party_type          TEXT NOT NULL CHECK (party_type IN ('monastery', 'volunteer', 'vendor', 'etc')),
+      monastery_id        INTEGER REFERENCES monasteries(id) ON DELETE SET NULL,
+      user_id             INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      external_contact_id INTEGER REFERENCES external_contacts(id) ON DELETE SET NULL,
+      party_name          TEXT NOT NULL DEFAULT '',
+      address             TEXT NOT NULL DEFAULT '',
+      carrier             TEXT NOT NULL DEFAULT '',
+      tracking_no         TEXT NOT NULL DEFAULT '',
+      contents            TEXT NOT NULL DEFAULT '',
+      qty                 INTEGER,
+      status              TEXT NOT NULL DEFAULT 'ready' CHECK (status IN ('ready', 'sent', 'arrived', 'returned')),
+      sent_date           TEXT,
+      arrived_date        TEXT,
+      handler_id          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      schedule_id         INTEGER REFERENCES vol_schedules(id) ON DELETE SET NULL,
+      note                TEXT NOT NULL DEFAULT '',
+      created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS shipments_dir ON shipments (direction, status);
+    CREATE TABLE IF NOT EXISTS duty_assignments (
+      id         INTEGER PRIMARY KEY,
+      duty       TEXT NOT NULL CHECK (duty IN ('parcel_out', 'parcel_in', 'storage', 'inspect_place', 'purchase', 'thread', 'etc')),
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      start_date TEXT NOT NULL DEFAULT '',
+      end_date   TEXT NOT NULL DEFAULT '',
+      note       TEXT NOT NULL DEFAULT '',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS inspection_criteria (
+      id          INTEGER PRIMARY KEY,
+      version     INTEGER NOT NULL,
+      sort        INTEGER NOT NULL DEFAULT 0,
+      item        TEXT NOT NULL,
+      method      TEXT NOT NULL DEFAULT '',
+      pass_rule   TEXT NOT NULL DEFAULT '',
+      defect_key  TEXT NOT NULL,
+      defect_name TEXT NOT NULL,
+      valid_from  TEXT NOT NULL,
+      approved_by TEXT NOT NULL DEFAULT '',
+      created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE (version, defect_key)
+    );
+    CREATE TABLE IF NOT EXISTS inspection_groups (
+      id         INTEGER PRIMARY KEY,
+      name       TEXT NOT NULL UNIQUE,
+      leader_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      active     INTEGER NOT NULL DEFAULT 1,
+      note       TEXT NOT NULL DEFAULT '',
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS inspection_group_members (
+      group_id INTEGER NOT NULL REFERENCES inspection_groups(id) ON DELETE CASCADE,
+      user_id  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      PRIMARY KEY (group_id, user_id)
+    );
+    CREATE TABLE IF NOT EXISTS inspection_group_assigns (
+      id          INTEGER PRIMARY KEY,
+      group_id    INTEGER NOT NULL REFERENCES inspection_groups(id) ON DELETE CASCADE,
+      schedule_id INTEGER NOT NULL REFERENCES vol_schedules(id) ON DELETE CASCADE,
+      qty         INTEGER,
+      due_date    TEXT,
+      status      TEXT NOT NULL DEFAULT 'wait' CHECK (status IN ('wait', 'doing', 'done')),
+      note        TEXT NOT NULL DEFAULT '',
+      created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS contact_logs (
+      id                  INTEGER PRIMARY KEY,
+      target_type         TEXT NOT NULL CHECK (target_type IN ('monastery', 'vendor', 'volunteer', 'etc')),
+      monastery_id        INTEGER REFERENCES monasteries(id) ON DELETE SET NULL,
+      external_contact_id INTEGER REFERENCES external_contacts(id) ON DELETE SET NULL,
+      user_id             INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      target_name         TEXT NOT NULL DEFAULT '',
+      schedule_id         INTEGER REFERENCES vol_schedules(id) ON DELETE SET NULL,
+      date                TEXT NOT NULL,
+      method              TEXT NOT NULL DEFAULT 'phone' CHECK (method IN ('phone', 'sms', 'email', 'visit', 'etc')),
+      purpose             TEXT NOT NULL DEFAULT '' CHECK (purpose IN ('', 'recovery', 'inspect', 'thread', 'purchase', 'etc')),
+      content             TEXT NOT NULL DEFAULT '',
+      follow_up           TEXT NOT NULL DEFAULT '',
+      due_date            TEXT,
+      done                INTEGER NOT NULL DEFAULT 0,
+      created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS contact_logs_due ON contact_logs (done, due_date);
+  `);
+  if (!has("vol_schedules", "monastery_id")) db.exec("ALTER TABLE vol_schedules ADD COLUMN monastery_id INTEGER REFERENCES monasteries(id) ON DELETE SET NULL");
+  if (!has("vol_requests", "monastery_id")) db.exec("ALTER TABLE vol_requests ADD COLUMN monastery_id INTEGER REFERENCES monasteries(id) ON DELETE SET NULL");
+  if (!has("team_recovery", "shipment_id")) db.exec("ALTER TABLE team_recovery ADD COLUMN shipment_id INTEGER REFERENCES shipments(id) ON DELETE SET NULL");
+  if (!has("inspections", "criteria_version")) db.exec("ALTER TABLE inspections ADD COLUMN criteria_version INTEGER");
+  if (!has("inspections", "group_id")) db.exec("ALTER TABLE inspections ADD COLUMN group_id INTEGER REFERENCES inspection_groups(id) ON DELETE SET NULL");
+  if (!has("inspections", "schedule_id")) db.exec("ALTER TABLE inspections ADD COLUMN schedule_id INTEGER REFERENCES vol_schedules(id) ON DELETE SET NULL");
+  if (!has("inspections", "recovery_id")) db.exec("ALTER TABLE inspections ADD COLUMN recovery_id INTEGER REFERENCES team_recovery(id) ON DELETE SET NULL");
+  db.exec("CREATE INDEX IF NOT EXISTS vol_schedules_monastery ON vol_schedules (monastery_id)");
+  db.exec("CREATE INDEX IF NOT EXISTS inspections_recovery ON inspections (recovery_id)");
+  // 검수 기준 1판: 지금 쓰는 불량 유형 그대로 (코드 = 이름, 예전 기록과 맞음)
+  if (!db.prepare("SELECT 1 FROM inspection_criteria").get()) {
+    const add = db.prepare("INSERT INTO inspection_criteria (version, sort, item, defect_key, defect_name, valid_from) VALUES (1, ?, ?, ?, ?, '2026-11-01')");
+    ["색상 차이", "굵기", "길이", "매듭", "파손·오염", "기타"].forEach((n, i) => add.run(i, n, n, n));
+  }
+  linkMonasteries(db);
+}
+// 수도회 이름이 같은 방문 일정·네이버폼 신청을 수도회 하나에 연결 (아직 연결 안 된 줄만). 연락처는 수도회 연락처가 비었을 때만 옮김
+export function linkMonasteries(db) {
+  const nameOf = (title) => String(title || "").split(" · ").pop().trim();
+  const get = db.prepare("SELECT id FROM monasteries WHERE name = ?"), add = db.prepare("INSERT INTO monasteries (name) VALUES (?)");
+  const idOf = (name) => { if (!name) return null; const r = get.get(name); return r ? r.id : Number(add.run(name).lastInsertRowid); };
+  const n = { schedules: 0, requests: 0, contacts: 0 };
+  db.exec("BEGIN");
+  try {
+    for (const s of db.prepare("SELECT id, title FROM vol_schedules WHERE project_item_id IS NOT NULL AND monastery_id IS NULL").all()) {
+      const id = idOf(nameOf(s.title)); if (id) { db.prepare("UPDATE vol_schedules SET monastery_id = ? WHERE id = ?").run(id, s.id); n.schedules++; }
+    }
+    for (const r of db.prepare("SELECT id, org FROM vol_requests WHERE monastery_id IS NULL").all()) {
+      const id = idOf(String(r.org || "").trim()); if (id) { db.prepare("UPDATE vol_requests SET monastery_id = ? WHERE id = ?").run(id, r.id); n.requests++; }
+    }
+    for (const c of db.prepare("SELECT s.monastery_id AS mid, t.contact FROM team_org_info t JOIN vol_schedules s ON s.id = t.schedule_id WHERE s.monastery_id IS NOT NULL AND t.contact <> '' ORDER BY t.updated_at DESC").all()) {
+      if (db.prepare("UPDATE monasteries SET phone = ?, updated_at = datetime('now') WHERE id = ? AND phone = ''").run(c.contact, c.mid).changes) n.contacts++;
+    }
+    db.exec("COMMIT");
+  } catch (e) { db.exec("ROLLBACK"); throw e; }
+  return n;
 }
 
 // 분류가 생기기 전에 만든 DB 에 category_id 열 붙이기

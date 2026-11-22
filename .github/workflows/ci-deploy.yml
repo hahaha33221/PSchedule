@@ -441,7 +441,9 @@ jobs:
           # 완제품 단계(입고·검수완료·패키징완료·출고): 단계마다 저장, 잘못된 단계는 거절, 직원 현황에 단계별 합계
           J="{\"itemId\":$CG,\"kind\":\"recovery\",\"stage\":\"packed\",\"date\":\"2030-03-02\",\"qty\":5}"; curl -fs -H "$VH" -XPOST -d "$J" $B/volunteer/records | node -e 'const r=JSON.parse(require("fs").readFileSync(0)).records;if(!r.some(x=>x.stage==="packed"&&x.qty===5)||!r.some(x=>x.stage==="in"&&x.qty===7))process.exit(1)'
           J="{\"itemId\":$CG,\"kind\":\"recovery\",\"stage\":\"sold\",\"date\":\"2030-03-02\",\"qty\":1}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d "$J" $B/volunteer/records)" = 400
-          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" "$B/volunteer/records?item=$VG&kind=material")" = 404
+          # 관리자 미리보기: 관리자는 봉사자 화면 API 를 씀, 직원은 여전히 막힘
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" "$B/volunteer/records?item=$VG&kind=material")" = 200
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" "$B/volunteer/records?item=$VG&kind=material")" = 404
           curl -fs -H "$H" $B/admin/vol-records | node -e 'const r=JSON.parse(require("fs").readFileSync(0)).records;if(!r.some(x=>x.kind==="recovery"&&x.qty===7&&x.group==="손십자가"))process.exit(1)'
           # 검수 기록(관리자 전용): 단계·불량 유형별 수량·샘플링·사진, 잘못된 값 거절, 직원·봉사자는 막힘
           J="{\"itemId\":$VG,\"stage\":3,\"date\":\"2030-04-01\",\"source\":\"대건상사 입고\",\"checkedQty\":100,\"sampled\":true,\"sampleQty\":20,\"defects\":{\"색상 차이\":2,\"굵기\":1}}"
@@ -669,6 +671,57 @@ jobs:
           curl -fs -H "$H" -XPATCH -d '{"volLeader":false}' $B/admin/users/$(USR teamv) >/dev/null
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPUT -d '{"date":"2030-06-05","need":2}' $B/team/day-need)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XDELETE $B/team/orgs/$TO)" = 403
+          # DB 설계 v2 1차 (F01~F06): 수도회·택배·업무 담당·검수 기준·검수 조·연락 기록 (/api/ops, 관리자와 봉사자, 직원은 막힘)
+          JQ() { node -e "const d=JSON.parse(require('fs').readFileSync(0));$1"; }
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/ops/monasteries)" = 404
+          MID=$(curl -fs -H "$TH" $B/team/orgs | node -pe 'JSON.parse(require("fs").readFileSync(0)).orgs.find(o=>o.id==='$TO').monasteryId')
+          test -n "$MID" && test "$MID" != "null"
+          curl -fs -H "$TH" $B/ops/monasteries | JQ 'const m=d.monasteries.find(x=>x.id=='$MID');if(!m||m.phone!=="연락처 칸"||m.visits<1)process.exit(1)'
+          curl -fs -H "$VH" $B/ops/monasteries | JQ 'if(d.monasteries.find(x=>x.id=='$MID').phone!=="")process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPATCH -d '{"phone":"x"}' $B/ops/monasteries/$MID)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPATCH -d '{"status":"issue"}' $B/ops/monasteries/$MID)" = 400
+          curl -fs -H "$TH" -XPATCH -d '{"status":"edu_done","address":"서울 혜화로 1"}' $B/ops/monasteries/$MID | JQ 'const m=d.monasteries.find(x=>x.id=='$MID');if(m.status!=="edu_done"||m.address!=="서울 혜화로 1")process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPATCH -d '{"status":"new"}' $B/ops/monasteries/$MID)" = 403
+          # 택배: 부서 봉사자가 적고 팀 봉사자는 조회, 도착 처리하면 회수 기록이 생겨 검수 대기에 보임
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d '{"direction":"in","partyType":"monastery","monasteryId":'$MID'}' $B/ops/shipments)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d '{"direction":"in","partyType":"monastery"}' $B/ops/shipments)" = 400
+          SP=$(curl -fs -H "$VH" -XPOST -d '{"direction":"in","partyType":"monastery","monasteryId":'$MID',"status":"sent","carrier":"우체국","trackingNo":"1234","contents":"완성 묵주","qty":50}' $B/ops/shipments | JQ 'const x=d.shipments.find(s=>s.id===d.id);if(x.sentDate===""||x.recoveryId)process.exit(1);console.log(d.id)')
+          curl -fs -H "$VH" $B/ops/counts | JQ 'if(d.counts.dr1!==1)process.exit(1)'
+          curl -fs -H "$VH" -XPATCH -d '{"status":"arrived","arrivedDate":"2030-06-10"}' $B/ops/shipments/$SP | JQ 'if(!d.shipments.find(s=>s.id==='$SP').recoveryId)process.exit(1)'
+          curl -fs -H "$VH" -XPATCH -d '{"note":"다시 저장"}' $B/ops/shipments/$SP >/dev/null
+          RW=$(curl -fs -H "$TH" $B/ops/inspect-waiting | JQ 'const w=d.waiting.filter(x=>x.shipmentId==='$SP');if(w.length!==1||w[0].qty!==50)process.exit(1);console.log(w[0].id)')
+          curl -fs -H "$TH" $B/team/recovery | JQ 'if(!d.records.some(r=>r.shipmentId==='$SP'))process.exit(1)'
+          curl -fs -H "$TH" $B/ops/shipments | JQ 'if(d.canEdit||!d.shipments.length)process.exit(1)'
+          # 업무 담당: 관리자만 넣고 모두 봄
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d '{"duty":"parcel_in","userId":'$VU'}' $B/ops/duties)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"duty":"nope","userId":'$VU'}' $B/ops/duties)" = 400
+          curl -fs -H "$H" -XPOST -d '{"duty":"parcel_in","userId":'$VU',"note":"택배 수신"}' $B/ops/duties >/dev/null
+          curl -fs -H "$TH" $B/ops/duties | JQ 'const x=d.duties.find(y=>y.duty==="parcel_in");if(!x||!x.active||x.who!=="부서 봉사자"||d.people)process.exit(1)'
+          # 검수 기준: 1판(지금 불량 유형) → 리더·관리자가 새 판, 검수 입력은 기준 코드만, 기록에 판 번호
+          curl -fs -H "$TH" $B/ops/criteria | JQ 'if(d.current!==1||d.versions[0].items.length!==6||d.canEdit)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d '{"validFrom":"2026-01-01","items":[{"item":"a","defectName":"b"}]}' $B/ops/criteria)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"validFrom":"2026-01-01","items":[{"item":"a","defectName":"b","defectKey":"k"},{"item":"c","defectName":"d","defectKey":"k"}]}' $B/ops/criteria)" = 400
+          curl -fs -H "$H" -XPOST -d '{"validFrom":"2026-01-01","approvedBy":"신부님 협의","items":[{"item":"매듭","passRule":"풀림 없음","defectName":"매듭 풀림","defectKey":"knot"},{"item":"구슬 수","defectName":"구슬 수 다름","defectKey":"bead"}]}' $B/ops/criteria | JQ 'if(d.current!==2)process.exit(1)'
+          curl -fs -H "$TH" $B/team/inspections | JQ 'if(d.types.join()!=="knot,bead"||d.criteria.current!==2)process.exit(1)'
+          # 검수 조: 리더·관리자가 만들고 물량 배정, 조원은 내 조를 보고 상태만 바꿈, 검수 기록을 조·회수 건과 이음
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d '{"name":"1조"}' $B/ops/groups)" = 403
+          GR=$(curl -fs -H "$H" -XPOST -d '{"name":"1조","leaderId":'$(USR teamv)',"memberIds":['$(USR teamv)']}' $B/ops/groups | JQ 'console.log(d.groups.find(g=>g.name==="1조").id)')
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"name":"1조"}' $B/ops/groups)" = 400
+          curl -fs -H "$H" -XPOST -d '{"scheduleId":'$TO',"qty":50,"dueDate":"2030-06-20"}' $B/ops/groups/$GR/assigns >/dev/null
+          GA=$(curl -fs -H "$TH" $B/ops/groups | JQ 'const g=d.groups.find(x=>x.id==='$GR');if(!g.mine||g.assigns.length!==1||d.people)process.exit(1);console.log(g.assigns[0].id)')
+          curl -fs -H "$TH" -XPATCH -d '{"status":"doing"}' $B/ops/assigns/$GA | JQ 'if(d.groups[0].assigns[0].status!=="doing")process.exit(1)'
+          J="{\"itemId\":$VG,\"stage\":1,\"date\":\"2030-06-11\",\"checkedQty\":50,\"defects\":{\"knot\":2},\"groupId\":$GR,\"recoveryId\":$RW}"
+          curl -fs -H "$TH" -XPOST -d "$J" $B/team/inspections | JQ 'const x=d.inspections.find(i=>i.id===d.id);if(x.criteriaVersion!==2||x.groupId!=='$GR'||x.scheduleId!=='$TO'||x.recoveryId!=='$RW'||x.defects.knot!==2)process.exit(1)'
+          J="{\"itemId\":$VG,\"stage\":1,\"date\":\"2030-06-11\",\"checkedQty\":1,\"defects\":{\"없는코드\":1}}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d "$J" $B/team/inspections)" = 400
+          curl -fs -H "$TH" $B/ops/inspect-waiting | JQ 'if(d.waiting.some(x=>x.id==='$RW'))process.exit(1)'
+          curl -fs -H "$TH" $B/ops/groups | JQ 'if(d.groups[0].assigns[0].checked!==50)process.exit(1)'
+          # 연락 기록: 모두 적고 봄, 고치기는 적은 사람·관리자(완료 표시는 누구나), 기한 지난 후속 조치는 건수로
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d '{"targetType":"monastery","date":"2030-06-01"}' $B/ops/contacts)" = 400
+          CL=$(curl -fs -H "$TH" -XPOST -d '{"targetType":"monastery","monasteryId":'$MID',"date":"2026-11-01","method":"phone","purpose":"recovery","content":"묵주 보내 달라고 안내","followUp":"도착 확인","dueDate":"2026-11-02"}' $B/ops/contacts | JQ 'const x=d.logs[0];if(!x.mine||!x.overdue||x.target==="")process.exit(1);console.log(x.id)')
+          curl -fs -H "$TH" $B/ops/counts | JQ 'if(d.counts.followups!==1||d.counts.tedu4<1)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPATCH -d '{"content":"x"}' $B/ops/contacts/$CL)" = 403
+          curl -fs -H "$VH" -XPATCH -d '{"done":true}' $B/ops/contacts/$CL | JQ 'if(!d.logs.find(x=>x.id==='$CL').done)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XDELETE $B/ops/contacts/$CL)" = 403
           curl -fs -H "$H" -XPATCH -d '{"role":"volunteer","volKinds":["dept"],"volLeader":true}' $B/admin/users/$(USR volb) >/dev/null
           curl -fs -H "$H" $B/admin/users | node -e 'const u=JSON.parse(require("fs").readFileSync(0)).users.find(x=>x.login==="volb");if(!u||u.volLeader)process.exit(1)'
           TI=$(curl -fs -H "$TH" -XPOST -d '{"kind":"thread","scheduleId":'$TO',"title":"실 끊어짐"}' $B/team/issues | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')

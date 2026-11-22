@@ -23,7 +23,7 @@
  */
 import { join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
-import { openDb, hashPassword, tempPassword, cleanContact, parseOutline, importOutline, importLedger } from "./db.mjs";
+import { openDb, hashPassword, tempPassword, cleanContact, parseOutline, importOutline, importLedger, linkMonasteries } from "./db.mjs";
 import { backupNow, listBackups } from "./backup.mjs";
 
 const DATA_DIR = resolve(process.env.DATA_DIR || "data");
@@ -259,6 +259,7 @@ switch (cmd) {
       });
       console.log(`${dry ? "[미리보기, 저장 안 함] " : ""}수업 신청 ${data.rows.length}건 (예전 ${before}건 바꿈), 신청 수량 합계 ${total}`);
       db.exec(dry ? "ROLLBACK" : "COMMIT");
+      if (!dry) { const n = linkMonasteries(db); console.log(`수도회 연결: 신청 ${n.requests}건`); }
     } catch (e) { db.exec("ROLLBACK"); console.error(e.message); process.exit(1); }
     break;
   }
