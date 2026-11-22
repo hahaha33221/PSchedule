@@ -1694,7 +1694,7 @@ async function teamRoute(req, res, user, path, method) {
         if (!["new", "doing", "done"].includes(b.status)) throw bad("처리 상태를 확인해 주세요.");
         const reply = has(b, "reply") ? text(b.reply, 1000, "답") || "" : x.reply;
         q.setTeamIssueStatus.run(b.status, reply, x.id);
-        if (x.created_by && x.created_by !== user.id && (b.status !== x.status || reply !== x.reply)) notify([x.created_by], `이슈 ${{ new: "접수", doing: "처리 중", done: "완료" }[b.status]}`, x.title, "/#/tissues", "issue_reply");
+        if (x.created_by && x.created_by !== user.id && (b.status !== x.status || reply !== x.reply)) notify([x.created_by], `이슈 ${{ new: "접수", doing: "처리 중", done: "완료" }[b.status]}`, x.title, (sub) => (sub.vol_kind === "team" ? "/#/tissues" : "/#/vissues"), "issue_reply");
         return ok(200, { issues: issues() });
       }
       if (!own && !admin) return ok(403, { error: "올린 사람과 관리자만 고칠 수 있어요." });
@@ -2147,6 +2147,7 @@ async function opsRoute(req, res, user, path, method) {
   const ok = (code, body) => { send(res, code, body); return true; };
   const deny = (msg) => ok(403, { error: msg });
   if (path === "/api/ops/counts" && method === "GET") return ok(200, { counts: opsCounts(user) });
+  if (path === "/api/ops/menu" && method === "GET") return ok(200, { menu: volMenu() }); // 팀 봉사자도 메뉴 공개 설정(단계형 메뉴)을 읽음
   // F01 수도회
   if (path === "/api/ops/monasteries" && method === "GET") return ok(200, { monasteries: monasteriesOut(r), canEdit: r.team, canPhone: r.admin });
   if (path === "/api/ops/monasteries" && method === "POST") {
@@ -2438,7 +2439,7 @@ function inspectInput(v, label) {
   return n;
 }
 // 봉사자에게 보일 메뉴 (관리자가 단계적으로 엶). 저장 안 했으면 입고·출고 중심
-const VOL_MENU_KEYS = ["home", "schedule", "training", "notices", "wbs", "req", "in", "out", "recovery", "moves2"]; // moves2: 새 입고·출고 화면 (기본은 꺼 둠, 관리자가 켬) // 원자재 보유물량(material)은 없앰
+const VOL_MENU_KEYS = ["home", "schedule", "training", "notices", "wbs", "req", "in", "out", "recovery", "moves2", "steps2"]; // moves2: 새 입고·출고 화면 (기본은 꺼 둠, 관리자가 켬) // 원자재 보유물량(material)은 없앰
 const VOL_MENU_DEFAULT = ["home", "notices", "in", "out"];
 // 회의실 목록 (관리자가 등록). 일정 장소 글자에 이름이 들어 있으면 그 회의실 예약으로 봄
 const meetingRooms = () => { try { const v = JSON.parse(q.setting.get("meeting_rooms")?.value || "[]"); return Array.isArray(v) ? v.filter((x) => typeof x === "string") : []; } catch { return []; } };
@@ -2622,7 +2623,8 @@ async function api(req, res, path) {
     if (user.vol_kind === "team") {
       if (path.startsWith("/api/team/")) { if (await teamRoute(req, res, user, path, method)) return; return send(res, 404, { error: "찾을 수 없어요." }); }
       if (path.startsWith("/api/volunteer/")) return send(res, 403, { error: "팀 봉사자 계정으로는 볼 수 없어요." });
-    } else if (path.startsWith("/api/team/")) return send(res, 403, { error: "부서 봉사자 계정으로는 볼 수 없어요." });
+    } else if (path.startsWith("/api/team/issue")) { if (await teamRoute(req, res, user, path, method)) return; return send(res, 404, { error: "찾을 수 없어요." }); } // 이슈는 부서 봉사자도 (단계형 메뉴 '소통')
+    else if (path.startsWith("/api/team/")) return send(res, 403, { error: "부서 봉사자 계정으로는 볼 수 없어요." });
     if (path.startsWith("/api/volunteer/") && await volunteerRoute(req, res, user, path, method, url)) return;
     if (path === "/api/me" && method === "GET") return send(res, 200, { user: publicUser(user), team: [], units: [], tags: [], categories: [], calendars: [], unreadNotices: unreadOf(user) });
     // 공지: 봉사자에게 공개된 것만 읽기 (댓글·작성자 이름 없음)

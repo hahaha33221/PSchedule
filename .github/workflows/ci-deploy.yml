@@ -722,6 +722,12 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPATCH -d '{"content":"x"}' $B/ops/contacts/$CL)" = 403
           curl -fs -H "$VH" -XPATCH -d '{"done":true}' $B/ops/contacts/$CL | JQ 'if(!d.logs.find(x=>x.id==='$CL').done)process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XDELETE $B/ops/contacts/$CL)" = 403
+          # 단계형 메뉴: 메뉴 공개 설정은 팀 봉사자도 읽음(기본은 꺼짐), 부서 봉사자도 이슈를 쓰고 다른 팀 API 는 여전히 막힘
+          curl -fs -H "$TH" $B/ops/menu | JQ 'if(d.menu.includes("steps2"))process.exit(1)'
+          curl -fs -H "$H" $B/admin/vol-menu | grep -q '"steps2"'
+          curl -fs -H "$VH" $B/team/issues | JQ 'if(!Array.isArray(d.issues))process.exit(1)'
+          curl -fs -H "$VH" -XPOST -d '{"title":"부서 이슈"}' $B/team/issues | JQ 'if(!d.issues.some(x=>x.title==="부서 이슈"&&x.mine))process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/team/orgs)" = 403
           curl -fs -H "$H" -XPATCH -d '{"role":"volunteer","volKinds":["dept"],"volLeader":true}' $B/admin/users/$(USR volb) >/dev/null
           curl -fs -H "$H" $B/admin/users | node -e 'const u=JSON.parse(require("fs").readFileSync(0)).users.find(x=>x.login==="volb");if(!u||u.volLeader)process.exit(1)'
           TI=$(curl -fs -H "$TH" -XPOST -d '{"kind":"thread","scheduleId":'$TO',"title":"실 끊어짐"}' $B/team/issues | node -pe 'JSON.parse(require("fs").readFileSync(0)).id')
