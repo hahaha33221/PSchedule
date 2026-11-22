@@ -885,6 +885,83 @@ function addOpsTables(db) {
     ["색상 차이", "굵기", "길이", "매듭", "파손·오염", "기타"].forEach((n, i) => add.run(i, n, n, n));
   }
   linkMonasteries(db);
+  addOpsTables2(db);
+}
+// DB 설계 v2 2차 (F07~F12): 보관 위치·실자르기·타래 배분·업체 구매, 입출고에 위치·원천 연결
+// stock_moves.type 은 그대로 in·out (CHECK 제약이 있고, 재고 계산이 모두 입고 − 출고라서). 위치 이동은 출고+입고 두 줄, 실사 조정은 차이만큼 입고·출고 한 줄로 쌓고 ref_type 으로 구분
+function addOpsTables2(db) {
+  const has = (t, c) => db.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS storage_locations (
+      id         INTEGER PRIMARY KEY,
+      name       TEXT NOT NULL UNIQUE,
+      place      TEXT NOT NULL DEFAULT '',
+      kind       TEXT NOT NULL DEFAULT 'all' CHECK (kind IN ('raw', 'finished', 'inspect', 'all')),
+      sort       INTEGER NOT NULL DEFAULT 0,
+      active     INTEGER NOT NULL DEFAULT 1,
+      note       TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS cutting_jobs (
+      id          INTEGER PRIMARY KEY,
+      date        TEXT NOT NULL,
+      ledger_id   INTEGER REFERENCES stock_ledgers(id) ON DELETE SET NULL,
+      option_id   INTEGER REFERENCES stock_options(id) ON DELETE SET NULL,
+      raw_qty     INTEGER,
+      skein_qty   INTEGER NOT NULL DEFAULT 0,
+      workers     TEXT NOT NULL DEFAULT '',
+      location_id INTEGER REFERENCES storage_locations(id) ON DELETE SET NULL,
+      note        TEXT NOT NULL DEFAULT '',
+      created_by  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS thread_handouts (
+      id             INTEGER PRIMARY KEY,
+      date           TEXT NOT NULL,
+      cutting_job_id INTEGER REFERENCES cutting_jobs(id) ON DELETE SET NULL,
+      receiver_type  TEXT NOT NULL CHECK (receiver_type IN ('volunteer', 'monastery')),
+      user_id        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      monastery_id   INTEGER REFERENCES monasteries(id) ON DELETE SET NULL,
+      receiver_name  TEXT NOT NULL DEFAULT '',
+      skein_qty      INTEGER NOT NULL DEFAULT 0,
+      supplies       TEXT NOT NULL DEFAULT '{}',
+      shipment_id    INTEGER REFERENCES shipments(id) ON DELETE SET NULL,
+      note           TEXT NOT NULL DEFAULT '',
+      created_by     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at     TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS purchases (
+      id                  INTEGER PRIMARY KEY,
+      status              TEXT NOT NULL DEFAULT 'request' CHECK (status IN ('request', 'approved', 'ordered', 'received', 'canceled')),
+      external_contact_id INTEGER REFERENCES external_contacts(id) ON DELETE SET NULL,
+      item_name           TEXT NOT NULL,
+      ledger_id           INTEGER REFERENCES stock_ledgers(id) ON DELETE SET NULL,
+      qty                 INTEGER,
+      unit                TEXT NOT NULL DEFAULT '',
+      amount              INTEGER,
+      reason              TEXT NOT NULL DEFAULT '',
+      requested_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      order_date          TEXT,
+      expected_date       TEXT,
+      move_id             INTEGER REFERENCES stock_moves(id) ON DELETE SET NULL,
+      note                TEXT NOT NULL DEFAULT '',
+      created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_cutting_jobs_ledger_id ON cutting_jobs (ledger_id);
+    CREATE INDEX IF NOT EXISTS idx_thread_handouts_cutting_job_id ON thread_handouts (cutting_job_id);
+    CREATE INDEX IF NOT EXISTS idx_thread_handouts_shipment_id ON thread_handouts (shipment_id);
+    CREATE INDEX IF NOT EXISTS idx_purchases_move_id ON purchases (move_id);
+  `);
+  if (!has("stock_moves", "location_id")) db.exec("ALTER TABLE stock_moves ADD COLUMN location_id INTEGER REFERENCES storage_locations(id) ON DELETE SET NULL");
+  if (!has("stock_moves", "to_location_id")) db.exec("ALTER TABLE stock_moves ADD COLUMN to_location_id INTEGER REFERENCES storage_locations(id) ON DELETE SET NULL");
+  if (!has("stock_moves", "ref_type")) db.exec("ALTER TABLE stock_moves ADD COLUMN ref_type TEXT NOT NULL DEFAULT ''");
+  if (!has("stock_moves", "ref_id")) db.exec("ALTER TABLE stock_moves ADD COLUMN ref_id INTEGER");
+  if (!has("vol_records", "location_id")) db.exec("ALTER TABLE vol_records ADD COLUMN location_id INTEGER REFERENCES storage_locations(id) ON DELETE SET NULL");
+  // 안전재고: 설계 컬럼에는 없지만 화면안의 '재고·보관'(미달 표시)과 대시보드에 필요해서 품목 열마다 둠 (비우면 안 봄)
+  if (!has("stock_options", "safety_qty")) db.exec("ALTER TABLE stock_options ADD COLUMN safety_qty INTEGER");
+  db.exec("CREATE INDEX IF NOT EXISTS stock_moves_ref ON stock_moves (ref_type, ref_id)");
 }
 // 수도회 이름이 같은 방문 일정·네이버폼 신청을 수도회 하나에 연결 (아직 연결 안 된 줄만). 연락처는 수도회 연락처가 비었을 때만 옮김
 export function linkMonasteries(db) {

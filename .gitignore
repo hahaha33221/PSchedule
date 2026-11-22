@@ -23,6 +23,9 @@ private/
 
 # 내부 기획 문서 (봉사자 화면 구성안 등), 커밋하지 않음
 Rosary_Site_*.md
+# DB 설계 참고 자료 (화면안·마이그레이션 초안·보고서), 커밋하지 않음
+p_schedule_*.html
+p_schedule_*.sql
 
 # 안드로이드 앱 빌드 결과·서명 키 (키는 ~/.pschedule-android 에만)
 android/.gradle/
