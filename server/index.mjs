@@ -1431,7 +1431,7 @@ async function inspectionRoute(req, res, user, path, method, base) {
   return false;
 }
 
-// ---- 팀 봉사자(교육·검수): 담당 수도회·교육·문의·제작 진행, 검수(기록·일일 작업·근무), 이슈, 자료실, 봉사 가능한 날
+// ---- 팀 봉사자(교육·검수): 담당 수도회·교육·문의·제작 진행, 검수(기록·하루 검수 기록·봉사), 이슈, 자료실, 봉사 가능한 날
 // 관리자도 같은 API 를 씀 (연락처 입력·이슈 처리·자료실 관리는 관리자만)
 const today = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10); // 한국 날짜
 const TEAM_STATUS = ["plan", "done", "delay"];
@@ -1571,8 +1571,8 @@ async function teamRoute(req, res, user, path, method) {
     const gid = rosaryGroupId();
     return ok(200, { records: gid ? q.volRecords.all(gid, "recovery").map((r) => ({ id: r.id, date: r.date, name: r.name, qty: r.qty, note: r.note, stage: r.stage || "in" })) : [] });
   }
-  // 일일 작업 기록
-  const dailyIn = async () => { const b = await readJson(req); if (!isDate(b.date)) throw bad("날짜를 확인해 주세요."); return [b.date, teamQty(b.qty, "검수 수량") ?? 0, text(b.workers, 300, "작업자") || "", text(b.note, 500, "메모") || ""]; };
+  // 하루 검수 기록
+  const dailyIn = async () => { const b = await readJson(req); if (!isDate(b.date)) throw bad("날짜를 확인해 주세요."); return [b.date, teamQty(b.qty, "검수 수량") ?? 0, text(b.workers, 300, "함께한 봉사자") || "", text(b.note, 500, "메모") || ""]; };
   const dailyList = () => q.teamDaily.all().map((x) => ({ id: x.id, date: x.date, qty: x.qty, workers: x.workers, note: x.note, author: x.author || "", mine: x.created_by === user.id }));
   if (path === "/api/team/daily" && method === "GET") return ok(200, { daily: dailyList() });
   if (path === "/api/team/daily" && method === "POST") { q.addTeamDaily.run(...(await dailyIn()), user.id); return ok(201, { daily: dailyList() }); }
@@ -1584,7 +1584,7 @@ async function teamRoute(req, res, user, path, method) {
     if (method === "DELETE") { if (x.created_by !== user.id && !admin) return ok(403, { error: "적은 사람과 관리자만 지울 수 있어요." }); q.delTeamDaily.run(x.id); return ok(200, { daily: dailyList() }); }
     return ok(405, { error: "Method not allowed" });
   }
-  // 검수 근무일(필요 인원)과 신청
+  // 검수 봉사일(필요 인원)과 신청
   const shiftList = () => { const su = q.teamShiftUsers.all(); return q.teamShifts.all(today()).map((s) => { const us = su.filter((x) => x.shift_id === s.id); return { id: s.id, date: s.date, startTime: s.start_time, need: s.need, note: s.note, people: us.map((x) => x.name), mine: us.some((x) => x.id === user.id), canDelete: admin || s.created_by === user.id }; }); };
   if (path === "/api/team/shifts" && method === "GET") return ok(200, { shifts: shiftList() });
   if (path === "/api/team/shifts" && method === "POST") {
@@ -1598,8 +1598,8 @@ async function teamRoute(req, res, user, path, method) {
   const sm = path.match(/^\/api\/team\/shifts\/(\d+)(\/signup)?$/);
   if (sm) {
     const s = q.teamShift.get(Number(sm[1]));
-    if (!s) throw notFound("근무일");
-    if (sm[2] && method === "POST") { if (admin && !user.volunteer) return ok(403, { error: "근무 신청은 봉사자가 해요." }); const b = await readJson(req); if (b.on) q.teamShiftJoin.run(s.id, user.id); else q.teamShiftLeave.run(s.id, user.id); return ok(200, { shifts: shiftList() }); }
+    if (!s) throw notFound("봉사일");
+    if (sm[2] && method === "POST") { if (admin && !user.volunteer) return ok(403, { error: "봉사 신청은 봉사자가 해요." }); const b = await readJson(req); if (b.on) q.teamShiftJoin.run(s.id, user.id); else q.teamShiftLeave.run(s.id, user.id); return ok(200, { shifts: shiftList() }); }
     if (!sm[2] && method === "DELETE") { if (!admin && s.created_by !== user.id) return ok(403, { error: "만든 사람과 관리자만 지울 수 있어요." }); q.delTeamShift.run(s.id); return ok(200, { shifts: shiftList() }); }
     return ok(405, { error: "Method not allowed" });
   }
@@ -2712,7 +2712,7 @@ function cuttingIn(b) {
   const raw = b.ledgerId ? ledgerOption(b.ledgerId, b.optionId) : null, sk = b.skeinLedgerId ? ledgerOption(b.skeinLedgerId, b.skeinOptionId) : null;
   const skeinQty = teamQty(b.skeinQty, "만든 타래") || 0;
   if (!skeinQty) throw bad("만든 타래 수를 적어 주세요.");
-  return { date: b.date, raw, sk, rawQty: teamQty(b.rawQty, "사용한 실"), skeinQty, loc: optLoc(b.locationId), workers: text(b.workers, 200, "작업자") || "", note: text(b.note, 300, "메모") || "" };
+  return { date: b.date, raw, sk, rawQty: teamQty(b.rawQty, "사용한 실"), skeinQty, loc: optLoc(b.locationId), workers: text(b.workers, 200, "함께한 봉사자") || "", note: text(b.note, 300, "메모") || "" };
 }
 function writeCutting(id, v, user) {
   if (id) {

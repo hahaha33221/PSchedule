@@ -466,7 +466,7 @@ function addUnitColumns(db) {
       created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_at TEXT NOT NULL DEFAULT (datetime('now'))
     );
-    -- 검수 일일 작업 기록, 검수 근무일(필요 인원)과 신청, 봉사 가능한 날
+    -- 하루 검수 기록, 검수 봉사일(필요 인원)과 신청, 봉사 가능한 날
     CREATE TABLE IF NOT EXISTS team_daily (
       id         INTEGER PRIMARY KEY,
       date       TEXT NOT NULL,
