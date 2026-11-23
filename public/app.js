@@ -5252,7 +5252,7 @@
     const seq = ++volSeq;
     const { name, id } = route();
     const teamSteps = STEP_CATS.team.flatMap((c) => c.steps.map((x) => x[0])), deptSteps = STEP_CATS.dept.flatMap((c) => c.steps.map((x) => x[0]));
-    const tab = team ? ([...TEAM_TABS, "vnotices", "vboard", ...(steps ? teamSteps : [])].includes(name) ? name : "thome") : ["vschedule", "vtraining", "vstock", "vprojects", "vp", "vnotices", "vboard", ...(steps ? [...deptSteps, "vissues", "vcontacts"] : [])].includes(name) ? name : "vhome";
+    const tab = team ? ([...TEAM_TABS, "vnotices", "vboard", ...(steps ? [...teamSteps, "vdeadlines"] : [])].includes(name) ? name : "thome") : ["vschedule", "vtraining", "vstock", "vprojects", "vp", "vnotices", "vboard", ...(steps ? [...deptSteps, "vissues", "vcontacts", "vdeadlines"] : [])].includes(name) ? name : "vhome";
     const vpView = tab === "vp" ? location.hash.split("/")[3] || "" : null; // 요약 / wbs / in / req / out
     document.title = `봉사자 · ${TITLE}`;
     // 왼쪽 메뉴: 직원 화면과 같은 틀 (묵주 아래에 입출고를 접고 펴기)
@@ -5295,7 +5295,7 @@
           group("chat", "소통", team
             ? [sub("tissues", "이슈", "note"), sub("vboard", "게시판", "chat"), sub("vnotices", "공지", "bell", state.unreadNotices), sub("tdocs", "자료실·역할", "folder")]
             : [sub("vschedule", "일정", "cal"), sub("vtraining", "기본 교육", "check"), sub("vissues", "이슈", "note"), sub("vboard", "게시판", "chat"), sub("vnotices", "공지", "bell", state.unreadNotices)]),
-          team ? null : group("folder", "참고", [h("a", { class: "side__link side__link--sub" + (tab === "vp" && vpView === "wbs" ? " is-active" : ""), href: "#/vp/rosary/wbs", title: "WBS", onclick: () => toggleNav(false) }, [icon("grid"), h("span", { class: "side__text", text: "WBS" })])])
+          group("folder", "참고", [sub("vdeadlines", "데드라인 일정", "cal")])
         ].filter(Boolean));
       }
       if (team) return navBox.replaceChildren(
@@ -5388,6 +5388,7 @@
         if (tab === (team ? "thome" : "vhome")) return show(await opsHome(team));
         if (tab === "vissues") return show(await teamIssues());
         if (tab === "vcontacts") return show([h("h1", { class: "vol__hello", text: "연락 기록" }), ...(await opsContacts(false))]);
+        if (tab === "vdeadlines") { document.title = `데드라인 일정 · ${TITLE}`; return show([h("h1", { class: "vol__hello", text: "데드라인 일정" }), ...(await opsDeadlines())]); }
         if (tab === "tdocs") return show([...(await teamDocs()), ...(await opsDuties())]);
       }
       if (tab === "vboard") { document.title = `게시판 · ${TITLE}`; return show(id ? await boardPostView("#/vboard", Number(id)) : await boardList("#/vboard")); }
@@ -5638,6 +5639,7 @@
   // 봉사자 프로젝트 관리는 묶음별: 묵주 / 손십자가
   const VOL_GROUPS = [{ key: "rosary", name: "묵주" }, { key: "cross", name: "손십자가", only: "recovery" }]; // only: 이 화면만 둠 (손십자가는 제품 관리만)
   async function volGroupPage(g, view, opts = {}) {
+    if (g.key === "rosary") await loadRosaryWbs();
     if (g.only && view !== g.only) { location.replace(`#/vp/${g.key}/${g.only}`); return []; }
     document.title = `프로젝트 관리(${g.name}) · ${TITLE}`;
     const title = (t) => h("h1", { class: "vol__hello", text: t });
@@ -5694,7 +5696,7 @@
     ];
   }
   // 묵주 WBS: '매듭묵주 사업 업무 정리(안)' 기준 — 마일스톤 7단계 > 공정 15개(확정·미정) > 추가 과업
-  const ROSARY_PROCS = {
+  let ROSARY_PROCS = {
     1: { name: "원자재 조달(실타래)", fixed: true, feat: "입고 박스 운반과 수량·품질·대금 기록을 함께 처리", link: "고은방 불량·보충 협의" },
     2: { name: "원자재 조달(십자가알)", fixed: true, feat: "대량 입고 하차·운반과 계약·납품 기록 관리", link: "대건상사 납기 협의" },
     3: { name: "원자재 조달(본드)", fixed: true, feat: "소량 구매, 수녀님 수요 확인과 함께 처리", link: "영수증 처리" },
@@ -5711,7 +5713,7 @@
     14: { name: "판매", joint: "순례자 센터·팝업 등 판매 현장 근무 (일부)", feat: "판매처·현장 인력과 협의하는 일", link: "실적 집계, 현장 판매(공동 작업)", tasks: ["판매가 결정 자료(20·25달러)", "판매처 협의, 현장 인력 확보", "현장 판매 운영", "판매 실적 집계"] },
     15: { name: "정산·재고", feat: "재무부 정산, 잔여 재고 회수·운반", link: "판매처 재고 협의", tasks: ["정산 방식 재무부 협의", "잔여 재고 처리 기준", "판매처 잔여 재고 회수 협의", "잔여 재고 회수·운반"] }
   };
-  const ROSARY_MILESTONES = [
+  let ROSARY_MILESTONES = [
     { name: "원자재 조달", main: "입고·운반·계약 기록", link: "업체 협의", procs: [1, 2, 3] },
     { name: "제작·검수(교육)", main: "수도회 제작·1차 검수 안내", link: "2차 검수(공동 작업)", procs: [4, 5, 6, 7, 8, 9] },
     { name: "보관", main: "창고·입출고 작업·대장", link: "출판사 직송 협의", procs: [11] },
@@ -7829,16 +7831,90 @@
     draw();
     return [opsHint("메뉴마다 역할별로 볼 수 있는지(조회)와 적을 수 있는지(등록)를 정해요. 기본값은 DB 설계 화면안의 메뉴 표예요."), box];
   }
+  // ---- 데드라인 일정 (봉사자 '참고'): 관리자만 적고 고치고 지움, 봉사자는 날짜순으로 봄
+  const DL_AUD = { all: "모든 봉사자", dept: "부서 봉사자", team: "팀 봉사자" };
+  async function opsDeadlines() {
+    let d = await api("/ops/deadlines"), showPast = false;
+    const box = h("div", { class: "vm" });
+    const dday = (s) => { const n = Math.round((parseYmd(s) - parseYmd(today())) / 86400000); return n === 0 ? "D-day" : n > 0 ? `D-${n}` : `D+${-n}`; };
+    const draw = () => {
+      const t = today(), open = d.deadlines.filter((x) => !x.done && x.date >= t), past = d.deadlines.filter((x) => x.done || x.date < t);
+      const card = (x) => opsCard(d.canEdit ? () => edit(x) : null, [opsTop(`${volDay(x.date)}`, x.done ? "완료" : dday(x.date)), h("strong", { class: "small", text: x.title }), x.note ? h("span", { class: "vm-card__note small", text: x.note }) : null,
+        d.canEdit ? opsTags(opsTag(DL_AUD[x.audience])) : null], !x.done && x.date >= t && dday(x.date).match(/^D-(day|[0-7])$/) ? "is-warn" : "");
+      fill(box,
+        h("div", { class: "vm-stats" }, [vmStat("다가오는 마감", open.length), vmStat("7일 안", open.filter((x) => x.date <= shiftYmd(t, 7)).length, open.some((x) => x.date <= shiftYmd(t, 7))), vmStat("지난·완료", past.length)]),
+        opsCards(open, card, "다가오는 데드라인이 없어요."),
+        past.length ? h("details", { class: "vm-opts", open: showPast, ontoggle: (e) => { showPast = e.currentTarget.open; } }, [h("summary", {}, `지난 일정·완료 ${past.length}건`), h("div", { class: "stack stack--sm" }, [opsCards(past.slice().reverse(), card, "")])]) : null,
+        d.canEdit ? opsAddBtn("데드라인 추가", () => edit(null)) : null);
+    };
+    const edit = (x) => {
+      const date = h("input", { type: "date", value: x?.date || today() }), title = h("input", { maxlength: "120", value: x?.title || "", placeholder: "예: 1차 검수 결과 제출" }), note = h("textarea", { rows: "3", maxlength: "1000" }, x?.note || "");
+      const aud = opsSel(Object.entries(DL_AUD), x?.audience || "all"), done = h("input", { type: "checkbox", checked: !!x?.done });
+      opsSheet(x ? "데드라인 고치기" : "데드라인 추가", [h("div", { class: "row2" }, [field("마감일", date), field("보는 사람", aud)]), field("할 일", title), field("메모", note), x ? h("label", { class: "check" }, [done, h("span", { text: "완료" })]) : null], {
+        ask: x ? "이대로 고칠까요?" : null,
+        save: async () => { d = { ...d, ...(await api(x ? `/ops/deadlines/${x.id}` : "/ops/deadlines", { method: x ? "PATCH" : "POST", body: { date: date.value, title: title.value, note: note.value, audience: aud.value, done: done.checked } })) }; toast("저장했어요."); draw(); },
+        del: x ? async () => { if (!confirm(`'${x.title}' 데드라인을 지울까요?`)) return false; d = { ...d, ...(await api(`/ops/deadlines/${x.id}`, { method: "DELETE" })) }; toast("지웠어요."); draw(); } : null
+      });
+    };
+    draw();
+    return [opsHint(d.canEdit ? "마감일을 적으면 봉사자 화면 '참고 › 데드라인 일정'에 날짜순으로 보여요. 보는 사람을 골라 부서·팀 봉사자에게 따로 보일 수 있어요." : "다가오는 마감일을 날짜순으로 봐요."), box];
+  }
+  // ---- 묵주 WBS: 서버에 저장된 공정표를 받아 씀 (없으면 화면에 들어 있는 기본값). 고치기는 관리자만
+  const ROSARY_DEFAULT = { procs: JSON.parse(JSON.stringify(ROSARY_PROCS)), milestones: JSON.parse(JSON.stringify(ROSARY_MILESTONES)) };
+  let rosaryWbsLoaded = false;
+  async function loadRosaryWbs(force) {
+    if (rosaryWbsLoaded && !force) return;
+    try {
+      const r = await api("/ops/wbs");
+      const w = r.wbs || ROSARY_DEFAULT;
+      ROSARY_PROCS = JSON.parse(JSON.stringify(w.procs)); ROSARY_MILESTONES = JSON.parse(JSON.stringify(w.milestones));
+      rosaryWbsLoaded = true;
+    } catch (e) { /* 못 받으면 기본값 */ }
+  }
+  async function adminWbs() {
+    await loadRosaryWbs(true);
+    let draft = { procs: JSON.parse(JSON.stringify(ROSARY_PROCS)), milestones: JSON.parse(JSON.stringify(ROSARY_MILESTONES)) }, editing = false;
+    const box = h("div", { class: "stack" });
+    const draw = () => {
+      if (!editing) return fill(box, h("div", { class: "actions actions--start" }, [h("button", { class: "btn btn--primary btn--sm btn--admin", type: "button", onclick: () => { editing = true; draw(); } }, [icon("lock"), "WBS 고치기"])]), volWbsRosary());
+      const ids = Object.keys(draft.procs).map(Number).sort((a, b) => a - b);
+      const inp = (obj, k, ph, max) => { const e = h("input", { value: obj[k] || "", maxlength: String(max || 200), placeholder: ph }); e.addEventListener("input", () => { obj[k] = e.value; }); return e; };
+      const msBox = draft.milestones.map((m, i) => {
+        const pr = h("input", { value: m.procs.join(", "), placeholder: "예: 1, 2, 3", "aria-label": "공정 번호" }); pr.addEventListener("input", () => { m.procs = pr.value.split(/[,\s]+/).map(Number).filter((n) => n > 0); });
+        return h("div", { class: "card ops-critrow" }, [h("div", { class: "row2" }, [field(`${i + 1}. 마일스톤`, inp(m, "name", "예: 원자재 조달", 60)), field("공정 번호", pr, "아래 공정의 번호를 쉼표로")]),
+          h("div", { class: "row2" }, [field("주 업무", inp(m, "main", "")), field("연결 업무", inp(m, "link", ""))]),
+          h("button", { class: "link-btn small", type: "button", text: "이 마일스톤 빼기", onclick: () => { draft.milestones.splice(i, 1); draw(); } })]);
+      });
+      const prBox = ids.map((id) => {
+        const p = draft.procs[id];
+        const fixed = h("input", { type: "checkbox", checked: !!p.fixed }); fixed.addEventListener("change", () => { p.fixed = fixed.checked; });
+        const tasks = h("textarea", { rows: "2", placeholder: "추가 과업 (한 줄에 하나)" }, (p.tasks || []).join("\n")); tasks.addEventListener("input", () => { p.tasks = tasks.value.split("\n").map((x) => x.trim()).filter(Boolean); });
+        return h("div", { class: "card ops-critrow" }, [h("div", { class: "row2" }, [field(`공정 ${id}`, inp(p, "name", "공정 이름", 80)), h("label", { class: "check" }, [fixed, h("span", { text: "확정" })])]),
+          h("div", { class: "row2" }, [field("특징", inp(p, "feat", "", 300)), field("연결 업무", inp(p, "link", ""))]), field("공동 작업 (비우면 없음)", inp(p, "joint", "")), field("추가 과업", tasks),
+          h("button", { class: "link-btn small", type: "button", text: "이 공정 빼기", onclick: () => { delete draft.procs[id]; draft.milestones.forEach((m) => { m.procs = m.procs.filter((n) => n !== id); }); draw(); } })]);
+      });
+      const save = h("button", { class: "btn btn--primary", type: "button", text: "WBS 저장", onclick: () => { if (!confirm("WBS 를 이대로 저장할까요? 봉사자 화면에도 바로 보여요.")) return; busy(save, async () => { try { const r = await api("/ops/wbs", { method: "PUT", body: draft }); ROSARY_PROCS = r.wbs.procs; ROSARY_MILESTONES = r.wbs.milestones; rosaryWbsLoaded = true; editing = false; toast("WBS 를 저장했어요."); draw(); } catch (ex) { toast(ex.message); } }); } });
+      fill(box,
+        opsHint("관리자만 고쳐요. 마일스톤마다 공정 번호를 쉼표로 적고, 공정은 아래에서 이름·확정 여부·특징·추가 과업을 고쳐요."),
+        h("h2", { class: "card__title", text: "마일스톤" }), ...msBox, h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => { draft.milestones.push({ name: "", main: "", link: "", procs: [] }); draw(); } }, [icon("plus"), "마일스톤 더하기"]),
+        h("h2", { class: "card__title", text: "공정" }), ...prBox, h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => { const n = Math.max(0, ...ids) + 1; draft.procs[n] = { name: "", feat: "", link: "" }; draw(); } }, [icon("plus"), "공정 더하기"]),
+        h("div", { class: "actions actions--start" }, [save, h("button", { class: "btn btn--ghost", type: "button", text: "취소", onclick: () => { draft = { procs: JSON.parse(JSON.stringify(ROSARY_PROCS)), milestones: JSON.parse(JSON.stringify(ROSARY_MILESTONES)) }; editing = false; draw(); } }),
+          h("button", { class: "btn btn--ghost", type: "button", text: "처음 공정표로", onclick: () => { if (!confirm("처음(기본) 공정표로 되돌려 고칠까요? 저장해야 반영돼요.")) return; draft = JSON.parse(JSON.stringify(ROSARY_DEFAULT)); draw(); } })]));
+    };
+    draw();
+    return box;
+  }
   async function pageVolAdmin() {
     if (!isAdmin()) return go("#/today");
     document.title = `봉사자 관리 · ${TITLE}`;
     drawMini(null);
     setMain("volunteers", loading());
-    const tab = ["training", "stock", "records", "inspect", "team", "menu"].includes(route().id) ? route().id : "schedule";
+    const tab = ["training", "stock", "records", "inspect", "team", "menu", "deadlines", "wbs"].includes(route().id) ? route().id : "schedule";
+    let extraView = null; // 데드라인 일정 · 묵주 WBS 탭 (비동기로 그린 화면)
     let teamData = null; // 팀 봉사자 탭: { issues, docs, orgs }
     const ins = inspModule("/admin", () => draw(), "검수할 때마다 한 줄씩 적고, 거른 기록을 업체 클레임 근거로 CSV·인쇄로 내보내요. 샘플링이면 불량률은 샘플 수 기준이에요. 팀 봉사자가 적은 기록도 여기에 함께 보여요.");
     let vols = [], schedules = [], trainings = [], stockMoves = [], volRecords = [], volMenuSet = null;
-    const seg = h("div", { class: "seg", role: "tablist" }, [["schedule", "일정"], ["training", "기본 교육"], ["stock", "입출고 입력"], ["records", "완제품 기록"], ["inspect", "검수 관리"], ["team", "팀 봉사자"], ["menu", "메뉴 공개"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "schedule" ? "#/volunteers" : `#/volunteers/${k}`) })));
+    const seg = h("div", { class: "seg", role: "tablist" }, [["schedule", "일정"], ["training", "기본 교육"], ["stock", "입출고 입력"], ["records", "완제품 기록"], ["inspect", "검수 관리"], ["team", "팀 봉사자"], ["deadlines", "데드라인 일정"], ["wbs", "묵주 WBS"], ["menu", "메뉴 공개"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "schedule" ? "#/volunteers" : `#/volunteers/${k}`) })));
     const dateAndTime = (date, start, end) => h("div", { class: "row2" }, [field("날짜", date), h("div", { class: "row2" }, [field("시작", start), end ? field("끝", end) : h("span")])]);
     const saveForm = (form, ok, err, send) => form.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -7956,10 +8032,10 @@
         h("div", { class: "page-head" }, [
           h("h1", { text: "봉사자 관리" }),
           h("span", { class: "actions vol-preview-btns" }, [h("button", { class: "btn btn--ghost btn--sm", type: "button", title: "관리자 계정으로 부서 봉사자 화면(단계형 메뉴)을 미리 봐요", onclick: () => startVolPreview("dept") }, "부서 봉사자 화면 미리보기"), h("button", { class: "btn btn--ghost btn--sm", type: "button", title: "관리자 계정으로 팀 봉사자 화면(단계형 메뉴)을 미리 봐요", onclick: () => startVolPreview("team") }, "팀 봉사자 화면 미리보기")]),
-          tab === "inspect" ? h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => ins.dialog(null) }, [icon("plus"), "검수 기록"]) : ["stock", "records", "menu", "team"].includes(tab) ? null : h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => (tab === "training" ? trainingDialog() : scheduleDialog()) }, [icon("plus"), tab === "training" ? "교육 등록" : "일정 등록"])
+          tab === "inspect" ? h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => ins.dialog(null) }, [icon("plus"), "검수 기록"]) : ["stock", "records", "menu", "team", "deadlines", "wbs"].includes(tab) ? null : h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => (tab === "training" ? trainingDialog() : scheduleDialog()) }, [icon("plus"), tab === "training" ? "교육 등록" : "일정 등록"])
         ]),
         h("div", { class: "filters" }, [seg, h("span", { class: "muted small", text: `봉사자 ${vols.length}명` })]),
-        tab === "inspect" ? ins.view() : tab === "team" ? teamAdminView() : tab === "stock" ? stockView : tab === "records" ? recView : tab === "menu" ? menuView : tab === "training" ? trainingView : scheduleView
+        tab === "deadlines" || tab === "wbs" ? extraView : tab === "inspect" ? ins.view() : tab === "team" ? teamAdminView() : tab === "stock" ? stockView : tab === "records" ? recView : tab === "menu" ? menuView : tab === "training" ? trainingView : scheduleView
       ]);
     };
     // ---- 팀 봉사자(교육·검수): 이슈 처리 · 자료실 · 수도회 연락처 (관리자만)
@@ -8015,6 +8091,8 @@
       vols = u.users.filter((x) => x.role === "volunteer");
       schedules = s.schedules; trainings = t.trainings; stockMoves = m.moves; volRecords = rc.records; volMenuSet = mn;
       if (tab === "inspect") await ins.load();
+      if (tab === "deadlines") extraView = h("div", { class: "stack" }, await opsDeadlines());
+      if (tab === "wbs") extraView = await adminWbs();
       if (tab === "team") { const [i, d, o] = await Promise.all([api("/team/issues"), api("/team/docs"), api("/team/orgs")]); teamData = { issues: i.issues, docs: d.docs, orgs: o.orgs }; }
       draw();
     } };

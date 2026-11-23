@@ -832,6 +832,23 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XDELETE $B/ops/stock/moves/$AJ)" = 403
           curl -fs -H "$H" $B/stock/$SLI | grep -q '실사 조정'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XDELETE $B/ops/stock/moves/$CJ2)" = 404
+          # 데드라인 일정: 관리자만 적고 고치고 지움, 봉사자는 자기 쪽 것만 봄
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d '{"date":"2030-07-01","title":"x"}' $B/ops/deadlines)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"date":"2030-07-01","title":"x","audience":"nope"}' $B/ops/deadlines)" = 400
+          DL=$(curl -fs -H "$H" -XPOST -d '{"date":"2030-07-01","title":"검수 결과 제출","audience":"team"}' $B/ops/deadlines | JQ 'console.log(d.deadlines.find(x=>x.title==="검수 결과 제출").id)')
+          curl -fs -H "$H" -XPOST -d '{"date":"2030-07-02","title":"모두 마감"}' $B/ops/deadlines >/dev/null
+          curl -fs -H "$TH" $B/ops/deadlines | JQ 'if(d.canEdit||d.deadlines.length!==2)process.exit(1)'
+          curl -fs -H "$VH" $B/ops/deadlines | JQ 'if(d.deadlines.length!==1||d.deadlines[0].title!=="모두 마감")process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPATCH -d '{"done":true}' $B/ops/deadlines/$DL)" = 403
+          curl -fs -H "$H" -XPATCH -d '{"done":true,"audience":"all"}' $B/ops/deadlines/$DL | JQ 'const x=d.deadlines.find(y=>y.id=='$DL');if(!x.done||x.audience!=="all")process.exit(1)'
+          curl -fs -H "$H" -XDELETE $B/ops/deadlines/$DL | JQ 'if(d.deadlines.some(y=>y.id=='$DL'))process.exit(1)'
+          # 묵주 WBS: 보기는 모두, 고치기는 관리자만, 없는 공정 번호는 막음
+          curl -fs -H "$TH" $B/ops/wbs | JQ 'if(d.wbs!==null||d.canEdit)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPUT -d '{"milestones":[{"name":"a","procs":[1]}],"procs":{"1":{"name":"b"}}}' $B/ops/wbs)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPUT -d '{"milestones":[{"name":"a","procs":[1]}],"procs":{"1":{"name":"b"}}}' $B/ops/wbs)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"milestones":[{"name":"a","procs":[2]}],"procs":{"1":{"name":"b"}}}' $B/ops/wbs)" = 400
+          curl -fs -H "$H" -XPUT -d '{"milestones":[{"name":"원자재","procs":[1]}],"procs":{"1":{"name":"실타래","fixed":true,"tasks":["입고"]}}}' $B/ops/wbs >/dev/null
+          curl -fs -H "$VH" $B/ops/wbs | JQ 'if(d.wbs.milestones[0].name!=="원자재"||!d.wbs.procs["1"].fixed||d.wbs.procs["1"].tasks[0]!=="입고")process.exit(1)'
           curl -fs -H "$H" -XPUT -d '{"staffOn":false}' $B/ops/perms >/dev/null
           curl -fs -H "$H" -XDELETE $B/stock/$SLI >/dev/null
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$SH1" $B/ops/monasteries)" = 403

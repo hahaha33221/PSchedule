@@ -2444,6 +2444,31 @@ async function opsRoute(req, res, user, path, method) {
     if (method === "DELETE") { if (x.created_by !== user.id && !r.admin) return deny("적은 사람과 관리자만 지울 수 있어요."); db.prepare("DELETE FROM contact_logs WHERE id = ?").run(x.id); return ok(200, { logs: contactLogsOut(user.id) }); }
     return ok(405, { error: "Method not allowed" });
   }
+  // ---- 데드라인 일정: 관리자만 적고 고치고 지움, 봉사자는 자기 쪽(모두·부서·팀) 것만 봄
+  if (path === "/api/ops/deadlines" && method === "GET") return ok(200, { deadlines: deadlinesOut(r), canEdit: r.admin });
+  if (path === "/api/ops/deadlines" && method === "POST") {
+    if (!r.admin) return deny("데드라인 일정은 관리자가 적어요.");
+    const v = deadlineIn(await readJson(req));
+    db.prepare("INSERT INTO deadlines (date, title, note, audience, done, created_by) VALUES (?, ?, ?, ?, ?, ?)").run(v.date, v.title, v.note, v.audience, v.done, user.id);
+    return ok(201, { deadlines: deadlinesOut(r), canEdit: true });
+  }
+  const dlm = path.match(/^\/api\/ops\/deadlines\/(\d+)$/);
+  if (dlm) {
+    if (!r.admin) return deny("데드라인 일정은 관리자가 고쳐요.");
+    const x = db.prepare("SELECT * FROM deadlines WHERE id = ?").get(Number(dlm[1]));
+    if (!x) throw notFound("데드라인 일정");
+    if (method === "PATCH") { const v = deadlineIn({ date: x.date, title: x.title, note: x.note, audience: x.audience, done: !!x.done, ...(await readJson(req)) }); db.prepare("UPDATE deadlines SET date = ?, title = ?, note = ?, audience = ?, done = ?, updated_at = datetime('now') WHERE id = ?").run(v.date, v.title, v.note, v.audience, v.done, x.id); return ok(200, { deadlines: deadlinesOut(r), canEdit: true }); }
+    if (method === "DELETE") { db.prepare("DELETE FROM deadlines WHERE id = ?").run(x.id); return ok(200, { deadlines: deadlinesOut(r), canEdit: true }); }
+    return ok(405, { error: "Method not allowed" });
+  }
+  // ---- 묵주 WBS: 보기는 모두, 고치기는 관리자만 (저장 전에는 화면에 들어 있는 기본 공정표를 씀)
+  if (path === "/api/ops/wbs" && method === "GET") { let wbs = null; try { wbs = JSON.parse(q.setting.get("rosary_wbs")?.value || "null"); } catch { wbs = null; } return ok(200, { wbs, canEdit: r.admin }); }
+  if (path === "/api/ops/wbs" && method === "PUT") {
+    if (!r.admin) return deny("WBS 는 관리자만 고쳐요.");
+    const wbs = wbsIn(await readJson(req));
+    q.setSetting.run("rosary_wbs", JSON.stringify(wbs));
+    return ok(200, { wbs, canEdit: true });
+  }
   // ---- F14 권한표 (관리자가 고침)
   if (path === "/api/ops/perms" && method === "GET") {
     const rp = rolePerms(), mine = Object.fromEntries(PERM_KEYS.map((k) => [k, { v: r.can(k, "v"), e: r.can(k, "e") }]));
@@ -2745,6 +2770,34 @@ function writeHandout(id, v, user) {
     db.prepare("DELETE FROM shipments WHERE id = ? AND status = 'ready'").run(sid);
   }
   return id;
+}
+// 데드라인 일정
+const DEADLINE_AUD = ["all", "dept", "team"];
+function deadlineIn(b) {
+  if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
+  return { date: b.date, title: text(b.title, 120, "할 일", true), note: text(b.note, 1000, "메모") || "", audience: pick(b.audience, DEADLINE_AUD, "보는 사람", "all"), done: b.done ? 1 : 0 };
+}
+const deadlinesOut = (r) => db.prepare("SELECT * FROM deadlines ORDER BY done, date, id").all()
+  .filter((x) => r.admin || r.role === "staff" || x.audience === "all" || x.audience === r.role)
+  .map((x) => ({ id: x.id, date: x.date, title: x.title, note: x.note, audience: x.audience, done: !!x.done, updatedAt: x.updated_at }));
+// 묵주 WBS 저장 값 검사: 마일스톤(이름·주 업무·연결·공정 번호들)과 공정(이름·확정·공동 작업·특징·연결·추가 과업)
+function wbsIn(b) {
+  const ms = Array.isArray(b.milestones) ? b.milestones : null, ps = b.procs && typeof b.procs === "object" ? b.procs : null;
+  if (!ms || !ps || !ms.length || ms.length > 20) throw bad("마일스톤을 1개 이상 적어 주세요.");
+  const procs = {};
+  for (const [k, p] of Object.entries(ps)) {
+    const id = Number(k);
+    if (!Number.isInteger(id) || id < 1 || id > 200) throw bad("공정 번호를 확인해 주세요.");
+    procs[id] = { name: text(p.name, 80, "공정 이름", true), ...(p.fixed ? { fixed: true } : {}), ...(p.joint ? { joint: text(p.joint, 200, "공동 작업") } : {}), feat: text(p.feat, 300, "특징") || "", link: text(p.link, 200, "연결 업무") || "",
+      ...(Array.isArray(p.tasks) && p.tasks.length ? { tasks: p.tasks.slice(0, 20).map((t) => text(t, 120, "추가 과업", true)) } : {}) };
+  }
+  if (Object.keys(procs).length > 80) throw bad("공정이 너무 많아요.");
+  const milestones = ms.map((m) => {
+    const list = Array.isArray(m.procs) ? [...new Set(m.procs.map(Number))] : [];
+    if (list.some((n) => !procs[n])) throw bad("마일스톤에 없는 공정 번호가 있어요.");
+    return { name: text(m.name, 60, "마일스톤 이름", true), main: text(m.main, 200, "주 업무") || "", link: text(m.link, 200, "연결 업무") || "", procs: list };
+  });
+  return { milestones, procs };
 }
 // ---- 2차 도우미: 재고(위치별)·원천이 붙은 입출고·실자르기·구매
 const LOC_KINDS = ["raw", "finished", "inspect", "all"];

@@ -962,6 +962,20 @@ function addOpsTables2(db) {
   // 안전재고: 설계 컬럼에는 없지만 화면안의 '재고·보관'(미달 표시)과 대시보드에 필요해서 품목 열마다 둠 (비우면 안 봄)
   if (!has("stock_options", "safety_qty")) db.exec("ALTER TABLE stock_options ADD COLUMN safety_qty INTEGER");
   db.exec("CREATE INDEX IF NOT EXISTS stock_moves_ref ON stock_moves (ref_type, ref_id)");
+
+  // 데드라인 일정: 관리자가 화면에서 적고 봉사자는 '참고'에서 봄 (audience: all 모두 · dept 부서 봉사자 · team 팀 봉사자)
+  db.exec(`CREATE TABLE IF NOT EXISTS deadlines (
+      id         INTEGER PRIMARY KEY,
+      date       TEXT NOT NULL,
+      title      TEXT NOT NULL,
+      note       TEXT NOT NULL DEFAULT '',
+      audience   TEXT NOT NULL DEFAULT 'all' CHECK (audience IN ('all', 'dept', 'team')),
+      done       INTEGER NOT NULL DEFAULT 0,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS deadlines_date ON deadlines (date);`);
 }
 // 수도회 이름이 같은 방문 일정·네이버폼 신청을 수도회 하나에 연결 (아직 연결 안 된 줄만). 연락처는 수도회 연락처가 비었을 때만 옮김
 export function linkMonasteries(db) {
