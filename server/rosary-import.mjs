@@ -77,6 +77,14 @@ export function importRosary(db, data, opts = {}) {
     const progressOf = (x) => (x.date && x.date <= today ? "done" : x.status === "진행완료" ? "done" : "planned");
     const qtyOf = (x) => (qty === "table" ? x.qtyTable ?? x.qtyList : x.qtyList ?? x.qtyTable);
     const idOfX = new Map(); // 엑셀 줄 → DB 일정 id
+    // 수도회 담당자·전화·주소: 빈 칸만 채움 (--contacts)
+    const fillContacts = (monId, x) => {
+      const m = monById.get(monId);
+      const fill = { contact_name: x.contactName, phone: x.phone, address: x.address };
+      let n = 0;
+      for (const [k, v] of Object.entries(fill)) if (m && v && !m[k]) { db.prepare(`UPDATE monasteries SET ${k} = ?, updated_at = datetime('now') WHERE id = ?`).run(String(v).slice(0, 300), m.id); m[k] = v; n++; }
+      if (n) sum.contacts++;
+    };
 
     data.schedules.forEach((x, i) => {
       let s = mapX.get(i) || null;
@@ -87,6 +95,7 @@ export function importRosary(db, data, opts = {}) {
         const id = Number(db.prepare("INSERT INTO vol_schedules (title, date, start_time, place, audience, qty, project_item_id, edu_code, progress, alloc_qty, monastery_id, qty_by, qty_at) VALUES (?, ?, ?, ?, 'all', ?, ?, ?, ?, ?, ?, '엑셀 반영', datetime('now'))")
           .run(TITLE + x.org, x.date, time, x.region || "", q0, g.id, x.code, prog, intOrNull(x.alloc), monFor(x.org)).lastInsertRowid);
         idOfX.set(i, id); sum.added++; sum[prog]++;
+        if (contacts) fillContacts(db.prepare("SELECT monastery_id FROM vol_schedules WHERE id = ?").get(id).monastery_id, x);
         lines.push(`+ [${x.no}] ${x.code} ${md(x.date)} ${x.org}: 새 교육 일정 (요청 ${q0 ?? "-"}, ${prog === "done" ? "진행완료" : "진행예정"})`);
         return;
       }
@@ -123,13 +132,7 @@ export function importRosary(db, data, opts = {}) {
           ch.push(`이름 '${dbOrg}'→'${x.org}' (있던 수도회에 연결)`); sum.renamed++;
         } else { sum.renameSkip++; ch.push(`(이름 못 바꿈: '${dbOrg}')`); }
       } else if (dbOrg !== x.org) ch.push(`(이름 다름: DB '${dbOrg}')`);
-      if (contacts && s.monastery_id) {
-        const m = monById.get(s.monastery_id);
-        const fill = { contact_name: x.contactName, phone: x.phone, address: x.address };
-        let n = 0;
-        for (const [k, v] of Object.entries(fill)) if (m && v && !m[k]) { db.prepare(`UPDATE monasteries SET ${k} = ?, updated_at = datetime('now') WHERE id = ?`).run(String(v).slice(0, 300), m.id); m[k] = v; n++; }
-        if (n) sum.contacts++;
-      }
+      if (contacts && s.monastery_id) fillContacts(s.monastery_id, x);
       if (ch.length) lines.push(`· [${x.no}] ${x.code} ${md(x.date)} ${x.org} ↔ #${s.id}: ${ch.join(", ")}`);
     });
     // 합동 교육: 같은 회차에서 일부는 DB 일정과 맞고 일부는 새로 넣으면, DB 쪽 수량이 합계일 수 있음
