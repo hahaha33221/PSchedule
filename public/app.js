@@ -6720,7 +6720,7 @@
     document.title = `제품 검수 · ${TITLE}`;
     const tabs = [["records", "검수 결과"], ["products", "입고 완성품"], ["daily", "하루 검수 기록"], ["shifts", "봉사 신청"], ["guide", "검수 기준"]];
     if (!tabs.some(([k]) => k === sub)) sub = "records";
-    const seg = h("div", { class: "seg", role: "tablist" }, tabs.map(([k, label]) => h("a", { class: "seg__btn", role: "tab", href: `#/tinsp/${k}`, "aria-selected": String(k === sub), text: label })));
+    const seg = h("div", { class: "seg ops-tabs", role: "tablist" }, tabs.map(([k, label]) => h("a", { class: "seg__link" + (k === sub ? " is-active" : ""), role: "tab", href: `#/tinsp/${k}`, "aria-selected": String(k === sub), text: label })));
     const box = h("div", { class: "stack" });
     const head = [...teamHead("제품 검수", "회수한 완성품을 검수해요. 검수 결과·하루 검수 기록·봉사 신청은 입력하고, 입고 완성품과 검수 기준은 조회해요."), seg];
     if (sub === "records") {
@@ -6747,12 +6747,12 @@
         const total = daily.reduce((n, x) => n + x.qty, 0);
         const byDate = new Map(); for (const x of daily) byDate.set(x.date, (byDate.get(x.date) || 0) + x.qty);
         fill(box,
-          h("div", { class: "actions actions--start" }, [h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => dailyDialog(null) }, [icon("plus"), "작업 기록"]), h("span", { class: "muted small", text: `총 ${fmtN(total)}개 · ${byDate.size}일` })]),
+          h("div", { class: "actions actions--start" }, [h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => dailyDialog(null) }, [icon("plus"), "기록 추가"]), h("span", { class: "muted small", text: `총 ${fmtN(total)}개 · ${byDate.size}일` })]),
           daily.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
             h("thead", {}, h("tr", {}, ["날짜", "검수 수량", "그날 합계", "함께한 봉사자", "메모", "입력"].map((t) => h("th", { text: t })))),
             h("tbody", {}, daily.map((x) => h("tr", { class: "stock-row", tabindex: "0", onclick: () => dailyDialog(x) }, [h("td", { class: "nowrap", text: x.date }), h("td", { class: "num", text: fmtN(x.qty) }), h("td", { class: "num muted", text: fmtN(byDate.get(x.date)) }), h("td", { text: x.workers || "-" }), h("td", { class: "muted small", text: x.note || "" }), h("td", { class: "muted small", text: x.author || "-" })]))),
             h("tfoot", {}, h("tr", { class: "vol-more__sum" }, [h("th", { text: "합계" }), h("td", { class: "num", text: fmtN(total) }), h("td", { colspan: "4" })]))
-          ])) : h("div", { class: "card empty", text: "아직 작업 기록이 없어요." }));
+          ])) : h("div", { class: "card empty", text: "아직 하루 검수 기록이 없어요." }));
       };
       const dailyDialog = (x) => {
         const err = errorLine();
@@ -6760,9 +6760,9 @@
         const workers = h("input", { value: x?.workers || "", maxlength: "300", placeholder: "예: 김OO, 이OO" }), note = h("textarea", { rows: "2", maxlength: "500" }, x?.note || "");
         const ok = h("button", { class: "btn btn--primary", type: "submit", text: x ? "저장" : "추가" });
         const form = h("form", { class: "stack", novalidate: true }, [h("div", { class: "row2" }, [field("날짜", date), field("검수 수량", qty)]), field("함께한 봉사자", workers), field("메모 (선택)", note), err,
-          h("div", { class: "actions" }, [x && (x.mine || isAdmin()) ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 작업 기록을 지울까요?")) return; daily = (await act(() => api(`/team/daily/${x.id}`, { method: "DELETE" }))).daily; closeDialog(); draw(); } }) : null, h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])]);
+          h("div", { class: "actions" }, [x && (x.mine || isAdmin()) ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 하루 검수 기록을 지울까요?")) return; daily = (await act(() => api(`/team/daily/${x.id}`, { method: "DELETE" }))).daily; closeDialog(); draw(); } }) : null, h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])]);
         form.addEventListener("submit", (e) => { e.preventDefault(); busy(ok, async () => { try { daily = (await api(x ? `/team/daily/${x.id}` : "/team/daily", { method: x ? "PATCH" : "POST", body: { date: date.value, qty: qty.value, workers: workers.value, note: note.value } })).daily; closeDialog(); draw(); } catch (ex) { showError(err, ex.message); } }); });
-        openDialog(x ? "작업 기록 고치기" : "작업 기록 추가", form);
+        openDialog(x ? "하루 검수 기록 고치기" : "하루 검수 기록 추가", form);
       };
       draw();
     } else if (sub === "shifts") {
