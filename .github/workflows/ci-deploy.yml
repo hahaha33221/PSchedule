@@ -785,6 +785,53 @@ jobs:
           J="{\"itemId\":$VG,\"stage\":1,\"date\":\"2030-07-02\",\"checkedQty\":20,\"groupId\":$GR,\"recoveryId\":$RW2}"; curl -fs -H "$TH" -XPOST -d "$J" $B/team/inspections >/dev/null
           curl -fs -H "$H" $B/ops/groups | JQ 'const a=d.groups.find(g=>g.id==='$GR').assigns.find(x=>x.scheduleId==='$SC2');if(a.status!=="done"||a.checked!==20)process.exit(1)'
           curl -fs -H "$H" $B/ops/monasteries | JQ 'const m=d.monasteries.find(x=>x.id=='$MID2');if(m.status!=="checked"||m.checkedQty!==20)process.exit(1)'
+          # CRUD 보강: 수도회 추가·이름(· 정리·중복 막음·일정 제목 같이)·지우기(이어진 것 있으면 막음)
+          MX=$(curl -fs -H "$VH" -XPOST -d '{"name":"오타·수도회"}' $B/ops/monasteries | JQ 'const m=d.monasteries.find(x=>x.name==="오타 수도회");if(!m||!m.deletable)process.exit(1);console.log(m.id)')
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPATCH -d '{"name":"연결 수도회"}' $B/ops/monasteries/$MX)" = 400
+          curl -fs -H "$VH" -XPATCH -d '{"name":"바른  수도회"}' $B/ops/monasteries/$MX | JQ 'if(!d.monasteries.some(x=>x.name==="바른 수도회"))process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XDELETE $B/ops/monasteries/$MID2)" = 400
+          curl -fs -H "$VH" -XDELETE $B/ops/monasteries/$MX | JQ 'if(d.monasteries.some(x=>x.id=='$MX'))process.exit(1)'
+          curl -fs -H "$H" -XPATCH -d '{"name":"이름 바뀐 수도회"}' $B/ops/monasteries/$MID2 >/dev/null
+          curl -fs -H "$TH" $B/team/orgs | JQ 'const o=d.orgs.find(x=>x.id==='$SC2');if(o.org!=="이름 바뀐 수도회"||o.monasteryId!=='$MID2')process.exit(1)'
+          # 검수 기준: 쓰인 판은 고치기·지우기 막음, 안 쓴 판은 고치고 지움
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"validFrom":"2026-01-01","items":[{"item":"a","defectName":"b"}]}' $B/ops/criteria/2)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XDELETE $B/ops/criteria/2)" = 400
+          curl -fs -H "$H" -XPOST -d '{"validFrom":"2099-01-01","items":[{"item":"매듭","defectName":"매듭 풀림","defectKey":"knot"}]}' $B/ops/criteria | JQ 'if(!d.versions.some(v=>v.version===3&&v.used===0)||d.current!==2)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPUT -d '{"validFrom":"2099-01-01","items":[{"item":"a","defectName":"b"}]}' $B/ops/criteria/3)" = 403
+          curl -fs -H "$H" -XPUT -d '{"validFrom":"2099-01-01","items":[{"item":"구슬","defectName":"구슬 빠짐","defectKey":"bead"},{"item":"십자가","defectName":"십자가 흔들림","defectKey":"cross"}]}' $B/ops/criteria/3 | JQ 'const v=d.versions.find(x=>x.version===3);if(v.items.length!==2||v.items[0].defectKey!=="bead")process.exit(1)'
+          curl -fs -H "$H" -XDELETE $B/ops/criteria/3 | JQ 'if(d.versions.some(v=>v.version===3))process.exit(1)'
+          # 보관 위치: 쓰인 위치는 지우기 막음(쓰는 위치 끄기로), 안 쓴 위치는 지움, 관리자만
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XDELETE $B/ops/locations/$LB)" = 400
+          LC=$(curl -fs -H "$H" -XPOST -d '{"name":"임시 위치"}' $B/ops/locations | JQ 'console.log(d.locations.find(x=>x.name==="임시 위치").id)')
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XDELETE $B/ops/locations/$LC)" = 403
+          curl -fs -H "$H" -XDELETE $B/ops/locations/$LC | JQ 'if(d.locations.some(x=>x.id=='$LC'))process.exit(1)'
+          # 실자르기 고치기: 쌓인 입출고를 새 값으로 다시 맞춤
+          T0=$(curl -fs -H "$H" $B/ops/stock | JQ 'console.log(d.ledgers.find(x=>x.id=='$SLI').options[1].qty)')
+          CJ2=$(curl -fs -H "$TH" -XPOST -d '{"date":"2030-06-15","skeinLedgerId":'$SLI',"skeinOptionId":'$OT',"skeinQty":10}' $B/ops/cutting | JQ 'console.log(d.id)')
+          curl -fs -H "$TH" -XPATCH -d '{"date":"2030-06-15","skeinLedgerId":'$SLI',"skeinOptionId":'$OT',"skeinQty":6,"workers":"고침"}' $B/ops/cutting/$CJ2 | JQ 'const j=d.jobs.find(x=>x.id=='$CJ2');if(j.skeinQty!==6||j.skeinOptionId!=='$OT')process.exit(1)'
+          curl -fs -H "$H" $B/ops/stock | JQ 'if(d.ledgers.find(x=>x.id=='$SLI').options[1].qty!=='$T0'+6)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPATCH -d '{"date":"2030-06-15","skeinQty":1}' $B/ops/cutting/$CJ2)" = 403
+          # 타래 배분 고치기: 출고·택배 준비 건을 같이 맞춤, 택배를 끄면 준비 건 지움, 이미 발송했으면 막음
+          HD=$(curl -fs -H "$TH" -XPOST -d '{"date":"2030-06-16","receiverType":"volunteer","receiverName":"실봉사 김","skeinQty":4,"skeinLedgerId":'$SLI',"skeinOptionId":'$OT',"parcel":true}' $B/ops/handouts | JQ 'console.log(d.id)')
+          curl -fs -H "$TH" -XPATCH -d '{"date":"2030-06-16","receiverType":"volunteer","receiverName":"실봉사 김","skeinQty":2,"skeinLedgerId":'$SLI',"skeinOptionId":'$OT',"parcel":true,"address":"서울"}' $B/ops/handouts/$HD | JQ 'const h=d.handouts.find(x=>x.id=='$HD');if(h.skeinQty!==2||!h.shipmentId||h.address!=="서울")process.exit(1)'
+          curl -fs -H "$VH" $B/ops/shipments | JQ 'if(!d.shipments.some(s=>/자른 실 2타래/.test(s.contents)&&s.address==="서울"))process.exit(1)'
+          curl -fs -H "$H" $B/ops/stock | JQ 'if(d.ledgers.find(x=>x.id=='$SLI').options[1].qty!=='$T0'+4)process.exit(1)'
+          curl -fs -H "$TH" -XPATCH -d '{"date":"2030-06-16","receiverType":"volunteer","receiverName":"실봉사 김","skeinQty":2,"skeinLedgerId":'$SLI',"skeinOptionId":'$OT'}' $B/ops/handouts/$HD | JQ 'if(d.handouts.find(x=>x.id=='$HD').shipmentId)process.exit(1)'
+          curl -fs -H "$VH" $B/ops/shipments | JQ 'if(d.shipments.some(s=>/자른 실 2타래/.test(s.contents)))process.exit(1)'
+          SPH=$(curl -fs -H "$TH" -XPATCH -d '{"date":"2030-06-16","receiverType":"volunteer","receiverName":"실봉사 김","skeinQty":2,"skeinLedgerId":'$SLI',"skeinOptionId":'$OT',"parcel":true}' $B/ops/handouts/$HD | JQ 'console.log(d.handouts.find(x=>x.id=='$HD').shipmentId)')
+          curl -fs -H "$VH" -XPATCH -d '{"status":"sent"}' $B/ops/shipments/$SPH >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPATCH -d '{"date":"2030-06-16","receiverType":"volunteer","receiverName":"x","skeinQty":1}' $B/ops/handouts/$HD)" = 400
+          # 위치 이동·실사 조정 고치기·지우기 (이동은 두 줄 함께), 수정 기록 남음
+          MV=$(curl -fs -H "$H" $B/ops/stock | JQ 'console.log(d.moves.find(m=>m.refType==="move"&&m.type==="out").id)')
+          curl -fs -H "$VH" -XPATCH -d '{"qty":4,"note":"고침"}' $B/ops/stock/moves/$MV | JQ 'const o=d.ledgers.find(l=>l.id=='$SLI').options[0];if(o.byLoc.find(x=>x.locationId=='$LB').qty!==4||d.moves.filter(m=>m.refType==="move").length!==2)process.exit(1)'
+          MV2=$(curl -fs -H "$H" $B/ops/stock | JQ 'console.log(d.moves.find(m=>m.refType==="move"&&m.type==="in").id)')
+          curl -fs -H "$VH" -XDELETE $B/ops/stock/moves/$MV2 | JQ 'if(d.moves.some(m=>m.refType==="move")||d.ledgers.find(l=>l.id=='$SLI').options[0].byLoc.some(x=>x.locationId=='$LB'))process.exit(1)'
+          AJ=$(curl -fs -H "$H" $B/ops/stock | JQ 'console.log(d.moves.find(m=>m.refType==="adjust").id)')
+          Q0=$(curl -fs -H "$H" $B/ops/stock | JQ 'console.log(d.ledgers.find(l=>l.id=='$SLI').options[0].qty)')
+          curl -fs -H "$VH" -XPATCH -d '{"diff":-5}' $B/ops/stock/moves/$AJ | JQ 'if(d.ledgers.find(l=>l.id=='$SLI').options[0].qty!=='$Q0'-35)process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XDELETE $B/ops/stock/moves/$AJ)" = 403
+          curl -fs -H "$H" $B/stock/$SLI | grep -q '실사 조정'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XDELETE $B/ops/stock/moves/$CJ2)" = 404
           curl -fs -H "$H" -XPUT -d '{"staffOn":false}' $B/ops/perms >/dev/null
           curl -fs -H "$H" -XDELETE $B/stock/$SLI >/dev/null
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$SH1" $B/ops/monasteries)" = 403

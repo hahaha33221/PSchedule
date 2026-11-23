@@ -7216,14 +7216,14 @@
   const opsSel = (pairs, value, first) => { const s = h("select", {}, [first != null ? h("option", { value: "", text: first }) : null, ...pairs.map(([v, t]) => h("option", { value: String(v), text: t }))].filter(Boolean)); s.value = value == null ? "" : String(value); return s; };
   const opsSeg = (pairs, cur, pick) => h("div", { class: "vm-seg", role: "tablist" }, pairs.map(([k, t]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === cur), text: t, onclick: () => pick(k) })));
   const opsAddBtn = (label, onclick) => h("button", { class: "btn btn--primary vm-add vm-add--in", type: "button", onclick }, [icon("plus"), label]);
-  function opsSheet(title, fields, { save, del, saveText = "저장하기", tone } = {}) {
+  function opsSheet(title, fields, { save, del, saveText = "저장하기", tone, ask } = {}) {
     const err = errorLine();
     const ok = h("button", { class: "btn btn--primary", type: "submit", text: saveText });
     const form = h("form", { class: "vm-form", novalidate: true }, [...fields.filter(Boolean), h("div", { class: "vm-foot" }, [err, h("div", { class: "vm-foot__btns" }, [
       del ? h("button", { class: "btn btn--danger-outline", type: "button", text: "지우기", onclick: async () => { try { if (await del() !== false) closeDialog(); } catch (ex) { showError(err, ex.message); } } }) : null,
       save ? ok : h("button", { class: "btn btn--ghost", type: "button", text: "닫기", "data-close": true })
     ])])]);
-    form.addEventListener("submit", (e) => { e.preventDefault(); if (!save) return; busy(ok, async () => { try { if (await save() !== false) closeDialog(); } catch (ex) { showError(err, ex.message); } }); });
+    form.addEventListener("submit", (e) => { e.preventDefault(); if (!save) return; if (ask && !confirm(ask)) return; busy(ok, async () => { try { if (await save() !== false) closeDialog(); } catch (ex) { showError(err, ex.message); } }); });
     openDialog(title, form, { tone });
   }
   const opsHint = (t) => h("p", { class: "muted small", text: t });
@@ -7255,8 +7255,15 @@
       fill(box,
         h("div", { class: "vm-stats" }, [vmStat("담당 수도회", all.length), vmStat("교육 완료 이후", all.filter((m) => m.status !== "new" && m.status !== "issue").length), vmStat("문제 있음", all.filter((m) => m.status === "issue").length, all.some((m) => m.status === "issue"))]),
         h("div", { class: "filters" }, [h("label", { class: "search" }, [icon("search"), search]), st, h("span", { class: "muted small filters__end", text: `${list.length}곳` })]),
-        listBox);
+        listBox,
+        d.canEdit ? opsAddBtn("수도회 추가", addMon) : null);
       drawList();
+    };
+    const addMon = () => {
+      const name = h("input", { maxlength: "80", placeholder: "예: ○○ 수녀회" });
+      opsSheet("수도회 추가", [field("수도회 이름", name, "같은 이름은 넣을 수 없어요. 가운뎃점(·)은 띄어쓰기로 바꿔 저장해요.")], {
+        saveText: "추가하기", save: async () => { d = { ...d, ...(await api("/ops/monasteries", { method: "POST", body: { name: name.value } })) }; toast("수도회를 추가했어요."); draw(); }
+      });
     };
     const edit = (m) => {
       const status = opsSel(Object.entries(MON_STATUS), m.status);
@@ -7268,11 +7275,14 @@
       const phone = d.canPhone ? h("textarea", { rows: "2", maxlength: "300", placeholder: "전화 · 이메일 (관리자만 적어요)" }, m.phone) : null;
       const addr = h("input", { value: m.address, maxlength: "200", placeholder: "택배 받을 주소" });
       const note = h("textarea", { rows: "2", maxlength: "1000" }, m.note);
-      opsSheet(m.name, [field("진행 상태", status), issueField, field("담당 수녀·수사", cname), phone ? field("연락처 (관리자만)", phone) : (m.phone ? h("p", { class: "small", text: `연락처: ${m.phone}` }) : null), field("택배 주소", addr), field("메모", note)], {
+      const mname = h("input", { value: m.name, maxlength: "80" });
+      opsSheet(m.name, [field("수도회 이름", mname, "바꾸면 이어진 방문 일정 제목도 같이 바뀌어요"), field("진행 상태", status), issueField, field("담당 수녀·수사", cname), phone ? field("연락처 (관리자만)", phone) : (m.phone ? h("p", { class: "small", text: `연락처: ${m.phone}` }) : null), field("택배 주소", addr), field("메모", note)], {
+        ask: "이대로 고칠까요?",
         save: async () => {
-          const body = { status: status.value, issueNote: issue.value, contactName: cname.value, address: addr.value, note: note.value, ...(phone ? { phone: phone.value } : {}) };
+          const body = { name: mname.value, status: status.value, issueNote: issue.value, contactName: cname.value, address: addr.value, note: note.value, ...(phone ? { phone: phone.value } : {}) };
           d = { ...d, ...(await api(`/ops/monasteries/${m.id}`, { method: "PATCH", body })) }; toast("저장했어요."); draw();
-        }
+        },
+        del: m.deletable ? async () => { if (!confirm(`'${m.name}' 수도회를 지울까요? 되돌릴 수 없어요.`)) return false; d = { ...d, ...(await api(`/ops/monasteries/${m.id}`, { method: "DELETE" })) }; toast("수도회를 지웠어요."); draw(); } : null
       });
     };
     draw();
@@ -7413,11 +7423,13 @@
       const pickV = d.versions.length > 1 ? opsSel(d.versions.map((x) => [x.version, `${x.version}판${x.version === d.current ? " (지금 기준)" : ""}`]), v.version) : null;
       pickV?.addEventListener("change", () => { ver = Number(pickV.value); draw(); });
       fill(box,
-        h("section", { class: "card vm-sum" }, [h("h2", { class: "vm-sum__name", text: `${v.version}판 검수 기준${v.version === d.current ? " · 지금 적용" : ""}` }), opsLine(`적용 ${v.validFrom}${v.approvedBy ? ` · 확인 ${v.approvedBy}` : ""} · 항목 ${v.items.length}개`), pickV ? h("label", { class: "vm-pick" }, [h("span", { class: "muted small", text: "다른 판 보기" }), pickV]) : null]),
+        h("section", { class: "card vm-sum" }, [h("h2", { class: "vm-sum__name", text: `${v.version}판 검수 기준${v.version === d.current ? " · 지금 적용" : ""}` }), opsLine(`적용 ${v.validFrom}${v.approvedBy ? ` · 확인 ${v.approvedBy}` : ""} · 항목 ${v.items.length}개 · 이 판으로 적은 검수 ${fmtN(v.used)}건`), pickV ? h("label", { class: "vm-pick" }, [h("span", { class: "muted small", text: "다른 판 보기" }), pickV]) : null,
+          d.canEdit && !v.used ? h("span", { class: "actions actions--start" }, [h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "이 판 고치기", onclick: () => edit(v, true) }),
+            d.versions.length > 1 ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "이 판 지우기", onclick: async () => { if (!confirm(`${v.version}판 검수 기준을 지울까요? 되돌릴 수 없어요.`)) return; d = { ...d, ...(await act(() => api(`/ops/criteria/${v.version}`, { method: "DELETE" }))) }; ver = d.current; toast("판을 지웠어요."); draw(); } }) : null]) : d.canEdit ? opsHint("이 판으로 적은 검수 기록이 있어 고치거나 지울 수 없어요. 바꾸려면 새 판을 만들어요.") : null]),
         opsCards(v.items, (it) => opsCard(null, [opsTop(it.item, it.defectName), it.method ? opsLine(`확인 방법: ${it.method}`) : null, it.passRule ? opsLine(`합격 기준: ${it.passRule}`) : null, opsTags(opsTag(`불량 코드 ${it.defectKey}`))]), "항목이 없어요."),
         d.canEdit ? opsAddBtn("기준 고치기 (새 판)", () => edit(v)) : opsHint("검수 기준은 리더 봉사자와 관리자가 정해요. 검수 입력에서는 이 불량 코드만 골라요."));
     };
-    const edit = (v) => {
+    const edit = (v, same) => {
       const rows = v.items.map((it) => ({ ...it }));
       const rowsBox = h("div", { class: "stack" });
       const drawRows = () => fill(rowsBox, ...rows.map((it, i) => {
@@ -7427,10 +7439,10 @@
           h("div", { class: "row2" }, [field("불량 코드 (비우면 불량 이름)", inp("defectKey", "예: knot", 40)), h("div", { class: "field" }, h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "이 항목 빼기", onclick: () => { rows.splice(i, 1); drawRows(); } }))])]);
       }), h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => { rows.push({ item: "", defectName: "", defectKey: "", method: "", passRule: "" }); drawRows(); } }, [icon("plus"), "항목 더하기"]));
       drawRows();
-      const from = h("input", { type: "date", value: today() }), by = h("input", { maxlength: "80", placeholder: "예: 신부님 협의", value: v.approvedBy || "" });
-      opsSheet(`검수 기준 ${Math.max(...d.versions.map((x) => x.version)) + 1}판 만들기`, [opsHint("지금 판을 고쳐 새 판으로 저장해요. 예전 검수 결과는 예전 판 기준으로 남아요."), h("div", { class: "row2" }, [field("적용 시작일", from), field("확인한 사람", by)]), rowsBox], {
-        saveText: "새 판 저장",
-        save: async () => { d = { ...d, ...(await api("/ops/criteria", { method: "POST", body: { validFrom: from.value, approvedBy: by.value, items: rows } })) }; ver = d.current; toast("새 검수 기준을 저장했어요."); draw(); }
+      const from = h("input", { type: "date", value: same ? v.validFrom : today() }), by = h("input", { maxlength: "80", placeholder: "예: 신부님 협의", value: v.approvedBy || "" });
+      opsSheet(same ? `검수 기준 ${v.version}판 고치기` : `검수 기준 ${Math.max(...d.versions.map((x) => x.version)) + 1}판 만들기`, [opsHint(same ? "아직 이 판으로 적은 검수 기록이 없어 그대로 고쳐요." : "지금 판을 고쳐 새 판으로 저장해요. 예전 검수 결과는 예전 판 기준으로 남아요."), h("div", { class: "row2" }, [field("적용 시작일", from), field("확인한 사람", by)]), rowsBox], {
+        saveText: same ? "이 판 저장" : "새 판 저장", ask: same ? `${v.version}판을 이대로 고칠까요?` : null,
+        save: async () => { d = { ...d, ...(await api(same ? `/ops/criteria/${v.version}` : "/ops/criteria", { method: same ? "PUT" : "POST", body: { validFrom: from.value, approvedBy: by.value, items: rows } })) }; ver = same ? v.version : d.current; toast("검수 기준을 저장했어요."); draw(); }
       });
     };
     draw();
@@ -7647,7 +7659,7 @@
             opsTags(o.safety != null ? opsTag(`안전재고 ${fmtN(o.safety)}`, o.qty < o.safety ? "is-bad" : "") : null, o.qty < (o.safety ?? -Infinity) ? opsTag("부족", "is-bad") : null)], o.safety != null && o.qty < o.safety ? "is-warn" : ""), "품목이 없어요.")])))
         : view === "locs" ? h("div", { class: "stack stack--sm" }, [opsCards(d.locations, (x) => opsCard(d.canLocations ? () => locEdit(x) : null, [opsTop(x.name, LOC_KIND[x.kind]), opsLine([x.place, x.active ? "" : "쉼", x.note].filter(Boolean).join(" · ")),
             opsLine(`${all.filter((o) => o.byLoc.some((b) => b.locationId === x.id)).length}개 품목`)]), "아직 보관 위치가 없어요. 관리자가 등록해요."), d.canLocations ? opsAddBtn("보관 위치 등록", () => locEdit(null)) : null])
-        : opsCards(d.moves, (m) => opsCard(null, [opsTop(`${shortDate(m.date)} · ${m.ledger}`, `${m.type === "in" ? "+" : "−"} ${m.items}`), opsTags(opsTag(REF_LABEL[m.refType] || m.refType), m.location ? opsTag(m.location) : null, m.toLocation ? opsTag(`→ ${m.toLocation}`) : null), m.note ? opsLine(m.note) : null]), "아직 입출고가 없어요."),
+        : opsCards(d.moves, (m) => opsCard(d.canEdit && ["move", "adjust"].includes(m.refType) ? () => moveEdit(m) : null, [opsTop(`${shortDate(m.date)} · ${m.ledger}`, `${m.type === "in" ? "+" : "−"} ${m.items}`), opsTags(opsTag(REF_LABEL[m.refType] || m.refType), m.location ? opsTag(m.location) : null, m.toLocation ? opsTag(`→ ${m.toLocation}`) : null), m.note ? opsLine(m.note) : null]), "아직 입출고가 없어요."),
         view === "items" && d.canEdit ? opsAddBtn("위치 이동·실사 조정", () => edit(null, null)) : null);
     };
     const edit = (l0, o0) => {
@@ -7672,61 +7684,87 @@
         }
       });
     };
+    // 위치 이동·실사 조정 고치기·지우기 (이동은 출고·입고 두 줄을 함께)
+    const moveEdit = (m) => {
+      const isMove = m.refType === "move";
+      const out = isMove ? d.moves.find((x) => x.refType === "move" && x.type === "out" && (x.id === m.refId || x.refId === m.refId || x.id === m.id)) || m : m;
+      const locs = d.locations.map((x) => [x.id, x.name]);
+      const date = h("input", { type: "date", value: m.date }), note = h("input", { maxlength: "300", placeholder: "사유·메모" });
+      const qty = h("input", { type: "number", min: "1", inputmode: "numeric", value: out.qty ?? "" });
+      const from = opsSel(locs, out.locationId, "위치 미정"), to = opsSel(locs, out.toLocationId, "옮길 위치 고르기"), loc = opsSel(locs, m.locationId, "위치 미정");
+      const diff = h("input", { type: "number", inputmode: "numeric", value: (m.type === "in" ? 1 : -1) * (m.qty || 0) });
+      opsSheet(isMove ? "위치 이동 고치기" : "실사 조정 고치기", [opsLine(`${m.ledger} · ${m.items}`), field("날짜", date),
+        ...(isMove ? [field("옮길 수량", qty), h("div", { class: "row2" }, [field("보낸 위치", from), field("받는 위치", to)])] : [field("조정 수량 (+ 늘림 · − 줄임)", diff), field("위치", loc)]), field("메모", note),
+        opsHint("고치거나 지우면 입출고 수정 기록에 남아요.")], {
+        ask: "이대로 고칠까요?",
+        save: async () => { const body = isMove ? { date: date.value, qty: qty.value, fromLocationId: from.value, toLocationId: to.value, note: note.value } : { date: date.value, diff: diff.value, locationId: loc.value, note: note.value };
+          d = { ...d, ...(await api(`/ops/stock/moves/${out.id}`, { method: "PATCH", body })) }; toast("고쳤어요."); draw(); },
+        del: async () => { if (!confirm(isMove ? "이 위치 이동(출고·입고 두 줄)을 지울까요?" : "이 실사 조정을 지울까요?")) return false; d = { ...d, ...(await api(`/ops/stock/moves/${out.id}`, { method: "DELETE" })) }; toast("지웠어요."); draw(); }
+      });
+    };
     const locEdit = (x) => {
       const name = h("input", { value: x?.name || "", maxlength: "60", placeholder: "예: 본관 2층 자재실" }), place = h("input", { value: x?.place || "", maxlength: "80" });
       const kind = opsSel(Object.entries(LOC_KIND), x?.kind || "all"), active = h("input", { type: "checkbox", checked: x ? x.active : true }), note = h("input", { value: x?.note || "", maxlength: "300" });
       opsSheet(x ? "보관 위치 고치기" : "보관 위치 등록", [field("위치 이름", name), h("div", { class: "row2" }, [field("건물·방", place), field("용도", kind)]), h("label", { class: "check" }, [active, h("span", { text: "쓰는 위치" })]), field("메모", note)], {
-        save: async () => { d = { ...d, ...(await api(x ? `/ops/locations/${x.id}` : "/ops/locations", { method: x ? "PATCH" : "POST", body: { name: name.value, place: place.value, kind: kind.value, active: active.checked, note: note.value } })) }; toast("저장했어요."); draw(); }
+        ask: x ? "이대로 고칠까요?" : null,
+        save: async () => { d = { ...d, ...(await api(x ? `/ops/locations/${x.id}` : "/ops/locations", { method: x ? "PATCH" : "POST", body: { name: name.value, place: place.value, kind: kind.value, active: active.checked, note: note.value } })) }; toast("저장했어요."); draw(); },
+        del: x ? async () => { if (!confirm(`'${x.name}' 위치를 지울까요? 입출고에 쓰인 위치는 지울 수 없고, '쓰는 위치'를 끄면 돼요.`)) return false; d = { ...d, ...(await api(`/ops/locations/${x.id}`, { method: "DELETE" })) }; toast("위치를 지웠어요."); draw(); } : null
       });
     };
     draw();
     return [opsHint("품목별 재고와 보관 위치를 봐요. 위치 이동은 출고·입고 두 줄로, 실사 조정은 차이만큼 입출고 기록에 남아요."), box];
   }
-  // ---- 실자르기·타래 배분 (F07·F08)
+  // ---- 실자르기·타래 배분 (F07·F08): 누르면 고치기·지우기 (쌓인 입출고·택배 준비 건도 같이 맞춤)
   async function opsCutting() {
     let d = await api("/ops/cutting"), view = "jobs";
     const box = h("div", { class: "vm" });
     const optPairs = () => d.ledgers.flatMap((l) => l.options.map((o) => [`${l.id}:${o.id}`, `${l.name} · ${o.name} (${fmtN(o.qty)})`]));
-    const skeinTotal = () => d.ledgers.flatMap((l) => l.options).filter((o) => /타래|자른/.test(o.name)).reduce((n, o) => n + o.qty, 0);
+    const mineOk = (x) => d.canEdit && (isAdmin() || x.createdBy === state.user.id);
     const draw = () => fill(box,
       h("div", { class: "vm-stats" }, [vmStat("이번 달 만든 타래", d.monthSkeins), vmStat("작업 기록", d.jobs.length), vmStat("배분", d.handouts.length)]),
       opsSeg([["jobs", "작업 기록"], ["hand", "타래 배분"]], view, (k) => { view = k; draw(); }),
       view === "jobs"
-        ? opsCards(d.jobs, (j) => opsCard(null, [opsTop(`${shortDate(j.date)}${j.thread ? ` · ${j.thread}` : ""}`, `${fmtN(j.skeinQty)}타래`), opsLine([j.rawQty != null ? `실 ${fmtN(j.rawQty)} 사용` : "", j.workers ? `작업 ${j.workers}` : "", j.location].filter(Boolean).join(" · ")), j.note ? opsLine(j.note) : null,
-            (isAdmin() || j.createdBy === state.user.id) && d.canEdit ? h("span", { class: "actions actions--start" }, h("button", { class: "link-btn small", type: "button", text: "지우기 (입출고도 되돌림)", onclick: async () => { if (!confirm("이 작업 기록과 함께 쌓인 입출고를 지울까요?")) return; d = { ...d, ...(await act(() => api(`/ops/cutting/${j.id}`, { method: "DELETE" }))) }; draw(); } })) : null]), "아직 실자르기 기록이 없어요.")
-        : opsCards(d.handouts, (x) => opsCard(null, [opsTop(`${shortDate(x.date)} · ${x.receiver}`, x.skeinQty ? `${fmtN(x.skeinQty)}타래` : ""), opsLine(Object.entries(x.supplies).map(([k, v]) => `${k} ${v}`).join(" · ")),
-            opsTags(opsTag(x.receiverType === "monastery" ? "수도회" : "실봉사자"), x.shipmentId ? opsTag(`택배 ${SHIP_STATUS[x.shipStatus] || "준비"}${x.trackingNo ? ` · ${x.trackingNo}` : ""}`, "is-mine") : opsTag("직접 전달")),
-            (isAdmin() || x.createdBy === state.user.id) && d.canEdit ? h("span", { class: "actions actions--start" }, h("button", { class: "link-btn small", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 배분 기록을 지울까요? 함께 쌓인 출고와 아직 보내지 않은 택배도 지워져요.")) return; d = { ...d, ...(await act(() => api(`/ops/handouts/${x.id}`, { method: "DELETE" }))) }; draw(); } })) : null]), "아직 타래 배분 기록이 없어요."),
-      d.canEdit ? opsAddBtn(view === "jobs" ? "실자르기 작업 기록" : "타래 배분", () => (view === "jobs" ? jobSheet() : handSheet())) : null);
-    const jobSheet = () => {
-      const date = h("input", { type: "date", value: today() }), raw = opsSel(optPairs(), "", "사용한 실 (선택)"), rawQty = h("input", { type: "number", min: "0", inputmode: "numeric" });
-      const sk = opsSel(optPairs(), "", "타래를 넣을 품목 (선택)"), skQty = h("input", { type: "number", min: "0", inputmode: "numeric" });
-      const loc = opsSel(d.locations.map((x) => [x.id, x.name]), "", "보관 위치 (선택)"), workers = h("input", { maxlength: "200", placeholder: "예: 김OO, 이OO" }), note = h("input", { maxlength: "300" });
-      opsSheet("실자르기 작업 기록", [field("작업일", date), h("div", { class: "row2" }, [field("사용한 실", raw), field("사용 수량", rawQty)]), h("div", { class: "row2" }, [field("만든 타래 → 품목", sk), field("만든 타래 수", skQty)]), field("타래 보관 위치", loc), field("작업자", workers), field("메모", note),
-        opsHint("저장하면 사용한 실은 출고, 만든 타래는 입고로 입출고 기록에 쌓여요.")], {
+        ? opsCards(d.jobs, (j) => opsCard(mineOk(j) ? () => jobSheet(j) : null, [opsTop(`${shortDate(j.date)}${j.thread ? ` · ${j.thread}` : ""}`, `${fmtN(j.skeinQty)}타래`), opsLine([j.rawQty != null ? `실 ${fmtN(j.rawQty)} 사용` : "", j.workers ? `작업 ${j.workers}` : "", j.location].filter(Boolean).join(" · ")), j.note ? opsLine(j.note) : null]), "아직 실자르기 기록이 없어요.")
+        : opsCards(d.handouts, (x) => opsCard(mineOk(x) ? () => handSheet(x) : null, [opsTop(`${shortDate(x.date)} · ${x.receiver}`, x.skeinQty ? `${fmtN(x.skeinQty)}타래` : ""), opsLine(Object.entries(x.supplies).map(([k, v]) => `${k} ${v}`).join(" · ")),
+            opsTags(opsTag(x.receiverType === "monastery" ? "수도회" : "실봉사자"), x.shipmentId ? opsTag(`택배 ${SHIP_STATUS[x.shipStatus] || "준비"}${x.trackingNo ? ` · ${x.trackingNo}` : ""}`, "is-mine") : opsTag("직접 전달"))]), "아직 타래 배분 기록이 없어요."),
+      d.canEdit ? opsAddBtn(view === "jobs" ? "실자르기 작업 기록" : "타래 배분", () => (view === "jobs" ? jobSheet(null) : handSheet(null))) : null);
+    const pairOf = (l, o) => (l && o ? `${l}:${o}` : "");
+    const jobSheet = (j) => {
+      const date = h("input", { type: "date", value: j?.date || today() }), raw = opsSel(optPairs(), pairOf(j?.ledgerId, j?.optionId), "사용한 실 (선택)"), rawQty = h("input", { type: "number", min: "0", inputmode: "numeric", value: j?.rawQty ?? "" });
+      const sk = opsSel(optPairs(), pairOf(j?.skeinLedgerId, j?.skeinOptionId), "타래를 넣을 품목 (선택)"), skQty = h("input", { type: "number", min: "0", inputmode: "numeric", value: j?.skeinQty ?? "" });
+      const loc = opsSel(d.locations.map((x) => [x.id, x.name]), j?.locationId, "보관 위치 (선택)"), workers = h("input", { maxlength: "200", placeholder: "예: 김OO, 이OO", value: j?.workers || "" }), note = h("input", { maxlength: "300", value: j?.note || "" });
+      opsSheet(j ? "실자르기 작업 고치기" : "실자르기 작업 기록", [field("작업일", date), h("div", { class: "row2" }, [field("사용한 실", raw), field("사용 수량", rawQty)]), h("div", { class: "row2" }, [field("만든 타래 → 품목", sk), field("만든 타래 수", skQty)]), field("타래 보관 위치", loc), field("작업자", workers), field("메모", note),
+        opsHint(j ? "고치면 이 작업으로 쌓인 실 출고·타래 입고를 새 값으로 다시 맞춰요." : "저장하면 사용한 실은 출고, 만든 타래는 입고로 입출고 기록에 쌓여요.")], {
+        ask: j ? "이 작업을 고칠까요? 쌓인 입출고도 같이 바뀌어요." : null,
         save: async () => { const [rl, ro] = raw.value ? raw.value.split(":") : [], [sl, so] = sk.value ? sk.value.split(":") : [];
-          d = { ...d, ...(await api("/ops/cutting", { method: "POST", body: { date: date.value, ledgerId: rl, optionId: ro, rawQty: rawQty.value, skeinLedgerId: sl, skeinOptionId: so, skeinQty: skQty.value, locationId: loc.value, workers: workers.value, note: note.value } })) }; toast("작업을 기록했어요."); draw(); }
+          const body = { date: date.value, ledgerId: rl, optionId: ro, rawQty: rawQty.value, skeinLedgerId: sl, skeinOptionId: so, skeinQty: skQty.value, locationId: loc.value, workers: workers.value, note: note.value };
+          d = { ...d, ...(await api(j ? `/ops/cutting/${j.id}` : "/ops/cutting", { method: j ? "PATCH" : "POST", body })) }; toast(j ? "작업을 고쳤어요." : "작업을 기록했어요."); draw(); },
+        del: j ? async () => { if (!confirm("이 작업 기록과 함께 쌓인 입출고를 지울까요?")) return false; d = { ...d, ...(await api(`/ops/cutting/${j.id}`, { method: "DELETE" })) }; draw(); } : null
       });
     };
-    const handSheet = () => {
-      const date = h("input", { type: "date", value: today() }), type = opsSel([["volunteer", "실봉사자"], ["monastery", "수도회"]], "volunteer");
-      const vol = opsSel(d.volunteers.map((x) => [x.id, x.name]), "", "봉사자 계정 (없으면 이름만)"), name = h("input", { maxlength: "80", placeholder: "받는 사람 이름" }), mon = opsSel(d.monasteries.map((x) => [x.id, x.name]), "", "수도회 고르기");
+    const handSheet = (x) => {
+      const date = h("input", { type: "date", value: x?.date || today() }), type = opsSel([["volunteer", "실봉사자"], ["monastery", "수도회"]], x?.receiverType || "volunteer");
+      const vol = opsSel(d.volunteers.map((y) => [y.id, y.name]), x?.userId, "봉사자 계정 (없으면 이름만)"), name = h("input", { maxlength: "80", placeholder: "받는 사람 이름", value: x?.receiverName || "" }), mon = opsSel(d.monasteries.map((y) => [y.id, y.name]), x?.monasteryId, "수도회 고르기");
       const fVol = h("div", { class: "row2" }, [field("봉사자", vol), field("이름 (계정 없을 때)", name)]), fMon = field("수도회", mon);
       const sync = () => { fVol.hidden = type.value !== "volunteer"; fMon.hidden = type.value !== "monastery"; }; type.addEventListener("change", sync); sync();
-      const sk = opsSel(optPairs(), "", "타래 품목 (선택)"), qty = h("input", { type: "number", min: "0", inputmode: "numeric" });
-      const job = opsSel(d.jobs.map((j) => [j.id, `${shortDate(j.date)} 작업 ${j.skeinQty}타래`]), "", "어느 작업에서 (선택)");
-      const bags = h("input", { type: "number", min: "0", inputmode: "numeric", placeholder: "0" }), glue = h("input", { type: "number", min: "0", inputmode: "numeric", placeholder: "0" });
-      const parcel = h("input", { type: "checkbox" }), addr = h("input", { maxlength: "200", placeholder: "택배 주소 (수도회는 비우면 등록된 주소)" }), note = h("input", { maxlength: "300" });
-      opsSheet("타래 배분", [field("전달일", date), field("받는 쪽", type), fVol, fMon, h("div", { class: "row2" }, [field("타래 품목", sk), field("타래 수", qty)]), field("작업", job),
+      const sk = opsSel(optPairs(), pairOf(x?.skeinLedgerId, x?.skeinOptionId), "타래 품목 (선택)"), qty = h("input", { type: "number", min: "0", inputmode: "numeric", value: x?.skeinQty || "" });
+      const job = opsSel(d.jobs.map((j) => [j.id, `${shortDate(j.date)} 작업 ${j.skeinQty}타래`]), x?.cuttingJobId, "어느 작업에서 (선택)");
+      const bags = h("input", { type: "number", min: "0", inputmode: "numeric", placeholder: "0", value: x?.supplies?.["대형 비닐팩"] ?? "" }), glue = h("input", { type: "number", min: "0", inputmode: "numeric", placeholder: "0", value: x?.supplies?.["순간접착제"] ?? "" });
+      const parcel = h("input", { type: "checkbox", checked: !!x?.shipmentId }), addr = h("input", { maxlength: "200", placeholder: "택배 주소 (수도회는 비우면 등록된 주소)", value: x?.address || "" }), note = h("input", { maxlength: "300", value: x?.note || "" });
+      const sent = x?.shipmentId && x.shipStatus && x.shipStatus !== "ready";
+      opsSheet(x ? "타래 배분 고치기" : "타래 배분", [sent ? opsHint("이미 발송한 택배가 이어져 있어 고칠 수 없어요. 지우거나 택배 기록에서 처리해 주세요.") : null, field("전달일", date), field("받는 쪽", type), fVol, fMon, h("div", { class: "row2" }, [field("타래 품목", sk), field("타래 수", qty)]), field("작업", job),
         h("div", { class: "row2" }, [field("대형 비닐팩 (장)", bags), field("순간접착제 (개)", glue)]), h("label", { class: "check" }, [parcel, h("span", { text: "택배로 보내요 (택배 발송 '준비'로 넘김)" })]), field("주소", addr), field("메모", note),
         opsHint("같은 이름의 품목 열이 있는 자재는 그 대장에서 출고돼요.")], {
-        save: async () => { const [sl, so] = sk.value ? sk.value.split(":") : []; const supplies = {}; if (Number(bags.value)) supplies["대형 비닐팩"] = bags.value; if (Number(glue.value)) supplies["순간접착제"] = glue.value;
-          d = { ...d, ...(await api("/ops/handouts", { method: "POST", body: { date: date.value, receiverType: type.value, userId: vol.value, receiverName: name.value, monasteryId: mon.value, skeinLedgerId: sl, skeinOptionId: so, skeinQty: qty.value, cuttingJobId: job.value, supplies, parcel: parcel.checked, address: addr.value, note: note.value } })) };
-          toast(parcel.checked ? "배분을 기록하고 택배 발송 준비로 넘겼어요." : "배분을 기록했어요."); draw(); }
+        ask: x ? "이 배분을 고칠까요? 쌓인 출고와 택배 준비 건도 같이 바뀌어요." : null,
+        save: sent ? null : async () => { const [sl, so] = sk.value ? sk.value.split(":") : []; const supplies = {}; if (Number(bags.value)) supplies["대형 비닐팩"] = bags.value; if (Number(glue.value)) supplies["순간접착제"] = glue.value;
+          const body = { date: date.value, receiverType: type.value, userId: vol.value, receiverName: name.value, monasteryId: mon.value, skeinLedgerId: sl, skeinOptionId: so, skeinQty: qty.value, cuttingJobId: job.value, supplies, parcel: parcel.checked, address: addr.value, note: note.value };
+          d = { ...d, ...(await api(x ? `/ops/handouts/${x.id}` : "/ops/handouts", { method: x ? "PATCH" : "POST", body })) };
+          toast(parcel.checked ? "배분을 저장하고 택배 발송 준비로 맞췄어요." : "배분을 저장했어요."); draw(); },
+        del: x ? async () => { if (!confirm("이 배분 기록을 지울까요? 함께 쌓인 출고와 아직 보내지 않은 택배도 지워져요.")) return false; d = { ...d, ...(await api(`/ops/handouts/${x.id}`, { method: "DELETE" })) }; draw(); } : null
       });
     };
     draw();
-    return [opsHint("실자르기 작업과 타래 배분을 적어요. 사용한 실·만든 타래·나눠 준 타래가 입출고에 함께 쌓여요."), box];
+    return [opsHint("실자르기 작업과 타래 배분을 적어요. 사용한 실·만든 타래·나눠 준 타래가 입출고에 함께 쌓이고, 누르면 고치거나 지울 수 있어요."), box];
   }
   // ---- 업체 구매 (F12)
   const PUR = { request: "요청", approved: "승인", ordered: "주문", received: "입고", canceled: "취소" };

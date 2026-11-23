@@ -2053,13 +2053,14 @@ const opsRole = (user) => {
 function monasteriesOut(r) {
   const rows = db.prepare(`SELECT m.*,
       (SELECT count(*) FROM vol_schedules s WHERE s.monastery_id = m.id) AS visits,
+      (SELECT count(*) FROM vol_requests x WHERE x.monastery_id = m.id) + (SELECT count(*) FROM shipments x WHERE x.monastery_id = m.id) + (SELECT count(*) FROM contact_logs x WHERE x.monastery_id = m.id) + (SELECT count(*) FROM thread_handouts x WHERE x.monastery_id = m.id) AS other_links,
       (SELECT count(*) FROM vol_schedules s JOIN team_org_info t ON t.schedule_id = s.id WHERE s.monastery_id = m.id AND t.status = 'done') AS edu_done_n,
       (SELECT coalesce(sum(s.qty), 0) FROM vol_schedules s WHERE s.monastery_id = m.id AND s.sum_note = '') AS req_qty,
       (SELECT coalesce(sum(x.qty), 0) FROM team_recovery x JOIN vol_schedules s ON s.id = x.schedule_id WHERE s.monastery_id = m.id) AS recovered_qty,
       (SELECT coalesce(sum(i.checked_qty), 0) FROM inspections i JOIN vol_schedules s ON s.id = i.schedule_id WHERE s.monastery_id = m.id) AS checked_qty
     FROM monasteries m ORDER BY m.name`).all();
   return rows.map((m) => ({ id: m.id, name: m.name, shortName: m.short_name, contactName: m.contact_name, phone: r.team ? m.phone : "", address: m.address, status: m.status, issueNote: m.issue_note, note: m.note,
-    visits: m.visits, eduDone: m.edu_done_n, reqQty: m.req_qty, recoveredQty: m.recovered_qty, checkedQty: m.checked_qty, updatedAt: m.updated_at }));
+    visits: m.visits, deletable: !m.visits && !m.other_links, eduDone: m.edu_done_n, reqQty: m.req_qty, recoveredQty: m.recovered_qty, checkedQty: m.checked_qty, updatedAt: m.updated_at }));
 }
 const nameOfUser = (id) => (id ? db.prepare("SELECT name FROM users WHERE id = ?").get(id)?.name || "" : "");
 function shipmentsOut() {
@@ -2126,7 +2127,8 @@ function criteriaOut() {
   const versions = [...new Set(rows.map((r) => r.version))];
   const t = today();
   const current = [...versions].reverse().find((v) => rows.find((r) => r.version === v).valid_from <= t) ?? versions[0] ?? null;
-  return { current, versions: versions.map((v) => { const it = rows.filter((r) => r.version === v); return { version: v, validFrom: it[0].valid_from, approvedBy: it[0].approved_by,
+  const used = new Map(db.prepare("SELECT criteria_version AS v, count(*) AS n FROM inspections WHERE criteria_version IS NOT NULL GROUP BY criteria_version").all().map((x) => [x.v, x.n]));
+  return { current, versions: versions.map((v) => { const it = rows.filter((r) => r.version === v); return { version: v, validFrom: it[0].valid_from, approvedBy: it[0].approved_by, used: used.get(v) || 0,
     items: it.map((r) => ({ id: r.id, sort: r.sort, item: r.item, method: r.method, passRule: r.pass_rule, defectKey: r.defect_key, defectName: r.defect_name })) }; }) };
 }
 // 검수 입력에서 고를 수 있는 불량 코드: 지금 기준 판 (예전 기록을 고칠 때를 위해 모든 판의 코드와 예전 유형도 받음)
@@ -2189,9 +2191,10 @@ async function opsRoute(req, res, user, path, method) {
   if (path === "/api/ops/menu" && method === "GET") return ok(200, { menu: volMenu() }); // 팀 봉사자도 메뉴 공개 설정(단계형 메뉴)을 읽음
   // F01 수도회
   if (path === "/api/ops/monasteries" && method === "GET") { if (!r.can("monasteries", "v")) return deny("볼 수 없는 메뉴예요."); return ok(200, { monasteries: monasteriesOut(r), canEdit: r.can("monasteries", "e"), canPhone: r.admin }); }
+  const monName = (v) => text(v, 80, "수도회 이름", true).replace(/·/g, " ").replace(/\s+/g, " ").trim();
   if (path === "/api/ops/monasteries" && method === "POST") {
-    if (!r.admin) return deny("수도회 추가는 관리자만 해요.");
-    const b = await readJson(req), name = text(b.name, 80, "수도회 이름", true).replace(/·/g, " ").trim();
+    if (!r.can("monasteries", "e")) return deny("수도회를 추가할 수 없는 계정이에요.");
+    const b = await readJson(req), name = monName(b.name);
     if (db.prepare("SELECT 1 FROM monasteries WHERE name = ?").get(name)) throw bad("이미 있는 수도회예요.");
     db.prepare("INSERT INTO monasteries (name) VALUES (?)").run(name);
     return ok(201, { monasteries: monasteriesOut(r) });
@@ -2213,8 +2216,28 @@ async function opsRoute(req, res, user, path, method) {
       note: has(b, "note") ? text(b.note, 1000, "메모") || "" : m.note
     };
     if (v.status === "issue" && !v.issue_note) throw bad("문제 내용을 적어 주세요.");
-    db.prepare("UPDATE monasteries SET short_name = ?, contact_name = ?, phone = ?, address = ?, status = ?, issue_note = ?, note = ?, updated_at = datetime('now') WHERE id = ?")
-      .run(v.short_name, v.contact_name, v.phone, v.address, v.status, v.issue_note, v.note, m.id);
+    // 이름 바꾸기: 같은 이름이 있으면 막음. 이어진 방문 일정 제목('묵주 교육 · 이름')도 같이 바꿔 팀 화면과 맞춤 (네이버폼 신청의 원문 이름은 그대로)
+    const name = has(b, "name") ? monName(b.name) : m.name;
+    if (name !== m.name && db.prepare("SELECT 1 FROM monasteries WHERE name = ? AND id <> ?").get(name, m.id)) throw bad("같은 이름의 수도회가 있어요.");
+    inTx(() => {
+      db.prepare("UPDATE monasteries SET name = ?, short_name = ?, contact_name = ?, phone = ?, address = ?, status = ?, issue_note = ?, note = ?, updated_at = datetime('now') WHERE id = ?")
+        .run(name, v.short_name, v.contact_name, v.phone, v.address, v.status, v.issue_note, v.note, m.id);
+      if (name !== m.name) for (const s2 of db.prepare("SELECT id, title FROM vol_schedules WHERE monastery_id = ? AND project_item_id IS NOT NULL").all(m.id)) {
+        const parts = s2.title.split(" · ");
+        if (parts.length > 1 && parts[parts.length - 1].trim() === m.name) db.prepare("UPDATE vol_schedules SET title = ? WHERE id = ?").run([...parts.slice(0, -1), name].join(" · "), s2.id);
+      }
+    });
+    return ok(200, { monasteries: monasteriesOut(r) });
+  }
+  // 지우기: 방문 일정·신청·택배·연락 기록·타래 배분이 이어진 수도회는 막음 (잘못 만든 수도회만 지움)
+  if (mm && method === "DELETE") {
+    if (!r.can("monasteries", "e")) return deny("수도회를 지울 수 없는 계정이에요.");
+    const m = db.prepare("SELECT * FROM monasteries WHERE id = ?").get(Number(mm[1]));
+    if (!m) throw notFound("수도회");
+    const used = [["vol_schedules", "방문 일정"], ["vol_requests", "네이버폼 신청"], ["shipments", "택배"], ["contact_logs", "연락 기록"], ["thread_handouts", "타래 배분"]]
+      .map(([t, l]) => [l, db.prepare(`SELECT count(*) AS n FROM ${t} WHERE monastery_id = ?`).get(m.id).n]).filter(([, n]) => n);
+    if (used.length) throw bad(`${used.map(([l, n]) => `${l} ${n}건`).join(", ")}이 이어져 있어 지울 수 없어요. 이름을 고치거나 메모로 남겨 주세요.`);
+    db.prepare("DELETE FROM monasteries WHERE id = ?").run(m.id);
     return ok(200, { monasteries: monasteriesOut(r) });
   }
   // F02 택배 (부서 봉사자·관리자가 입력, 팀 봉사자는 조회)
@@ -2282,9 +2305,16 @@ async function opsRoute(req, res, user, path, method) {
   }
   // F04 검수 기준: 바꾸면 새 판으로 쌓음 (예전 판은 그대로 남아 예전 결과를 그 기준으로 봄)
   if (path === "/api/ops/criteria" && method === "GET") { if (!r.can("criteria", "v")) return deny("볼 수 없는 메뉴예요."); return ok(200, { ...criteriaOut(), canEdit: r.lead("criteria") }); }
-  if (path === "/api/ops/criteria" && method === "POST") {
+  const crm = path.match(/^\/api\/ops\/criteria\/(\d+)$/);
+  if ((path === "/api/ops/criteria" && method === "POST") || (crm && method === "PUT")) {
     if (!r.lead("criteria")) return deny("검수 기준은 리더 봉사자와 관리자가 정해요.");
     const b = await readJson(req);
+    const editV = crm ? Number(crm[1]) : null;
+    if (editV != null) {
+      if (!db.prepare("SELECT 1 FROM inspection_criteria WHERE version = ?").get(editV)) throw notFound("검수 기준 판");
+      const n = db.prepare("SELECT count(*) AS n FROM inspections WHERE criteria_version = ?").get(editV).n;
+      if (n) throw bad(`이 판으로 적은 검수 기록이 ${n}건 있어 고칠 수 없어요. 새 판을 만들어 주세요.`);
+    }
     if (!isDate(b.validFrom)) throw bad("적용 시작일을 확인해 주세요.");
     const items = Array.isArray(b.items) ? b.items : [];
     if (!items.length || items.length > 40) throw bad("검수 항목을 1개 이상 적어 주세요.");
@@ -2296,10 +2326,21 @@ async function opsRoute(req, res, user, path, method) {
       keys.add(key);
       return [i, item, text(it.method, 300, "확인 방법") || "", text(it.passRule, 300, "합격 기준") || "", key, name];
     });
-    const version = (db.prepare("SELECT max(version) AS v FROM inspection_criteria").get().v || 0) + 1;
-    inTx(() => { const add = db.prepare("INSERT INTO inspection_criteria (version, sort, item, method, pass_rule, defect_key, defect_name, valid_from, approved_by, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    const version = editV ?? (db.prepare("SELECT max(version) AS v FROM inspection_criteria").get().v || 0) + 1;
+    inTx(() => { if (editV != null) db.prepare("DELETE FROM inspection_criteria WHERE version = ?").run(editV); const add = db.prepare("INSERT INTO inspection_criteria (version, sort, item, method, pass_rule, defect_key, defect_name, valid_from, approved_by, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
       for (const x of rows) add.run(version, ...x, b.validFrom, text(b.approvedBy, 80, "확인한 사람") || "", user.id); });
-    return ok(201, { ...criteriaOut(), canEdit: r.lead("criteria") });
+    return ok(editV != null ? 200 : 201, { ...criteriaOut(), canEdit: r.lead("criteria") });
+  }
+  // 판 지우기: 그 판으로 적은 검수 기록이 있으면 막음, 하나 남은 판은 지우지 않음
+  if (crm && method === "DELETE") {
+    if (!r.lead("criteria")) return deny("검수 기준은 리더 봉사자와 관리자가 정해요.");
+    const v = Number(crm[1]);
+    if (!db.prepare("SELECT 1 FROM inspection_criteria WHERE version = ?").get(v)) throw notFound("검수 기준 판");
+    const n = db.prepare("SELECT count(*) AS n FROM inspections WHERE criteria_version = ?").get(v).n;
+    if (n) throw bad(`이 판으로 적은 검수 기록이 ${n}건 있어 지울 수 없어요.`);
+    if (db.prepare("SELECT count(DISTINCT version) AS n FROM inspection_criteria").get().n <= 1) throw bad("하나 남은 판은 지울 수 없어요.");
+    db.prepare("DELETE FROM inspection_criteria WHERE version = ?").run(v);
+    return ok(200, { ...criteriaOut(), canEdit: r.lead("criteria") });
   }
   // F05 검수 조
   const people = () => db.prepare("SELECT id, name FROM users WHERE volunteer = 1 AND vol_kind IN ('team', 'both') ORDER BY name").all();
@@ -2464,6 +2505,15 @@ async function opsRoute(req, res, user, path, method) {
       has(b, "kind") ? pick(b.kind, LOC_KINDS, "용도") : x.kind, has(b, "sort") ? Number(b.sort) || 0 : x.sort, has(b, "active") ? (b.active ? 1 : 0) : x.active, has(b, "note") ? text(b.note, 300, "메모") || "" : x.note, x.id);
     return ok(200, { ...stockOut(), canEdit: r.can("stock", "e"), canLocations: true });
   }
+  if (lm && method === "DELETE") {
+    if (!r.admin) return deny("보관 위치는 관리자가 지워요.");
+    const x = db.prepare("SELECT * FROM storage_locations WHERE id = ?").get(Number(lm[1]));
+    if (!x) throw notFound("보관 위치");
+    const n = db.prepare("SELECT (SELECT count(*) FROM stock_moves WHERE location_id = ? OR to_location_id = ?) + (SELECT count(*) FROM cutting_jobs WHERE location_id = ?) + (SELECT count(*) FROM vol_records WHERE location_id = ?) AS n").get(x.id, x.id, x.id, x.id).n;
+    if (n) throw bad(`입출고·실자르기·완제품 기록 ${n}건에 쓰인 위치라 지울 수 없어요. '쓰는 위치'를 꺼 주세요.`);
+    db.prepare("DELETE FROM storage_locations WHERE id = ?").run(x.id);
+    return ok(200, { ...stockOut(), canEdit: r.can("stock", "e"), canLocations: true });
+  }
   const om2 = path.match(/^\/api\/ops\/stock-options\/(\d+)$/);
   if (om2 && method === "PATCH") {
     if (!r.can("stock", "e")) return deny("안전재고는 직원·부서 봉사자와 관리자가 정해요.");
@@ -2503,74 +2553,81 @@ async function opsRoute(req, res, user, path, method) {
   }
   if (path === "/api/ops/cutting" && method === "POST") {
     if (!r.can("cutting", "e")) return deny("실자르기 기록을 적을 수 없는 계정이에요.");
-    const b = await readJson(req);
-    if (!isDate(b.date)) throw bad("작업일을 확인해 주세요.");
-    const raw = b.ledgerId ? ledgerOption(b.ledgerId, b.optionId) : null, sk = b.skeinLedgerId ? ledgerOption(b.skeinLedgerId, b.skeinOptionId) : null;
-    const rawQty = teamQty(b.rawQty, "사용한 실"), skeinQty = teamQty(b.skeinQty, "만든 타래") || 0, loc = optLoc(b.locationId);
-    if (!skeinQty) throw bad("만든 타래 수를 적어 주세요.");
-    const id = inTx(() => {
-      const id = Number(db.prepare("INSERT INTO cutting_jobs (date, ledger_id, option_id, raw_qty, skein_qty, workers, location_id, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(b.date, raw?.l.id ?? null, raw?.o.id ?? null, rawQty, skeinQty, text(b.workers, 200, "작업자") || "", loc, text(b.note, 300, "메모") || "", user.id).lastInsertRowid);
-      if (raw && rawQty) refMove(raw.l, raw.o, "out", rawQty, b.date, `실자르기 사용 (타래 ${skeinQty})`, user, { refType: "cutting", refId: id });
-      if (sk) refMove(sk.l, sk.o, "in", skeinQty, b.date, `실자르기 ${skeinQty}타래`, user, { location: loc, refType: "cutting", refId: id });
-      return id;
-    });
+    const v = cuttingIn(await readJson(req));
+    const id = inTx(() => writeCutting(null, v, user));
     return ok(201, { id, ...cuttingOut() });
   }
   const cjm = path.match(/^\/api\/ops\/cutting\/(\d+)$/);
-  if (cjm && method === "DELETE") {
+  if (cjm) {
     const x = db.prepare("SELECT * FROM cutting_jobs WHERE id = ?").get(Number(cjm[1]));
     if (!x) throw notFound("실자르기 기록");
-    if (!r.admin && x.created_by !== user.id) return deny("적은 사람과 관리자만 지울 수 있어요.");
-    inTx(() => { delRefMoves("cutting", x.id, user); db.prepare("DELETE FROM cutting_jobs WHERE id = ?").run(x.id); });
-    return ok(200, cuttingOut());
+    if (!r.can("cutting", "e") || (!r.admin && x.created_by !== user.id)) return deny("적은 사람과 관리자만 고치거나 지울 수 있어요.");
+    // 고치기: 이 작업으로 쌓인 입출고를 지우고 새 값으로 다시 쌓음 (수정 기록에 지움·추가로 남음)
+    if (method === "PATCH") { const v = cuttingIn(await readJson(req)); inTx(() => writeCutting(x.id, v, user)); return ok(200, cuttingOut()); }
+    if (method === "DELETE") { inTx(() => { delRefMoves("cutting", x.id, user); db.prepare("DELETE FROM cutting_jobs WHERE id = ?").run(x.id); }); return ok(200, cuttingOut()); }
+    return ok(405, { error: "Method not allowed" });
   }
   if (path === "/api/ops/handouts" && method === "POST") {
     if (!r.can("cutting", "e")) return deny("타래 배분을 적을 수 없는 계정이에요.");
-    const b = await readJson(req);
-    if (!isDate(b.date)) throw bad("전달일을 확인해 주세요.");
-    const type = pick(b.receiverType, ["volunteer", "monastery"], "받는 쪽");
-    const mid = type === "monastery" ? optId(b.monasteryId) : null, uid = type === "volunteer" ? optId(b.userId) : null, rname = text(b.receiverName, 80, "받는 사람") || "";
-    if (type === "monastery" && !(mid && db.prepare("SELECT 1 FROM monasteries WHERE id = ?").get(mid))) throw bad("수도회를 골라 주세요.");
-    if (type === "volunteer" && !uid && !rname) throw bad("받는 사람을 골라 주거나 이름을 적어 주세요.");
-    const qty = teamQty(b.skeinQty, "타래 수") || 0;
-    const sk = b.skeinLedgerId ? ledgerOption(b.skeinLedgerId, b.skeinOptionId) : null;
-    const supplies = {};
-    for (const [k, v] of Object.entries(b.supplies && typeof b.supplies === "object" ? b.supplies : {})) { const n = teamQty(v, "자재 수량"); if (n) supplies[text(k, 40, "자재 이름", true)] = n; }
-    if (!qty && !Object.keys(supplies).length) throw bad("타래 수나 자재를 적어 주세요.");
-    const cj = optId(b.cuttingJobId);
-    const id = inTx(() => {
-      const id = Number(db.prepare("INSERT INTO thread_handouts (date, cutting_job_id, receiver_type, user_id, monastery_id, receiver_name, skein_qty, supplies, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(b.date, cj && db.prepare("SELECT 1 FROM cutting_jobs WHERE id = ?").get(cj) ? cj : null, type, uid, mid, rname, qty, JSON.stringify(supplies), text(b.note, 300, "메모") || "", user.id).lastInsertRowid);
-      const who = type === "monastery" ? db.prepare("SELECT name FROM monasteries WHERE id = ?").get(mid).name : uid ? nameOfUser(uid) : rname;
-      if (sk && qty) refMove(sk.l, sk.o, "out", qty, b.date, `타래 배분 → ${who}`, user, { location: optLoc(b.locationId), refType: "handout", refId: id });
-      // 함께 보낸 자재: 같은 이름의 품목 열이 있으면 그 대장에서 출고
-      for (const [name, n] of Object.entries(supplies)) {
-        const o = db.prepare("SELECT * FROM stock_options WHERE name = ? ORDER BY id LIMIT 1").get(name);
-        if (o) refMove(q.ledger.get(o.ledger_id), o, "out", n, b.date, `타래 배분 자재 → ${who}`, user, { refType: "handout", refId: id });
-      }
-      if (b.parcel) {
-        const contents = [qty ? `자른 실 ${qty}타래` : "", ...Object.entries(supplies).map(([k, v]) => `${k} ${v}`)].filter(Boolean).join(", ");
-        const addr = text(b.address, 200, "주소") || (mid ? db.prepare("SELECT address FROM monasteries WHERE id = ?").get(mid).address : "");
-        const sid = Number(db.prepare("INSERT INTO shipments (direction, party_type, monastery_id, user_id, party_name, address, contents, qty, status, note, created_by) VALUES ('out', ?, ?, ?, ?, ?, ?, ?, 'ready', '타래 배분', ?)")
-          .run(type === "monastery" ? "monastery" : uid ? "volunteer" : "etc", mid, uid, type === "monastery" ? "" : rname || who, addr, contents.slice(0, 200), qty || null, user.id).lastInsertRowid);
-        db.prepare("UPDATE thread_handouts SET shipment_id = ? WHERE id = ?").run(sid, id);
-      }
-      return id;
-    });
+    const v = handoutIn(await readJson(req));
+    const id = inTx(() => writeHandout(null, v, user));
     return ok(201, { id, ...cuttingOut() });
   }
   const hm = path.match(/^\/api\/ops\/handouts\/(\d+)$/);
-  if (hm && method === "DELETE") {
+  if (hm) {
     const x = db.prepare("SELECT * FROM thread_handouts WHERE id = ?").get(Number(hm[1]));
     if (!x) throw notFound("타래 배분");
-    if (!r.admin && x.created_by !== user.id) return deny("적은 사람과 관리자만 지울 수 있어요.");
-    inTx(() => {
-      delRefMoves("handout", x.id, user);
-      if (x.shipment_id) db.prepare("DELETE FROM shipments WHERE id = ? AND status = 'ready'").run(x.shipment_id);
-      db.prepare("DELETE FROM thread_handouts WHERE id = ?").run(x.id);
-    });
-    return ok(200, cuttingOut());
+    if (!r.can("cutting", "e") || (!r.admin && x.created_by !== user.id)) return deny("적은 사람과 관리자만 고치거나 지울 수 있어요.");
+    const ship = x.shipment_id ? db.prepare("SELECT * FROM shipments WHERE id = ?").get(x.shipment_id) : null;
+    if (method === "PATCH") {
+      const v = handoutIn(await readJson(req));
+      if (ship && ship.status !== "ready") throw bad("이미 발송한 택배가 이어져 있어 고칠 수 없어요. 택배 기록에서 처리해 주세요.");
+      inTx(() => writeHandout(x.id, v, user));
+      return ok(200, cuttingOut());
+    }
+    if (method === "DELETE") {
+      inTx(() => {
+        delRefMoves("handout", x.id, user);
+        if (ship && ship.status === "ready") db.prepare("DELETE FROM shipments WHERE id = ?").run(ship.id);
+        db.prepare("DELETE FROM thread_handouts WHERE id = ?").run(x.id);
+      });
+      return ok(200, cuttingOut());
+    }
+    return ok(405, { error: "Method not allowed" });
+  }
+  // ---- 위치 이동·실사 조정 고치기·지우기 (이동은 출고·입고 두 줄을 함께)
+  const smm = path.match(/^\/api\/ops\/stock\/moves\/(\d+)$/);
+  if (smm) {
+    if (!r.can("stock", "e")) return deny("재고는 직원·부서 봉사자와 관리자가 고쳐요.");
+    const m = db.prepare("SELECT * FROM stock_moves WHERE id = ?").get(Number(smm[1]));
+    if (!m || !["move", "adjust"].includes(m.ref_type)) throw notFound("위치 이동·실사 조정 기록");
+    const rows = m.ref_type === "move" ? db.prepare("SELECT * FROM stock_moves WHERE ref_type = 'move' AND (id = ? OR ref_id = ?)").all(m.ref_id || m.id, m.ref_id || m.id) : [m];
+    const out = rows.find((x) => x.type === "out") || rows[0], inn = rows.find((x) => x.type === "in");
+    const opt = db.prepare("SELECT option_id, qty FROM stock_qty WHERE move_id = ?").get(m.id);
+    const l = q.ledger.get(m.ledger_id), o = db.prepare("SELECT * FROM stock_options WHERE id = ?").get(opt?.option_id);
+    const drop = () => { for (const x of rows) { logStock(x.ledger_id, "delete", `${x.type === "in" ? "입고" : "출고"} 지움 (${x.date}, ${m.ref_type === "move" ? "위치 이동" : "실사 조정"})`, user); q.delStockMove.run(x.id); } };
+    if (method === "DELETE") { inTx(drop); return ok(200, { ...stockOut(), canEdit: true, canLocations: r.admin }); }
+    if (method === "PATCH") {
+      if (!l || !o) throw bad("품목을 찾을 수 없어요.");
+      const b = await readJson(req), date = b.date && isDate(b.date) ? b.date : m.date, note = has(b, "note") ? text(b.note, 300, "메모") || "" : "";
+      inTx(() => {
+        drop();
+        if (m.ref_type === "move") {
+          const qty = teamQty(b.qty, "옮길 수량"), from = has(b, "fromLocationId") ? optLoc(b.fromLocationId) : out.location_id, to = has(b, "toLocationId") ? optLoc(b.toLocationId) : inn?.location_id;
+          if (!qty) throw bad("옮길 수량을 적어 주세요.");
+          if (!to || from === to) throw bad("옮길 위치를 골라 주세요.");
+          const o1 = refMove(l, o, "out", qty, date, `위치 이동${note ? ` · ${note}` : ""}`, user, { location: from, to, refType: "move" });
+          refMove(l, o, "in", qty, date, `위치 이동${note ? ` · ${note}` : ""}`, user, { location: to, refType: "move", refId: o1 });
+          db.prepare("UPDATE stock_moves SET ref_id = ? WHERE id = ?").run(o1, o1);
+        } else {
+          const diff = Number(b.diff);
+          if (!Number.isInteger(diff) || !diff || Math.abs(diff) > 100000000) throw bad("조정 수량을 + 또는 − 숫자로 적어 주세요.");
+          refMove(l, o, diff > 0 ? "in" : "out", Math.abs(diff), date, `실사 조정 (고침)${note ? ` · ${note}` : ""}`, user, { location: has(b, "locationId") ? optLoc(b.locationId) : m.location_id, refType: "adjust" });
+        }
+      });
+      return ok(200, { ...stockOut(), canEdit: true, canLocations: r.admin });
+    }
+    return ok(405, { error: "Method not allowed" });
   }
   // ---- F12 업체 구매: 요청 → 승인(관리자) → 주문 → 입고(입출고 한 건과 연결) · 취소
   if (path === "/api/ops/purchases" && method === "GET") {
@@ -2623,6 +2680,72 @@ async function opsRoute(req, res, user, path, method) {
   }
   return false;
 }
+
+// 실자르기 입력: 사용한 실(대장·품목·수량) · 만든 타래(대장·품목·수)
+function cuttingIn(b) {
+  if (!isDate(b.date)) throw bad("작업일을 확인해 주세요.");
+  const raw = b.ledgerId ? ledgerOption(b.ledgerId, b.optionId) : null, sk = b.skeinLedgerId ? ledgerOption(b.skeinLedgerId, b.skeinOptionId) : null;
+  const skeinQty = teamQty(b.skeinQty, "만든 타래") || 0;
+  if (!skeinQty) throw bad("만든 타래 수를 적어 주세요.");
+  return { date: b.date, raw, sk, rawQty: teamQty(b.rawQty, "사용한 실"), skeinQty, loc: optLoc(b.locationId), workers: text(b.workers, 200, "작업자") || "", note: text(b.note, 300, "메모") || "" };
+}
+function writeCutting(id, v, user) {
+  if (id) {
+    delRefMoves("cutting", id, user);
+    db.prepare("UPDATE cutting_jobs SET date = ?, ledger_id = ?, option_id = ?, raw_qty = ?, skein_qty = ?, workers = ?, location_id = ?, note = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(v.date, v.raw?.l.id ?? null, v.raw?.o.id ?? null, v.rawQty, v.skeinQty, v.workers, v.loc, v.note, id);
+  } else {
+    id = Number(db.prepare("INSERT INTO cutting_jobs (date, ledger_id, option_id, raw_qty, skein_qty, workers, location_id, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(v.date, v.raw?.l.id ?? null, v.raw?.o.id ?? null, v.rawQty, v.skeinQty, v.workers, v.loc, v.note, user.id).lastInsertRowid);
+  }
+  if (v.raw && v.rawQty) refMove(v.raw.l, v.raw.o, "out", v.rawQty, v.date, `실자르기 사용 (타래 ${v.skeinQty})`, user, { refType: "cutting", refId: id });
+  if (v.sk) refMove(v.sk.l, v.sk.o, "in", v.skeinQty, v.date, `실자르기 ${v.skeinQty}타래`, user, { location: v.loc, refType: "cutting", refId: id });
+  return id;
+}
+function handoutIn(b) {
+  if (!isDate(b.date)) throw bad("전달일을 확인해 주세요.");
+  const type = pick(b.receiverType, ["volunteer", "monastery"], "받는 쪽");
+  const mid = type === "monastery" ? optId(b.monasteryId) : null, uid = type === "volunteer" ? optId(b.userId) : null, rname = text(b.receiverName, 80, "받는 사람") || "";
+  if (type === "monastery" && !(mid && db.prepare("SELECT 1 FROM monasteries WHERE id = ?").get(mid))) throw bad("수도회를 골라 주세요.");
+  if (type === "volunteer" && !uid && !rname) throw bad("받는 사람을 골라 주거나 이름을 적어 주세요.");
+  const qty = teamQty(b.skeinQty, "타래 수") || 0;
+  const supplies = {};
+  for (const [k, v] of Object.entries(b.supplies && typeof b.supplies === "object" ? b.supplies : {})) { const n = teamQty(v, "자재 수량"); if (n) supplies[text(k, 40, "자재 이름", true)] = n; }
+  if (!qty && !Object.keys(supplies).length) throw bad("타래 수나 자재를 적어 주세요.");
+  const cj = optId(b.cuttingJobId);
+  return { date: b.date, type, mid, uid, rname, qty, supplies, sk: b.skeinLedgerId ? ledgerOption(b.skeinLedgerId, b.skeinOptionId) : null, loc: optLoc(b.locationId),
+    cj: cj && db.prepare("SELECT 1 FROM cutting_jobs WHERE id = ?").get(cj) ? cj : null, parcel: !!b.parcel, address: text(b.address, 200, "주소") || "", note: text(b.note, 300, "메모") || "" };
+}
+// 배분 저장: 타래·자재 출고를 (다시) 쌓고, 택배면 발송 '준비' 건을 만들거나 맞춤, 택배를 끄면 준비 건을 지움
+function writeHandout(id, v, user) {
+  const old = id ? db.prepare("SELECT * FROM thread_handouts WHERE id = ?").get(id) : null;
+  if (old) {
+    delRefMoves("handout", id, user);
+    db.prepare("UPDATE thread_handouts SET date = ?, cutting_job_id = ?, receiver_type = ?, user_id = ?, monastery_id = ?, receiver_name = ?, skein_qty = ?, supplies = ?, note = ? WHERE id = ?")
+      .run(v.date, v.cj, v.type, v.uid, v.mid, v.rname, v.qty, JSON.stringify(v.supplies), v.note, id);
+  } else {
+    id = Number(db.prepare("INSERT INTO thread_handouts (date, cutting_job_id, receiver_type, user_id, monastery_id, receiver_name, skein_qty, supplies, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(v.date, v.cj, v.type, v.uid, v.mid, v.rname, v.qty, JSON.stringify(v.supplies), v.note, user.id).lastInsertRowid);
+  }
+  const who = v.type === "monastery" ? db.prepare("SELECT name FROM monasteries WHERE id = ?").get(v.mid).name : v.uid ? nameOfUser(v.uid) : v.rname;
+  if (v.sk && v.qty) refMove(v.sk.l, v.sk.o, "out", v.qty, v.date, `타래 배분 → ${who}`, user, { location: v.loc, refType: "handout", refId: id });
+  for (const [name, n] of Object.entries(v.supplies)) {
+    const o = db.prepare("SELECT * FROM stock_options WHERE name = ? ORDER BY id LIMIT 1").get(name);
+    if (o) refMove(q.ledger.get(o.ledger_id), o, "out", n, v.date, `타래 배분 자재 → ${who}`, user, { refType: "handout", refId: id });
+  }
+  const sid = old?.shipment_id || null;
+  if (v.parcel) {
+    const contents = [v.qty ? `자른 실 ${v.qty}타래` : "", ...Object.entries(v.supplies).map(([k, n]) => `${k} ${n}`)].filter(Boolean).join(", ").slice(0, 200);
+    const addr = v.address || (v.mid ? db.prepare("SELECT address FROM monasteries WHERE id = ?").get(v.mid).address : "");
+    const party = [v.type === "monastery" ? "monastery" : v.uid ? "volunteer" : "etc", v.mid, v.uid, v.type === "monastery" ? "" : v.rname || who, addr, contents, v.qty || null];
+    if (sid) db.prepare("UPDATE shipments SET party_type = ?, monastery_id = ?, user_id = ?, party_name = ?, address = ?, contents = ?, qty = ?, updated_at = datetime('now') WHERE id = ?").run(...party, sid);
+    else db.prepare("UPDATE thread_handouts SET shipment_id = ? WHERE id = ?").run(Number(db.prepare("INSERT INTO shipments (direction, party_type, monastery_id, user_id, party_name, address, contents, qty, status, note, created_by) VALUES ('out', ?, ?, ?, ?, ?, ?, ?, 'ready', '타래 배분', ?)").run(...party, user.id).lastInsertRowid), id);
+  } else if (sid) {
+    db.prepare("UPDATE thread_handouts SET shipment_id = NULL WHERE id = ?").run(id);
+    db.prepare("DELETE FROM shipments WHERE id = ? AND status = 'ready'").run(sid);
+  }
+  return id;
+}
 // ---- 2차 도우미: 재고(위치별)·원천이 붙은 입출고·실자르기·구매
 const LOC_KINDS = ["raw", "finished", "inspect", "all"];
 const PURCHASE_STATUS = ["request", "approved", "ordered", "received", "canceled"];
@@ -2644,7 +2767,7 @@ function refMove(l, o, type, qty, date, note, user, { location = null, to = null
 }
 function delRefMoves(refType, refId, user) {
   for (const m of db.prepare("SELECT * FROM stock_moves WHERE ref_type = ? AND ref_id = ?").all(refType, refId)) {
-    logStock(m.ledger_id, "delete", `${m.type === "in" ? "입고" : "출고"} 지움 (${m.date}, ${refType === "cutting" ? "실자르기" : "타래 배분"} 기록을 지워서)`, user);
+    logStock(m.ledger_id, "delete", `${m.type === "in" ? "입고" : "출고"} 지움 (${m.date}, ${{ cutting: "실자르기", handout: "타래 배분" }[refType] || refType} 기록을 고치거나 지워서)`, user);
     q.delStockMove.run(m.id);
   }
 }
@@ -2658,18 +2781,24 @@ function stockOut() {
       return { id: o.id, name: o.name, safety: o.safety_qty ?? null, qty: rows.reduce((n, x) => n + x.n, 0), byLoc: rows.filter((x) => x.n).map((x) => ({ locationId: x.lid, qty: x.n })) };
     })
   }));
-  const moves = db.prepare(`SELECT m.*, l.name AS ledger, l.unit, a.name AS loc, b.name AS to_loc, (SELECT group_concat(o.name || ' ' || q.qty, ', ') FROM stock_qty q JOIN stock_options o ON o.id = q.option_id WHERE q.move_id = m.id) AS items
+  const moves = db.prepare(`SELECT m.*, l.name AS ledger, l.unit, a.name AS loc, b.name AS to_loc, (SELECT group_concat(o.name || ' ' || q.qty, ', ') FROM stock_qty q JOIN stock_options o ON o.id = q.option_id WHERE q.move_id = m.id) AS items,
+      (SELECT q.option_id FROM stock_qty q WHERE q.move_id = m.id LIMIT 1) AS option_id, (SELECT q.qty FROM stock_qty q WHERE q.move_id = m.id LIMIT 1) AS qty1
     FROM stock_moves m JOIN stock_ledgers l ON l.id = m.ledger_id LEFT JOIN storage_locations a ON a.id = m.location_id LEFT JOIN storage_locations b ON b.id = m.to_location_id ORDER BY m.id DESC LIMIT 30`).all()
-    .map((m) => ({ id: m.id, date: m.date, type: m.type, ledger: m.ledger, unit: m.unit, items: m.items || "", note: m.note, location: m.loc || "", toLocation: m.to_loc || "", refType: m.ref_type || "" }));
+    .map((m) => ({ id: m.id, date: m.date, type: m.type, ledger: m.ledger, ledgerId: m.ledger_id, optionId: m.option_id, qty: m.qty1, unit: m.unit, items: m.items || "", note: m.note, location: m.loc || "", locationId: m.location_id, toLocation: m.to_loc || "", toLocationId: m.to_location_id, refType: m.ref_type || "", refId: m.ref_id }));
   return { locations, ledgers, moves };
 }
+// 원천(ref)이 붙은 입출고에서 품목 한 줄 찾기 (고치기 창에 지금 값을 채우려고)
+const refQtyOf = (refType, refId, type, noteRe) => db.prepare("SELECT m.ledger_id, m.location_id, m.note, q.option_id, q.qty FROM stock_moves m JOIN stock_qty q ON q.move_id = m.id WHERE m.ref_type = ? AND m.ref_id = ? AND m.type = ? ORDER BY m.id").all(refType, refId, type).find((x) => !noteRe || noteRe.test(x.note));
 function cuttingOut() {
   const jobs = db.prepare(`SELECT c.*, o.name AS thread, l.name AS ledger, s.name AS loc, u.name AS author FROM cutting_jobs c LEFT JOIN stock_options o ON o.id = c.option_id LEFT JOIN stock_ledgers l ON l.id = c.ledger_id
     LEFT JOIN storage_locations s ON s.id = c.location_id LEFT JOIN users u ON u.id = c.created_by ORDER BY c.date DESC, c.id DESC`).all()
-    .map((c) => ({ id: c.id, date: c.date, thread: c.thread || "", ledger: c.ledger || "", rawQty: c.raw_qty, skeinQty: c.skein_qty, workers: c.workers, location: c.loc || "", note: c.note, author: c.author || "", createdBy: c.created_by }));
-  const handouts = db.prepare(`SELECT h.*, m.name AS monastery, u.name AS person, x.status AS ship_status, x.tracking_no FROM thread_handouts h LEFT JOIN monasteries m ON m.id = h.monastery_id
+    .map((c) => { const sk = refQtyOf("cutting", c.id, "in");
+      return { id: c.id, date: c.date, thread: c.thread || "", ledger: c.ledger || "", ledgerId: c.ledger_id, optionId: c.option_id, skeinLedgerId: sk?.ledger_id ?? null, skeinOptionId: sk?.option_id ?? null,
+        rawQty: c.raw_qty, skeinQty: c.skein_qty, workers: c.workers, locationId: c.location_id, location: c.loc || "", note: c.note, author: c.author || "", createdBy: c.created_by }; });
+  const handouts = db.prepare(`SELECT h.*, m.name AS monastery, u.name AS person, x.status AS ship_status, x.tracking_no, x.address AS ship_address FROM thread_handouts h LEFT JOIN monasteries m ON m.id = h.monastery_id
     LEFT JOIN users u ON u.id = h.user_id LEFT JOIN shipments x ON x.id = h.shipment_id ORDER BY h.date DESC, h.id DESC`).all()
-    .map((h) => ({ id: h.id, date: h.date, receiverType: h.receiver_type, receiver: h.monastery || h.person || h.receiver_name, skeinQty: h.skein_qty, supplies: JSON.parse(h.supplies || "{}"), shipmentId: h.shipment_id, shipStatus: h.ship_status || "", trackingNo: h.tracking_no || "", note: h.note, createdBy: h.created_by, cuttingJobId: h.cutting_job_id }));
+    .map((h) => ({ id: h.id, date: h.date, receiverType: h.receiver_type, receiver: h.monastery || h.person || h.receiver_name, userId: h.user_id, monasteryId: h.monastery_id, receiverName: h.receiver_name,
+      ...(() => { const sk = refQtyOf("handout", h.id, "out", /^타래 배분 →/); return { skeinLedgerId: sk?.ledger_id ?? null, skeinOptionId: sk?.option_id ?? null, locationId: sk?.location_id ?? null }; })(), address: h.ship_address || "", skeinQty: h.skein_qty, supplies: JSON.parse(h.supplies || "{}"), shipmentId: h.shipment_id, shipStatus: h.ship_status || "", trackingNo: h.tracking_no || "", note: h.note, createdBy: h.created_by, cuttingJobId: h.cutting_job_id }));
   const month = today().slice(0, 7);
   return { jobs, handouts, monthSkeins: jobs.filter((j) => j.date.startsWith(month)).reduce((n, j) => n + j.skeinQty, 0) };
 }
