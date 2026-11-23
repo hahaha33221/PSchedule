@@ -849,6 +849,26 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"milestones":[{"name":"a","procs":[2]}],"procs":{"1":{"name":"b"}}}' $B/ops/wbs)" = 400
           curl -fs -H "$H" -XPUT -d '{"milestones":[{"name":"원자재","procs":[1]}],"procs":{"1":{"name":"실타래","fixed":true,"tasks":["입고"]}}}' $B/ops/wbs >/dev/null
           curl -fs -H "$VH" $B/ops/wbs | JQ 'if(d.wbs.milestones[0].name!=="원자재"||!d.wbs.procs["1"].fixed||d.wbs.procs["1"].tasks[0]!=="입고")process.exit(1)'
+          # 묵주 교육 기록·봉사자 명단: 관리자만. 엑셀 반영은 미리보기면 저장 안 함, 반영 전 백업, 다시 돌려도 같음
+          for X in "$TH" "$VH"; do test "$(curl -s -o /dev/null -w '%{http_code}' -H "$X" $B/admin/vol-edu)" = 403; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$X" -XPOST -d '{"call":"x"}' $B/admin/vol-roster)" = 403; done
+          RE=$(curl -fs -H "$H" -XPOST -d '{"title":"묵주 교육 · 시험수도회","date":"2030-08-01","qty":100,"project":true}' $B/admin/vol-schedules | node -pe 'JSON.parse(require("fs").readFileSync(0)).schedule.id')
+          printf '{"schedules":[{"no":1,"code":"S01","date":"2030-08-01","timeTable":"14:00","org":"시험수도회","qtyList":100,"qtyTable":120,"alloc":100,"status":"진행완료","helpers":[]},{"no":2,"code":"S02","date":"2030-08-02","org":"새수도회","qtyList":50,"alloc":50,"status":"진행예정","helpers":[]}],"roster":[{"call":"가람","name":"김가람","kind":"making","affiliation":"본당"}],"ledger":[{"org":"시험수도회","date":"2030-08-01","alloc":100,"thread":60,"cross":60,"sendThread":30,"sendCross":40}],"participation":[{"code":"S01","call":"가람","role":"봉사자"},{"code":"S02","call":"나래","role":"봉사자"}],"other":[{"date":"2030-08-03","time":"17:00","title":"봉사자 모임"}]}' > /tmp/ps/rosary.json
+          TODAY=2030-08-01 ADM rosary-import --dry < /tmp/ps/rosary.json | grep -q '미리보기.*맞춘 일정 1 · 새로 넣음 1 · 진행완료 1 · 진행예정 1'
+          curl -fs -H "$H" $B/admin/vol-edu | JQ 'if(d.rows.some(r=>r.org==="새수도회")||d.roster.length)process.exit(1)'
+          TODAY=2030-08-01 ADM rosary-import < /tmp/ps/rosary.json | tee /tmp/ps/ri.txt | grep -q '먼저 백업했어요'
+          grep -q '새 모임 일정 1' /tmp/ps/ri.txt
+          curl -fs -H "$H" $B/admin/vol-edu | JQ 'const a=d.rows.find(r=>r.id=='$RE'),b=d.rows.find(r=>r.org==="새수도회");if(a.progress!=="done"||a.code!=="S01"||a.alloc!==100||a.unpaidThread!==40||a.mismatch.length!==1||a.helpers[0].call!=="가람"||a.qty!==100||!b||b.progress!=="planned"||b.qty!==50)process.exit(1)'
+          curl -fs -H "$H" $B/admin/vol-roster | JQ 'const g=d.roster.find(r=>r.call==="가람"),n=d.roster.find(r=>r.call==="나래");if(d.roster.length!==2||g.kind!=="making"||g.done!==1||g.planned!==0||n.kind!=="etc"||n.planned!==1)process.exit(1)'
+          TODAY=2030-08-01 ADM rosary-import --dry < /tmp/ps/rosary.json | grep -q '맞춘 일정 2 · 새로 넣음 0'
+          TODAY=2030-08-01 ADM rosary-import --dry --qty=table < /tmp/ps/rosary.json | grep -q '요청수량 1 '
+          GR=$(curl -fs -H "$H" $B/admin/vol-roster | JQ 'console.log(d.roster.find(r=>r.call==="가람").id)')
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"call":"가람"}' $B/admin/vol-roster)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XDELETE $B/admin/vol-roster/$GR)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPATCH -d '{"progress":"x"}' $B/admin/vol-edu/$RE)" = 400
+          curl -fs -H "$H" -XPATCH -d '{"helpers":[],"sendThread":40,"progress":"planned"}' $B/admin/vol-edu/$RE | JQ 'if(d.row.helpers.length||d.row.mismatch.length||d.row.progress!=="planned")process.exit(1)'
+          curl -fs -H "$H" -XDELETE $B/admin/vol-roster/$GR | JQ 'if(d.roster.length!==1)process.exit(1)'
+          for S in $(curl -fs -H "$H" $B/admin/vol-schedules | JQ 'console.log(d.schedules.filter(s=>/시험수도회|새수도회/.test(s.title)||(s.title==="봉사자 모임"&&s.date==="2030-08-03")).map(s=>s.id).join(" "))'); do curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$S >/dev/null; done
+          curl -fs -H "$H" -XDELETE $B/admin/vol-roster/$(curl -fs -H "$H" $B/admin/vol-roster | JQ 'console.log(d.roster[0].id)') >/dev/null
           curl -fs -H "$H" -XPUT -d '{"staffOn":false}' $B/ops/perms >/dev/null
           curl -fs -H "$H" -XDELETE $B/stock/$SLI >/dev/null
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$SH1" $B/ops/monasteries)" = 403

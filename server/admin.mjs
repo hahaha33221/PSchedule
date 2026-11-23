@@ -16,15 +16,17 @@
  *   node server/admin.mjs process-import [--dry] < 프로세스.json  상세 프로세스 넣기 ({ project, rows: [{ section, phase, task, detail, output, label, start, due, status, note }] })
  *   node server/admin.mjs vol-schedule-import [--dry] < 일정.json  봉사자 일정 넣기 ({ audience: "all", project?, group?, rows: [{ title, date, startTime, endTime, place, note, qty, link? }] }, 같은 날 같은 제목은 건너뜀)
  *   node server/admin.mjs vol-request-import [--dry] < 신청.json  묵주 수업 신청 넣기 ({ project, group, rows: [{ no, org, date, time, qty, appliedAt }] }, 그 묶음의 신청을 통째로 바꿈, 연락처는 넣지 않음)
+ *   node server/admin.mjs rosary-import [--dry] [--rename] [--qty=list|table|keep] [--contacts] [--dates] [--pin=<엑셀 번호>:<DB id|new>] < rosary.json  묵주 데이터베이스 반영 (tools/rosary-xlsx-to-json.py 로 만든 JSON, 저장 전에 백업, server/rosary-import.mjs 참고)
  *   node server/admin.mjs project-import <조직> <프로젝트> [--dry] < 목록.txt  프로젝트 목록 넣기 (1. 묶음, 4-1. 아래 묶음, * 항목, ※ 메모)
  *     이미 값이 있으면 그대로 둠. 조직도에서 못 찾으면 넣지 않고 이름만 알려 줌. 번호는 출력하지 않음
  *
  * VPS 에서:  ssh root@srv1809055.hstgr.cloud 'cd /opt/pschedule && docker compose exec -T api node --disable-warning=ExperimentalWarning server/admin.mjs list'
  */
 import { join, resolve } from "node:path";
-import { readFileSync } from "node:fs";
+import { chmodSync, readFileSync } from "node:fs";
 import { openDb, hashPassword, tempPassword, cleanContact, parseOutline, importOutline, importLedger, linkMonasteries } from "./db.mjs";
 import { backupNow, listBackups } from "./backup.mjs";
+import { importRosary } from "./rosary-import.mjs";
 
 const DATA_DIR = resolve(process.env.DATA_DIR || "data");
 const BACKUP_DIR = resolve(process.env.BACKUP_DIR || join(DATA_DIR, "backups"));
@@ -264,6 +266,22 @@ switch (cmd) {
     break;
   }
 
+  case "rosary-import": {
+    const dry = args.includes("--dry");
+    const qa = args.find((a) => a.startsWith("--qty="));
+    const data = JSON.parse(readFileSync(0, "utf8"));
+    const opts = { dry, rename: args.includes("--rename"), contacts: args.includes("--contacts"), dates: args.includes("--dates"), qty: qa ? qa.slice(6) : "keep", pins: Object.fromEntries(args.filter((a) => a.startsWith("--pin=")).map((a) => a.slice(6).split(":"))), today: process.env.TODAY || new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10) };
+    try {
+      if (!dry) {
+        const file = join(DATA_DIR, `pre-rosary-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}.db`);
+        db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`); chmodSync(file, 0o600);
+        console.log(`먼저 백업했어요 → ${file}`);
+      }
+      const r = importRosary(db, data, opts);
+      console.log(r.lines.join("\n"));
+    } catch (e) { console.error(e.message); process.exit(1); }
+    break;
+  }
   case "notice-add": {
     const title = String(args[0] || "").trim();
     const body = readFileSync(0, "utf8").replace(/\r\n?/g, "\n").trim();

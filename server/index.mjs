@@ -4006,6 +4006,8 @@ async function api(req, res, path) {
       }
       return send(res, 405, { error: "Method not allowed" });
     }
+    /* 묵주 교육 기록 · 봉사자 명단 (관리자 전용으로 시작) */
+    if (path.startsWith("/api/admin/vol-roster") || path.startsWith("/api/admin/vol-edu")) return await rosaryAdminRoute(req, res, path, method, user);
     if (path === "/api/admin/vol-stock-moves" && method === "GET") {
       return send(res, 200, { moves: q.volStockMoves.all().map((m) => ({ id: m.id, type: m.type, date: m.date, note: m.note, handler: m.handler, issue: m.issue || "", photos: m.photos, inspectOk: m.inspect_ok ?? null, inspectBad: m.inspect_bad ?? null, createdAt: m.created_at, enteredBy: m.author, ledgerId: m.ledger_id, ledgerName: m.ledger_name, unit: m.unit, total: m.total })) });
     }
@@ -4454,3 +4456,118 @@ createServer(async (req, res) => {
 });
 // 연락 후속 조치 알림: 한 시간마다 확인 (하루 한 번만 보냄)
 setInterval(() => { try { followupReminders(); } catch (e) { console.log(`[followup] ${e.message}`); } }, 60 * 60 * 1000).unref();
+
+// ---- 묵주 교육 기록 (교육 회차·진행상태·출납 상세·참여 봉사자) · 계정 없는 봉사자 명단 · 봉사자별 집계. 관리자만
+const ROSTER_KIND = new Set(["making", "cutting", "etc"]);
+const rosterOut = () => {
+  const stats = new Map(db.prepare(`SELECT h.roster_id AS id,
+      COUNT(DISTINCT CASE WHEN s.progress = 'done' THEN (CASE WHEN s.edu_code <> '' THEN s.edu_code ELSE 'id' || s.id END) END) AS done,
+      COUNT(DISTINCT CASE WHEN s.progress <> 'done' THEN (CASE WHEN s.edu_code <> '' THEN s.edu_code ELSE 'id' || s.id END) END) AS planned,
+      MIN(s.date) AS first, MAX(s.date) AS last
+    FROM vol_edu_helpers h JOIN vol_schedules s ON s.id = h.schedule_id GROUP BY h.roster_id`).all().map((r) => [r.id, r]));
+  return db.prepare("SELECT r.*, u.name AS user_name FROM vol_roster r LEFT JOIN users u ON u.id = r.user_id ORDER BY r.kind, r.call_name").all().map((r) => {
+    const st = stats.get(r.id) || {};
+    return { id: r.id, call: r.call_name, name: r.name, kind: r.kind, affiliation: r.affiliation, userId: r.user_id, userName: r.user_name || "", note: r.note, done: st.done || 0, planned: st.planned || 0, first: st.first || null, last: st.last || null };
+  });
+};
+const rosterUsers = () => db.prepare("SELECT id, name FROM users WHERE volunteer = 1 ORDER BY name").all();
+const eduRowOut = (s, helpers) => {
+  const unT = s.alloc_qty != null && s.thread_qty != null ? s.alloc_qty - s.thread_qty : null;
+  const unC = s.alloc_qty != null && s.cross_qty != null ? s.alloc_qty - s.cross_qty : null;
+  const mismatch = [];
+  if (s.send_thread != null && unT != null && s.send_thread !== unT) mismatch.push(`보낼 실 ${s.send_thread} ≠ 미지급 ${unT}`);
+  if (s.send_cross != null && unC != null && s.send_cross !== unC) mismatch.push(`보낼 십자가 ${s.send_cross} ≠ 미지급 ${unC}`);
+  return {
+    id: s.id, code: s.edu_code || "", date: s.date, startTime: s.start_time, title: s.title, org: String(s.title || "").split(" · ").pop(), tableOnly: !!s.table_only, progress: s.progress || "planned",
+    qty: s.qty ?? null, alloc: s.alloc_qty ?? null, thread: s.thread_qty ?? null, cross: s.cross_qty ?? null, unpaidThread: unT, unpaidCross: unC,
+    sendThread: s.send_thread ?? null, sendCross: s.send_cross ?? null, sample: s.sample_qty ?? null, done: s.done_qty ?? null, loss: s.loss_qty ?? null,
+    handler: s.mat_handler || "", matNote: s.mat_note || "", mismatch, helpers: helpers.get(s.id) || []
+  };
+};
+const eduRows = (id) => {
+  const g = db.prepare("SELECT project_item_id AS id FROM vol_schedules WHERE title LIKE '묵주 교육 · %' AND project_item_id IS NOT NULL GROUP BY 1 ORDER BY count(*) DESC LIMIT 1").get();
+  if (!g) return [];
+  const list = id ? db.prepare("SELECT * FROM vol_schedules WHERE id = ?").all(id) : db.prepare("SELECT * FROM vol_schedules WHERE project_item_id = ? ORDER BY table_only, date, start_time, id").all(g.id);
+  const helpers = new Map();
+  for (const h of db.prepare(`SELECT h.schedule_id, h.role, r.id, r.call_name FROM vol_edu_helpers h JOIN vol_roster r ON r.id = h.roster_id ${id ? "WHERE h.schedule_id = ?" : ""} ORDER BY r.call_name`).all(...(id ? [id] : []))) {
+    if (!helpers.has(h.schedule_id)) helpers.set(h.schedule_id, []);
+    helpers.get(h.schedule_id).push({ id: h.id, call: h.call_name, role: h.role });
+  }
+  return list.map((s) => eduRowOut(s, helpers));
+};
+const rosterIn = (b) => {
+  const call = text(b.call, 40, "호칭", true);
+  const kind = ROSTER_KIND.has(b.kind) ? b.kind : "etc";
+  const userId = b.userId === null || b.userId === "" || b.userId === undefined ? null : Number(b.userId);
+  if (userId !== null && !rosterUsers().some((u) => u.id === userId)) throw bad("연결할 봉사자 계정을 찾을 수 없어요.");
+  return [call, text(b.name, 40, "이름") || "", kind, text(b.affiliation, 100, "소속") || "", userId, text(b.note, 300, "메모") || ""];
+};
+async function rosaryAdminRoute(req, res, path, method, user) {
+  if (path === "/api/admin/vol-roster") {
+    if (method === "GET") return send(res, 200, { roster: rosterOut(), users: rosterUsers() });
+    if (method === "POST") {
+      const f = rosterIn(await readJson(req));
+      if (db.prepare("SELECT 1 FROM vol_roster WHERE call_name = ?").get(f[0])) throw bad("같은 호칭이 이미 있어요.");
+      db.prepare("INSERT INTO vol_roster (call_name, name, kind, affiliation, user_id, note) VALUES (?, ?, ?, ?, ?, ?)").run(...f);
+      console.log(`[admin] ${user.login} → 봉사자 명단 추가`);
+      return send(res, 201, { roster: rosterOut() });
+    }
+    return send(res, 405, { error: "Method not allowed" });
+  }
+  const rm = path.match(/^\/api\/admin\/vol-roster\/(\d+)$/);
+  if (rm) {
+    const r = db.prepare("SELECT * FROM vol_roster WHERE id = ?").get(Number(rm[1]));
+    if (!r) throw notFound("봉사자");
+    if (method === "PATCH") {
+      const f = rosterIn(await readJson(req));
+      if (db.prepare("SELECT 1 FROM vol_roster WHERE call_name = ? AND id <> ?").get(f[0], r.id)) throw bad("같은 호칭이 이미 있어요.");
+      db.prepare("UPDATE vol_roster SET call_name = ?, name = ?, kind = ?, affiliation = ?, user_id = ?, note = ?, updated_at = datetime('now') WHERE id = ?").run(...f, r.id);
+      return send(res, 200, { roster: rosterOut() });
+    }
+    if (method === "DELETE") {
+      const n = db.prepare("SELECT count(*) AS n FROM vol_edu_helpers WHERE roster_id = ?").get(r.id).n;
+      if (n) return send(res, 400, { error: `교육 참여 기록 ${n}건이 있어 지울 수 없어요. 먼저 교육 기록에서 빼 주세요.` });
+      db.prepare("DELETE FROM vol_roster WHERE id = ?").run(r.id);
+      console.log(`[admin] ${user.login} → 봉사자 명단 #${r.id} 삭제`);
+      return send(res, 200, { roster: rosterOut() });
+    }
+    return send(res, 405, { error: "Method not allowed" });
+  }
+  if (path === "/api/admin/vol-edu" && method === "GET") return send(res, 200, { rows: eduRows(), roster: rosterOut() });
+  const em = path.match(/^\/api\/admin\/vol-edu\/(\d+)$/);
+  if (em && method === "PATCH") {
+    const s = db.prepare("SELECT * FROM vol_schedules WHERE id = ? AND project_item_id IS NOT NULL").get(Number(em[1]));
+    if (!s) throw notFound("교육 일정");
+    const b = await readJson(req);
+    const q2 = (k) => (has(b, k) ? volQtyInput(b[k]) : undefined);
+    const set = {};
+    if (has(b, "progress")) { if (!["planned", "done"].includes(b.progress)) throw bad("진행상태를 확인해 주세요."); set.progress = b.progress; }
+    if (has(b, "code")) set.edu_code = text(b.code, 20, "교육 회차") || "";
+    for (const [k, c] of [["alloc", "alloc_qty"], ["sendThread", "send_thread"], ["sendCross", "send_cross"], ["sample", "sample_qty"], ["done", "done_qty"], ["loss", "loss_qty"]]) { const v = q2(k); if (v !== undefined) set[c] = v; }
+    if (has(b, "handler")) set.mat_handler = text(b.handler, 100, "담당") || "";
+    if (has(b, "matNote")) set.mat_note = text(b.matNote, 500, "비고") || "";
+    let helpers = null;
+    if (has(b, "helpers")) {
+      if (!Array.isArray(b.helpers) || b.helpers.length > 30) throw bad("참여 봉사자를 확인해 주세요.");
+      helpers = b.helpers.map((h) => ({ id: Number(h.id), role: text(h.role, 20, "구분") || "" }));
+      for (const h of helpers) if (!db.prepare("SELECT 1 FROM vol_roster WHERE id = ?").get(h.id)) throw bad("명단에 없는 봉사자가 있어요.");
+    }
+    inTx(() => {
+      const keys = Object.keys(set);
+      if (keys.length) db.prepare(`UPDATE vol_schedules SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...keys.map((k) => set[k]), s.id);
+      if (has(b, "thread") || has(b, "cross")) {
+        const th = has(b, "thread") ? volQtyInput(b.thread) : s.thread_qty ?? null, cr = has(b, "cross") ? volQtyInput(b.cross) : s.cross_qty ?? null;
+        if (th !== (s.thread_qty ?? null) || cr !== (s.cross_qty ?? null)) q.setVolMat.run(th, cr, user.name, s.id);
+      }
+      if (helpers) {
+        db.prepare("DELETE FROM vol_edu_helpers WHERE schedule_id = ?").run(s.id);
+        const add = db.prepare("INSERT OR IGNORE INTO vol_edu_helpers (schedule_id, roster_id, role) VALUES (?, ?, ?)");
+        for (const h of helpers) add.run(s.id, h.id, h.role);
+      }
+      // 진행완료면 수도회를 '교육완료'로 (이미 그 다음 단계면 그대로)
+      if (set.progress === "done" && s.monastery_id) db.prepare("UPDATE monasteries SET status = 'edu_done', updated_at = datetime('now') WHERE id = ? AND status = 'new'").run(s.monastery_id);
+    });
+    return send(res, 200, { row: eduRows(s.id)[0], roster: rosterOut() });
+  }
+  return send(res, 404, { error: "Not found" });
+}

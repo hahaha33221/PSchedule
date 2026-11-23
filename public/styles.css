@@ -2129,3 +2129,11 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .ops-tabs { display: flex; max-width: 100%; }
 .ops-tabs .seg__link { flex: 0 0 auto; white-space: nowrap; min-height: 36px; display: inline-flex; align-items: center; }
 .ops-tabs .seg__link.is-active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, .1); }
+
+/* 묵주 교육 기록 (관리자) */
+.edu-table td.small { min-width: 90px; }
+.edu-table tr.is-warn td { background: var(--admin-soft); }
+.edu-bad { color: var(--admin-text); min-width: 140px; }
+.vol-pick.edu-pick { display: grid; grid-template-columns: 1fr; gap: 10px; max-height: 280px; overflow: auto; }
+.edu-pick__group { border: 0; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 2px 8px; }
+.edu-pick__group legend { grid-column: 1 / -1; padding: 0; margin-bottom: 2px; }

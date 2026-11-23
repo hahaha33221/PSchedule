@@ -886,6 +886,7 @@ function addOpsTables(db) {
   }
   linkMonasteries(db);
   addOpsTables2(db);
+  addRosaryEduTables(db);
 }
 // DB 설계 v2 2차 (F07~F12): 보관 위치·실자르기·타래 배분·업체 구매, 입출고에 위치·원천 연결
 // stock_moves.type 은 그대로 in·out (CHECK 제약이 있고, 재고 계산이 모두 입고 − 출고라서). 위치 이동은 출고+입고 두 줄, 실사 조정은 차이만큼 입고·출고 한 줄로 쌓고 ref_type 으로 구분
@@ -1044,4 +1045,41 @@ export function ensureAdmin(db) {
   const password = given || tempPassword();
   db.prepare("INSERT INTO users (login, pw_hash, role, name) VALUES ('master', ?, 'admin', '관리자')").run(hashPassword(password));
   return { login: "master", password: given ? "(ADMIN_PASSWORD 값)" : password };
+}
+
+// 묵주 교육 기록 (묵주 데이터베이스 v0.3): 교육 회차·진행상태·출납 상세, 계정 없는 봉사자 명단, 교육별 참여 봉사자
+// 관리자 전용으로 시작. 봉사자 세례명·연락처는 넣지 않음
+function addRosaryEduTables(db) {
+  const has = (t, c) => db.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c);
+  const col = (c, def) => { if (!has("vol_schedules", c)) db.exec(`ALTER TABLE vol_schedules ADD COLUMN ${c} ${def}`); };
+  col("edu_code", "TEXT NOT NULL DEFAULT ''");            // 교육 회차 (S01 …)
+  col("progress", "TEXT NOT NULL DEFAULT 'planned'");     // 진행상태: planned 진행예정 · done 진행완료
+  col("alloc_qty", "INTEGER");                            // 배당물량 (출납)
+  col("send_thread", "INTEGER");                          // 보낼 실 (기재)
+  col("send_cross", "INTEGER");                           // 보낼 십자가 (기재)
+  col("sample_qty", "INTEGER");                           // 샘플 묵주
+  col("done_qty", "INTEGER");                             // 완성 묵주
+  col("loss_qty", "INTEGER");                             // 로스
+  col("mat_handler", "TEXT NOT NULL DEFAULT ''");         // 출납 담당 봉사자
+  col("mat_note", "TEXT NOT NULL DEFAULT ''");            // 출납 비고
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS vol_roster (
+      id          INTEGER PRIMARY KEY,
+      call_name   TEXT NOT NULL UNIQUE,
+      name        TEXT NOT NULL DEFAULT '',
+      kind        TEXT NOT NULL DEFAULT 'etc' CHECK (kind IN ('making', 'cutting', 'etc')),
+      affiliation TEXT NOT NULL DEFAULT '',
+      user_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      note        TEXT NOT NULL DEFAULT '',
+      created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE TABLE IF NOT EXISTS vol_edu_helpers (
+      schedule_id INTEGER NOT NULL REFERENCES vol_schedules(id) ON DELETE CASCADE,
+      roster_id   INTEGER NOT NULL REFERENCES vol_roster(id) ON DELETE CASCADE,
+      role        TEXT NOT NULL DEFAULT '',
+      PRIMARY KEY (schedule_id, roster_id)
+    );
+    CREATE INDEX IF NOT EXISTS vol_edu_helpers_roster ON vol_edu_helpers (roster_id);
+  `);
 }

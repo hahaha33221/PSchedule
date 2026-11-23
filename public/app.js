@@ -7833,6 +7833,104 @@
   }
   // ---- 데드라인 일정 (봉사자 '참고'): 관리자만 적고 고치고 지움, 봉사자는 날짜순으로 봄
   const DL_AUD = { all: "모든 봉사자", dept: "부서 봉사자", team: "팀 봉사자" };
+  // ---- 묵주 교육 기록 · 봉사자 명단 (관리자 전용으로 시작): 교육 회차·진행상태·참여 봉사자·출납 상세, 계정 없는 봉사자 명단과 봉사자별 집계
+  const ROSTER_KIND = { making: "묵주 만들기", cutting: "실 자르기", etc: "기타" };
+  const EDU_PROG = { done: "진행완료", planned: "진행예정" };
+  const qtyText = (v) => (v == null ? "-" : fmtN(v));
+  async function adminRosaryEdu() {
+    let d = await api("/admin/vol-edu"), prog = "", qv = "", onlyBad = false;
+    const box = h("div", { class: "stack" });
+    const draw = () => {
+      const rows = d.rows.filter((r) => (!prog || r.progress === prog) && (!qv || nospace(r.org).includes(nospace(qv)) || r.code.includes(qv.toUpperCase())) && (!onlyBad || r.mismatch.length));
+      const st = opsSel(Object.entries(EDU_PROG), prog, "모든 진행상태");
+      st.addEventListener("change", () => { prog = st.value; draw(); });
+      const search = h("input", { type: "search", placeholder: "수도회·회차 검색", "aria-label": "수도회·회차 검색", value: qv });
+      search.addEventListener("change", () => { qv = search.value.trim(); draw(); });
+      const bad = h("input", { type: "checkbox", checked: onlyBad, onchange: (e) => { onlyBad = e.target.checked; draw(); } });
+      const total = (k) => rows.reduce((n, r) => n + (r[k] || 0), 0);
+      fill(box,
+        h("div", { class: "vm-stats" }, [vmStat("교육", d.rows.length), vmStat("진행완료", d.rows.filter((r) => r.progress === "done").length), vmStat("진행예정", d.rows.filter((r) => r.progress !== "done").length), vmStat("출납 불일치", d.rows.filter((r) => r.mismatch.length).length, d.rows.some((r) => r.mismatch.length))]),
+        h("div", { class: "filters" }, [st, search, h("label", { class: "check" }, [bad, h("span", { text: "불일치만" })]), h("span", { class: "muted small", text: `${rows.length}건` })]),
+        rows.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table edu-table" }, [
+          h("thead", {}, h("tr", {}, ["회차", "날짜", "수도회", "진행", "진행 봉사자", "요청", "배당", "자른실 지급", "십자가 지급", "미지급 실·십자가", "보낼 실·십자가", "샘플", "완성", "로스", "담당", "확인"].map((t) => h("th", { text: t })))),
+          h("tbody", {}, rows.map((r) => h("tr", { class: "stock-row" + (r.mismatch.length ? " is-warn" : ""), tabindex: "0", onclick: () => edit(r), onkeydown: (e) => { if (e.key === "Enter") edit(r); } }, [
+            h("td", { class: "nowrap", text: r.code || "-" }), h("td", { class: "nowrap", text: r.tableOnly ? `${shortDate(r.date)} (미정)` : `${shortDate(r.date)}${r.startTime ? ` ${r.startTime}` : ""}` }), h("td", { text: r.org }),
+            h("td", { class: "nowrap" }, statusTag(EDU_PROG[r.progress], r.progress === "done" ? "is-done" : "is-plan")),
+            h("td", { class: "small", text: r.helpers.map((x) => x.call).join(", ") || "-" }),
+            ...["qty", "alloc", "thread", "cross"].map((k) => h("td", { class: "num", text: qtyText(r[k]) })),
+            h("td", { class: "num nowrap", text: `${qtyText(r.unpaidThread)} · ${qtyText(r.unpaidCross)}` }), h("td", { class: "num nowrap", text: `${qtyText(r.sendThread)} · ${qtyText(r.sendCross)}` }),
+            ...["sample", "done", "loss"].map((k) => h("td", { class: "num", text: qtyText(r[k]) })),
+            h("td", { class: "small", text: r.handler || "-" }), h("td", { class: "small edu-bad", text: r.mismatch.join(" / ") })
+          ]))),
+          h("tfoot", {}, h("tr", {}, [h("td", { colspan: "5", text: "합계" }), ...["qty", "alloc", "thread", "cross"].map((k) => h("td", { class: "num", text: fmtN(total(k)) })), h("td", { class: "num nowrap", text: `${fmtN(total("unpaidThread"))} · ${fmtN(total("unpaidCross"))}` }), h("td", { class: "num nowrap", text: `${fmtN(total("sendThread"))} · ${fmtN(total("sendCross"))}` }), ...["sample", "done", "loss"].map((k) => h("td", { class: "num", text: fmtN(total(k)) })), h("td", { colspan: "2" })]))
+        ])) : h("div", { class: "card empty", text: "조건에 맞는 교육이 없어요." }));
+    };
+    const edit = (r) => {
+      const num = (v) => h("input", { type: "number", min: "0", inputmode: "numeric", value: v ?? "" });
+      const code = h("input", { maxlength: "20", value: r.code, placeholder: "예: S12" }), pr = opsSel(Object.entries(EDU_PROG), r.progress);
+      const on = new Map(r.helpers.map((x) => [x.id, x.role]));
+      const pick = h("div", { class: "vol-pick edu-pick" }, Object.entries(ROSTER_KIND).map(([k, label]) => {
+        const list = d.roster.filter((p) => p.kind === k);
+        return list.length ? h("fieldset", { class: "edu-pick__group" }, [h("legend", { class: "small muted", text: label }), ...list.map((p) => h("label", { class: "vol-pick__row" }, [
+          h("input", { type: "checkbox", checked: on.has(p.id), onchange: (e) => { if (e.target.checked) on.set(p.id, p.call === "수녀님" ? "수녀님" : "봉사자"); else on.delete(p.id); } }), h("span", { text: p.name && p.name !== p.call ? `${p.call} (${p.name})` : p.call })]))]) : null;
+      }).filter(Boolean));
+      const f = { alloc: num(r.alloc), thread: num(r.thread), cross: num(r.cross), sendThread: num(r.sendThread), sendCross: num(r.sendCross), sample: num(r.sample), done: num(r.done), loss: num(r.loss) };
+      const handler = h("input", { maxlength: "100", value: r.handler }), note = h("textarea", { rows: "2", maxlength: "500" }, r.matNote);
+      opsSheet(`${r.code ? `${r.code} · ` : ""}${r.org}`, [
+        opsHint(`${volDay(r.date)}${r.startTime ? ` ${r.startTime}` : ""} · 요청 ${qtyText(r.qty)}. 미지급은 배당 − 지급으로 계산하고, 보낼 수량과 다르면 '확인'에 표시해요.`),
+        h("div", { class: "row2" }, [field("교육 회차", code), field("진행상태", pr)]),
+        h("div", { class: "field" }, [h("span", { class: "field__label", text: `진행 봉사자 (${on.size}명)` }), d.roster.length ? pick : h("p", { class: "muted small", text: "먼저 '봉사자 명단'에 봉사자를 넣어 주세요." })]),
+        h("div", { class: "row2" }, [field("배당물량", f.alloc), field("담당 봉사자", handler)]),
+        h("div", { class: "row2" }, [field("자른실 지급", f.thread), field("십자가 지급", f.cross)]),
+        h("div", { class: "row2" }, [field("보낼 실 (기재)", f.sendThread), field("보낼 십자가 (기재)", f.sendCross)]),
+        h("div", { class: "row2" }, [field("샘플 묵주", f.sample), h("div", { class: "row2" }, [field("완성 묵주", f.done), field("로스", f.loss)])]),
+        field("출납 비고", note)
+      ], {
+        save: async () => {
+          const body = { code: code.value, progress: pr.value, handler: handler.value, matNote: note.value, helpers: [...on].map(([id, role]) => ({ id, role })) };
+          for (const [k, el] of Object.entries(f)) body[k] = el.value;
+          const x = await api(`/admin/vol-edu/${r.id}`, { method: "PATCH", body });
+          d.rows = d.rows.map((y) => (y.id === r.id ? x.row : y)); d.roster = x.roster; toast("저장했어요."); draw();
+        }
+      });
+    };
+    draw();
+    return h("div", { class: "stack" }, [opsHint("묵주 교육마다 진행상태·진행 봉사자·출납을 적어요. 줄을 누르면 고쳐요. 지금은 관리자만 봐요."), box]);
+  }
+  async function adminRoster() {
+    let d = await api("/admin/vol-roster"), kind = "";
+    const box = h("div", { class: "stack" });
+    const draw = () => {
+      const rows = d.roster.filter((r) => !kind || r.kind === kind);
+      const st = opsSel(Object.entries(ROSTER_KIND), kind, "모든 구분");
+      st.addEventListener("change", () => { kind = st.value; draw(); });
+      fill(box,
+        h("div", { class: "vm-stats" }, [vmStat("명단", d.roster.length), vmStat("묵주 만들기", d.roster.filter((r) => r.kind === "making").length), vmStat("실 자르기", d.roster.filter((r) => r.kind === "cutting").length), vmStat("계정 연결", d.roster.filter((r) => r.userId).length)]),
+        h("div", { class: "filters" }, [st, h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => edit(null) }, [icon("plus"), "봉사자 추가"])]),
+        rows.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
+          h("thead", {}, h("tr", {}, ["호칭", "이름", "구분", "소속", "계정", "진행완료", "진행예정", "첫 참여", "최근 참여"].map((t) => h("th", { text: t })))),
+          h("tbody", {}, rows.map((r) => h("tr", { class: "stock-row", tabindex: "0", onclick: () => edit(r), onkeydown: (e) => { if (e.key === "Enter") edit(r); } }, [
+            h("td", { class: "nowrap", text: r.call }), h("td", { class: "nowrap", text: r.name || "-" }), h("td", { class: "nowrap", text: ROSTER_KIND[r.kind] }), h("td", { text: r.affiliation || "-" }),
+            h("td", { class: "nowrap", text: r.userName || "-" }), h("td", { class: "num", text: fmtN(r.done) }), h("td", { class: "num", text: fmtN(r.planned) }),
+            h("td", { class: "nowrap", text: r.first ? shortDate(r.first) : "-" }), h("td", { class: "nowrap", text: r.last ? shortDate(r.last) : "-" })
+          ])))
+        ])) : h("div", { class: "card empty", text: "아직 명단이 없어요." }));
+    };
+    const edit = (r) => {
+      const call = h("input", { maxlength: "40", value: r?.call || "", placeholder: "일정표에 적는 이름 (예: 은희)" }), name = h("input", { maxlength: "40", value: r?.name || "" });
+      const k = opsSel(Object.entries(ROSTER_KIND), r?.kind || "making"), aff = h("input", { maxlength: "100", value: r?.affiliation || "", placeholder: "예: 서울대교구 ○○성당" });
+      const user = opsSel(d.users.map((u) => [u.id, u.name]), r?.userId ?? "", "계정 없음"), note = h("textarea", { rows: "2", maxlength: "300" }, r?.note || "");
+      opsSheet(r ? "봉사자 고치기" : "봉사자 추가", [
+        opsHint("세례명·연락처는 적지 않아요. 사이트 계정이 있는 봉사자는 계정을 골라 이어 주세요."),
+        h("div", { class: "row2" }, [field("호칭", call), field("이름", name)]), h("div", { class: "row2" }, [field("구분", k), field("계정 연결 (선택)", user)]), field("소속", aff), field("메모", note)
+      ], {
+        save: async () => { d = { ...d, ...(await api(r ? `/admin/vol-roster/${r.id}` : "/admin/vol-roster", { method: r ? "PATCH" : "POST", body: { call: call.value, name: name.value, kind: k.value, affiliation: aff.value, userId: user.value || null, note: note.value } })) }; toast("저장했어요."); draw(); },
+        del: r ? async () => { if (!confirm(`'${r.call}'을(를) 명단에서 지울까요?`)) return false; d = { ...d, ...(await api(`/admin/vol-roster/${r.id}`, { method: "DELETE" })) }; toast("지웠어요."); draw(); } : null
+      });
+    };
+    draw();
+    return h("div", { class: "stack" }, [opsHint("교육을 진행하는 봉사자 명단이에요 (사이트 계정이 없어도 돼요). 진행 횟수는 '교육 기록'의 진행 봉사자로 세고, 합동 교육은 한 번으로 세요."), box]);
+  }
   async function opsDeadlines() {
     let d = await api("/ops/deadlines"), showPast = false;
     const box = h("div", { class: "vm" });
@@ -7909,12 +8007,12 @@
     document.title = `봉사자 관리 · ${TITLE}`;
     drawMini(null);
     setMain("volunteers", loading());
-    const tab = ["training", "stock", "records", "inspect", "team", "menu", "deadlines", "wbs"].includes(route().id) ? route().id : "schedule";
+    const tab = ["training", "stock", "records", "inspect", "team", "menu", "deadlines", "wbs", "edu", "roster"].includes(route().id) ? route().id : "schedule";
     let extraView = null; // 데드라인 일정 · 묵주 WBS 탭 (비동기로 그린 화면)
     let teamData = null; // 팀 봉사자 탭: { issues, docs, orgs }
     const ins = inspModule("/admin", () => draw(), "검수할 때마다 한 줄씩 적고, 거른 기록을 업체 클레임 근거로 CSV·인쇄로 내보내요. 샘플링이면 불량률은 샘플 수 기준이에요. 팀 봉사자가 적은 기록도 여기에 함께 보여요.");
     let vols = [], schedules = [], trainings = [], stockMoves = [], volRecords = [], volMenuSet = null;
-    const seg = h("div", { class: "seg", role: "tablist" }, [["schedule", "일정"], ["training", "기본 교육"], ["stock", "입출고 입력"], ["records", "완제품 기록"], ["inspect", "검수 관리"], ["team", "팀 봉사자"], ["deadlines", "데드라인 일정"], ["wbs", "묵주 WBS"], ["menu", "메뉴 공개"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "schedule" ? "#/volunteers" : `#/volunteers/${k}`) })));
+    const seg = h("div", { class: "seg", role: "tablist" }, [["schedule", "일정"], ["edu", "교육 기록"], ["roster", "봉사자 명단"], ["training", "기본 교육"], ["stock", "입출고 입력"], ["records", "완제품 기록"], ["inspect", "검수 관리"], ["team", "팀 봉사자"], ["deadlines", "데드라인 일정"], ["wbs", "묵주 WBS"], ["menu", "메뉴 공개"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "schedule" ? "#/volunteers" : `#/volunteers/${k}`) })));
     const dateAndTime = (date, start, end) => h("div", { class: "row2" }, [field("날짜", date), h("div", { class: "row2" }, [field("시작", start), end ? field("끝", end) : h("span")])]);
     const saveForm = (form, ok, err, send) => form.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -8032,10 +8130,10 @@
         h("div", { class: "page-head" }, [
           h("h1", { text: "봉사자 관리" }),
           h("span", { class: "actions vol-preview-btns" }, [h("button", { class: "btn btn--ghost btn--sm", type: "button", title: "관리자 계정으로 부서 봉사자 화면(단계형 메뉴)을 미리 봐요", onclick: () => startVolPreview("dept") }, "부서 봉사자 화면 미리보기"), h("button", { class: "btn btn--ghost btn--sm", type: "button", title: "관리자 계정으로 팀 봉사자 화면(단계형 메뉴)을 미리 봐요", onclick: () => startVolPreview("team") }, "팀 봉사자 화면 미리보기")]),
-          tab === "inspect" ? h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => ins.dialog(null) }, [icon("plus"), "검수 기록"]) : ["stock", "records", "menu", "team", "deadlines", "wbs"].includes(tab) ? null : h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => (tab === "training" ? trainingDialog() : scheduleDialog()) }, [icon("plus"), tab === "training" ? "교육 등록" : "일정 등록"])
+          tab === "inspect" ? h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => ins.dialog(null) }, [icon("plus"), "검수 기록"]) : ["stock", "records", "menu", "team", "deadlines", "wbs", "edu", "roster"].includes(tab) ? null : h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => (tab === "training" ? trainingDialog() : scheduleDialog()) }, [icon("plus"), tab === "training" ? "교육 등록" : "일정 등록"])
         ]),
         h("div", { class: "filters" }, [seg, h("span", { class: "muted small", text: `봉사자 ${vols.length}명` })]),
-        tab === "deadlines" || tab === "wbs" ? extraView : tab === "inspect" ? ins.view() : tab === "team" ? teamAdminView() : tab === "stock" ? stockView : tab === "records" ? recView : tab === "menu" ? menuView : tab === "training" ? trainingView : scheduleView
+        ["deadlines", "wbs", "edu", "roster"].includes(tab) ? extraView : tab === "inspect" ? ins.view() : tab === "team" ? teamAdminView() : tab === "stock" ? stockView : tab === "records" ? recView : tab === "menu" ? menuView : tab === "training" ? trainingView : scheduleView
       ]);
     };
     // ---- 팀 봉사자(교육·검수): 이슈 처리 · 자료실 · 수도회 연락처 (관리자만)
@@ -8093,6 +8191,8 @@
       if (tab === "inspect") await ins.load();
       if (tab === "deadlines") extraView = h("div", { class: "stack" }, await opsDeadlines());
       if (tab === "wbs") extraView = await adminWbs();
+      if (tab === "edu") extraView = await adminRosaryEdu();
+      if (tab === "roster") extraView = await adminRoster();
       if (tab === "team") { const [i, d, o] = await Promise.all([api("/team/issues"), api("/team/docs"), api("/team/orgs")]); teamData = { issues: i.issues, docs: d.docs, orgs: o.orgs }; }
       draw();
     } };
