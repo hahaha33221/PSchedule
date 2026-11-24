@@ -445,7 +445,7 @@ jobs:
           J="{\"itemId\":$CG,\"kind\":\"x\",\"date\":\"2030-03-01\",\"qty\":1}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d "$J" $B/volunteer/records)" = 400
           curl -fs -H "$VH" -XPOST -d "{\"itemId\":$CG,\"kind\":\"recovery\",\"date\":\"2030-03-01\",\"name\":\"성당\",\"qty\":7}" $B/volunteer/records | grep -q '"qty":7'
           # 완제품 단계(입고·검수완료·패키징완료·출고): 단계마다 저장, 잘못된 단계는 거절, 직원 현황에 단계별 합계
-          J="{\"itemId\":$CG,\"kind\":\"recovery\",\"stage\":\"packed\",\"date\":\"2030-03-02\",\"qty\":5}"; curl -fs -H "$VH" -XPOST -d "$J" $B/volunteer/records | node -e 'const r=JSON.parse(require("fs").readFileSync(0)).records;if(!r.some(x=>x.stage==="packed"&&x.qty===5)||!r.some(x=>x.stage==="in"&&x.qty===7))process.exit(1)'
+          J="{\"itemId\":$CG,\"kind\":\"recovery\",\"stage\":\"packed\",\"date\":\"2030-03-02\",\"qty\":5}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d "$J" $B/volunteer/records)" = 409; J="${J%\}},\"confirmed\":true}"; curl -fs -H "$VH" -XPOST -d "$J" $B/volunteer/records | node -e 'const r=JSON.parse(require("fs").readFileSync(0)).records;if(!r.some(x=>x.stage==="packed"&&x.qty===5)||!r.some(x=>x.stage==="in"&&x.qty===7))process.exit(1)'
           J="{\"itemId\":$CG,\"kind\":\"recovery\",\"stage\":\"sold\",\"date\":\"2030-03-02\",\"qty\":1}"; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d "$J" $B/volunteer/records)" = 400
           # 관리자 미리보기: 관리자는 봉사자 화면 API 를 씀, 직원은 여전히 막힘
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" "$B/volunteer/records?item=$VG&kind=material")" = 200
@@ -998,6 +998,103 @@ jobs:
           test "$(CODE -H "$H" -XDELETE $B/stock-moves/$PM)" = 400; test "$(CODE -H "$H" -XPATCH -d '{"qty":{"'$SOPT'":1}}' $B/stock-moves/$PM)" = 400; test "$(CODE -H "$H" -XPATCH -d '{"date":"2030-01-01"}' $B/stock-moves/$PM)" = 400
           test "$(CODE -H "$H" -XPATCH -d '{"issue":"박스 파손","inspectBad":1}' $B/stock-moves/$PM)" = 200; test "$(CODE -H "$H" -XPOST -d "{\"data\":\"$PNG\"}" $B/stock-moves/$PM/photos)" = 201
           test "$(SQ)" = "$Q4"
+          # ---- 나머지 CRUD: 상태 따라가기 · 고치기·지우기 · 잘못 입력 (TH 리더, T2 팀 봉사자, VH 부서)
+          # C. 교육을 예정으로 되돌리면 교육완료→등록, 직접 회수를 적으면 회수완료·지우면 되돌림, 손으로 정한 제작 중은 그대로
+          C1=$(EDU "상태 하나" 2030-10-01); CM=$(ORG $C1 monasteryId)
+          curl -fs -H "$T2" -XPATCH -d '{"status":"done","statusFrom":"plan"}' $B/team/orgs/$C1 >/dev/null; test "$(MON $CM status)" = edu_done
+          curl -fs -H "$T2" -XPATCH -d '{"status":"plan","statusFrom":"done"}' $B/team/orgs/$C1 >/dev/null; test "$(MON $CM status)" = new
+          NEWREC() { curl -fs -H "$T2" -XPOST -d '{"scheduleId":'$C1',"date":"2030-10-02","qty":5,"method":"visit"}' $B/team/recovery | JQ 'console.log(d.records.find(r=>r.scheduleId==='$C1').id)'; }
+          CR=$(NEWREC); test "$(MON $CM status)" = recovered; curl -fs -H "$T2" -XDELETE $B/team/recovery/$CR >/dev/null; test "$(MON $CM status)" = new
+          for ST2 in making issue; do
+            curl -fs -H "$H" -XPATCH -d '{"status":"'$ST2'","issueNote":"문제"}' $B/ops/monasteries/$CM >/dev/null
+            CR=$(NEWREC); test "$(MON $CM status)" = $ST2; curl -fs -H "$T2" -XDELETE $B/team/recovery/$CR >/dev/null; test "$(MON $CM status)" = $ST2
+            curl -fs -H "$H" -XPATCH -d '{"progress":"done"}' $B/admin/vol-edu/$C1 >/dev/null; curl -fs -H "$H" -XPATCH -d '{"progress":"planned"}' $B/admin/vol-edu/$C1 >/dev/null; test "$(MON $CM status)" = $ST2
+          done
+          curl -fs -H "$H" -XPATCH -d '{"status":"new"}' $B/ops/monasteries/$CM >/dev/null
+          # A1. 교육 날짜를 비우면 미정, 그날 필요 인원·신청이 있으면 먼저 확인
+          curl -fs -H "$TH" -XPUT -d '{"date":"2030-10-01","need":2}' $B/team/day-need >/dev/null
+          test "$(CODE -H "$T2" -XPATCH -d '{"date":""}' $B/team/orgs/$C1)" = 409; BODY 'if(d.confirm.mode!=="check"||!/필요 인원 2명/.test(d.confirm.lines[0]))process.exit(1)'
+          test "$(ORG $C1 tableOnly)" = false; curl -fs -H "$T2" -XPATCH -d '{"date":"","confirmed":true}' $B/team/orgs/$C1 >/dev/null; test "$(ORG $C1 tableOnly)" = true
+          test "$(CODE -H "$T2" -XPATCH -d '{"date":"2030-13-01"}' $B/team/orgs/$C1)" = 400; curl -fs -H "$T2" -XPATCH -d '{"date":"2030-10-01","startTime":"10:00"}' $B/team/orgs/$C1 >/dev/null; test "$(ORG $C1 tableOnly)/$(ORG $C1 startTime)" = "false/10:00"
+          curl -fs -H "$TH" -XPUT -d '{"date":"2030-10-01","need":0}' $B/team/day-need >/dev/null
+          # A2. 문의 고치기(답 적기)·지우기 (지우기는 적은 사람·관리자)
+          curl -fs -H "$TH" -XPOST -d '{"date":"2030-10-01","question":"문의"}' $B/team/orgs/$C1/inquiries >/dev/null
+          IQ=$(curl -fs -H "$T2" $B/team/orgs/$C1/inquiries | JQ 'if(d.inquiries[0].canDelete)process.exit(1);console.log(d.inquiries[0].id)')
+          curl -fs -H "$T2" -XPATCH -d '{"answer":"나중 답","done":true}' $B/team/inquiries/$IQ >/dev/null; curl -fs -H "$TH" $B/team/orgs/$C1/inquiries | JQ 'const x=d.inquiries[0];if(x.answer!=="나중 답"||!x.done||!x.canDelete)process.exit(1)'
+          test "$(CODE -H "$T2" -XDELETE $B/team/inquiries/$IQ)" = 403; curl -fs -H "$TH" -XDELETE $B/team/inquiries/$IQ >/dev/null
+          # A3·B. 물량 배정: 리더가 수량·예정일·메모를 고침, 같은 조에 같은 물량을 두 번이면 확인
+          curl -fs -H "$TH" -XPOST -d '{"scheduleId":'$C1',"qty":5}' $B/ops/groups/$GR/assigns >/dev/null
+          test "$(CODE -H "$TH" -XPOST -d '{"scheduleId":'$C1',"qty":5}' $B/ops/groups/$GR/assigns)" = 409; test "$(CODE -H "$TH" -XPOST -d '{"scheduleId":'$C1',"qty":5,"confirmed":true}' $B/ops/groups/$GR/assigns)" = 201
+          for AX in $(curl -fs -H "$TH" $B/ops/groups | JQ 'console.log(d.groups.find(g=>g.id==='$GR').assigns.filter(a=>a.scheduleId==='$C1').map(a=>a.id).join(" "))'); do
+            test "$(CODE -H "$T2" -XPATCH -d '{"qty":9}' $B/ops/assigns/$AX)" = 403
+            curl -fs -H "$TH" -XPATCH -d '{"qty":9,"dueDate":"2030-10-09","note":"급함"}' $B/ops/assigns/$AX | JQ 'const a=d.groups.flatMap(g=>g.assigns).find(x=>x.id==='$AX');if(a.qty!==9||a.dueDate!=="2030-10-09"||a.note!=="급함")process.exit(1)'
+            curl -fs -H "$TH" -XDELETE $B/ops/assigns/$AX >/dev/null
+          done
+          # A4·B. 봉사일: 만든 사람·리더·관리자만 고치고 지움, 지난 날짜·정원 초과 막음, 이미 넘친 신청은 그대로
+          SHX() { curl -fs -H "$T2" $B/team/shifts | JQ 'console.log(d.shifts.find(s=>s.date==="2030-10-03").id)'; }
+          curl -fs -H "$T2" -XPOST -d '{"date":"2030-10-03","need":2}' $B/team/shifts >/dev/null; S1=$(SHX)
+          test "$(CODE -H "$T2" -XPOST -d '{"date":"2020-01-01","need":2}' $B/team/shifts)" = 400
+          curl -fs -H "$TH" -XPATCH -d '{"date":"2030-10-03","startTime":"09:30","need":2,"note":"고침"}' $B/team/shifts/$S1 | JQ 'const s=d.shifts.find(x=>x.id==='$S1');if(s.startTime!=="09:30"||!s.canEdit)process.exit(1)'
+          test "$(CODE -H "$T2" -XPATCH -d '{"date":"2020-01-01","need":2}' $B/team/shifts/$S1)" = 400
+          curl -fs -H "$TH" -XPOST -d '{"on":true}' $B/team/shifts/$S1/signup >/dev/null; curl -fs -H "$T2" -XPOST -d '{"on":true}' $B/team/shifts/$S1/signup >/dev/null
+          curl -fs -H "$T2" -XPATCH -d '{"date":"2030-10-03","need":1}' $B/team/shifts/$S1 | JQ 'if(d.shifts.find(x=>x.id==='$S1').people.length!==2)process.exit(1)'
+          curl -fs -H "$T2" -XPOST -d '{"on":false}' $B/team/shifts/$S1/signup >/dev/null; test "$(CODE -H "$T2" -XPOST -d '{"on":true}' $B/team/shifts/$S1/signup)" = 400
+          curl -fs -H "$TH" -XDELETE $B/team/shifts/$S1 >/dev/null; curl -fs -H "$TH" -XPOST -d '{"date":"2030-10-03","need":1}' $B/team/shifts >/dev/null; S1=$(SHX)
+          test "$(CODE -H "$T2" -XPATCH -d '{"date":"2030-10-03","need":3}' $B/team/shifts/$S1)" = 403; test "$(CODE -H "$T2" -XDELETE $B/team/shifts/$S1)" = 403; curl -fs -H "$H" -XDELETE $B/team/shifts/$S1 >/dev/null
+          # A5·B. 완제품 기록: 관리자도 고치고 지움, 부서 봉사자끼리는 자기 것만, 뒤 단계가 앞 단계보다 많아지면 확인, 다른 칸만 고치면 안 물어봄
+          RECN() { curl -fs -H "$H" "$B/volunteer/records?item=$CG&kind=recovery" | JQ 'console.log(d.records.filter(r=>r.stage==="'$1'").map(r=>r.id)[0])'; }
+          RIN=$(RECN in); RPK=$(RECN packed)
+          test "$(CODE -H "$VH" -XPATCH -d '{"date":"2030-03-03","qty":5,"stage":"packed","note":"메모만"}' $B/volunteer/records/$RPK)" = 200
+          test "$(CODE -H "$VH" -XPATCH -d '{"date":"2030-03-03","qty":6,"stage":"packed"}' $B/volunteer/records/$RPK)" = 409
+          test "$(CODE -H "$H" -XPATCH -d '{"date":"2030-03-03","qty":4,"stage":"packed"}' $B/volunteer/records/$RPK)" = 200
+          test "$(CODE -H "$VH" -XPOST -d '{"itemId":'$CG',"kind":"recovery","stage":"checked","date":"2030-03-03","qty":4}' $B/volunteer/records)" = 201
+          test "$(CODE -H "$H" -XDELETE $B/volunteer/records/$RIN)" = 409; test "$(CODE -H "$H" -XDELETE "$B/volunteer/records/$RIN?confirmed=1")" = 200
+          # A6·B. 하루 기록: 적은 사람·리더·관리자만, 수량 빈 값 막음
+          curl -fs -H "$TH" -XPOST -d '{"date":"2030-10-04","qty":3}' $B/team/daily >/dev/null; DY=$(curl -fs -H "$T2" $B/team/daily | JQ 'const x=d.daily.find(y=>y.date==="2030-10-04");if(x.canEdit)process.exit(1);console.log(x.id)')
+          test "$(CODE -H "$T2" -XPATCH -d '{"date":"2030-10-04","qty":4}' $B/team/daily/$DY)" = 403; test "$(CODE -H "$T2" -XDELETE $B/team/daily/$DY)" = 403; curl -fs -H "$TH" -XDELETE $B/team/daily/$DY >/dev/null
+          for Q0 in '""' null; do test "$(CODE -H "$T2" -XPOST -d '{"date":"2030-10-05","qty":'$Q0'}' $B/team/daily)" = 400; done
+          curl -fs -H "$T2" -XPOST -d '{"date":"2030-10-05","qty":0}' $B/team/daily >/dev/null; DY=$(curl -fs -H "$TH" $B/team/daily | JQ 'console.log(d.daily.find(y=>y.date==="2030-10-05").id)')
+          test "$(CODE -H "$TH" -XPATCH -d '{"date":"2030-10-05","qty":2}' $B/team/daily/$DY)" = 200; test "$(CODE -H "$TH" -XDELETE $B/team/daily/$DY)" = 200
+          # A7. 연락 기록: 리더는 팀 봉사자가 적은 것을 고치고 지움, 부서 봉사자가 적은 것은 못 고침
+          CLOG() { curl -fs -H "$1" -XPOST -d '{"targetType":"etc","targetName":"'$2'","date":"2030-10-06","content":"내용"}' $B/ops/contacts | JQ 'console.log(d.logs.find(x=>x.target==="'$2'").id)'; }
+          K1=$(CLOG "$T2" 팀기록); K2=$(CLOG "$VH" 부서기록)
+          curl -fs -H "$TH" $B/ops/contacts | JQ 'if(!d.logs.find(x=>x.id==='$K1').canEdit||d.logs.find(x=>x.id==='$K2').canEdit)process.exit(1)'
+          test "$(CODE -H "$TH" -XPATCH -d '{"content":"고침"}' $B/ops/contacts/$K1)" = 200; test "$(CODE -H "$TH" -XPATCH -d '{"content":"고침"}' $B/ops/contacts/$K2)" = 403; test "$(CODE -H "$TH" -XDELETE $B/ops/contacts/$K2)" = 403
+          test "$(CODE -H "$TH" -XDELETE $B/ops/contacts/$K1)" = 200; test "$(CODE -H "$VH" -XDELETE $B/ops/contacts/$K2)" = 200
+          # A8. 이슈 사진 지우기(올린 사람·관리자), 처리 시작 뒤 이슈 지우기는 관리자만
+          IX=$(curl -fs -H "$T2" -XPOST -d '{"title":"사진 이슈"}' $B/team/issues | JQ 'console.log(d.id)'); IXP=$(curl -fs -H "$T2" -XPOST -d "{\"data\":\"$PNG\"}" $B/team/issues/$IX/photos | JQ 'console.log(d.issues.find(i=>i.id==='$IX').photos[0])')
+          test "$(CODE -H "$TH" -XDELETE $B/team/issue-photos/$IXP)" = 403; test "$(CODE -H "$T2" -XDELETE $B/team/issue-photos/$IXP)" = 200
+          curl -fs -H "$H" -XPATCH -d '{"status":"doing"}' $B/team/issues/$IX >/dev/null; test "$(CODE -H "$T2" -XDELETE $B/team/issues/$IX)" = 403; curl -fs -H "$H" -XDELETE $B/team/issues/$IX >/dev/null
+          # A9. 관리자 교육 기록: 추가, 날짜·시간·수도회 고치기(팀과 같은 규칙), 지우기(이어진 기록이 있으면 막음)
+          test "$(CODE -H "$TH" -XPOST -d '{"org":"x"}' $B/admin/vol-edu)" = 403
+          X9=$(curl -fs -H "$H" -XPOST -d '{"org":"기록 하나","date":"2030-10-10","startTime":"14:00","qty":7}' $B/admin/vol-edu | JQ 'const r=d.rows.find(x=>x.id===d.id);if(r.org!=="기록 하나"||r.startTime!=="14:00"||r.qty!==7)process.exit(1);console.log(d.id)')
+          curl -fs -H "$H" -XPATCH -d '{"date":"2030-10-11","startTime":"15:00"}' $B/admin/vol-edu/$X9 | JQ 'if(d.row.date!=="2030-10-11"||d.row.startTime!=="15:00")process.exit(1)'
+          curl -fs -H "$H" -XPATCH -d '{"date":""}' $B/admin/vol-edu/$X9 | JQ 'if(!d.row.tableOnly)process.exit(1)'; test "$(CODE -H "$H" -XPATCH -d '{"date":"x"}' $B/admin/vol-edu/$X9)" = 400
+          test "$(CODE -H "$H" -XPATCH -d '{"org":"상태 하나"}' $B/admin/vol-edu/$X9)" = 409; BODY 'if(d.confirm.mode!=="move")process.exit(1)'
+          curl -fs -H "$H" -XPATCH -d '{"org":"기록 둘","orgConfirm":"rename","alloc":3}' $B/admin/vol-edu/$X9 | JQ 'if(d.row.org!=="기록 둘"||d.row.alloc!==3||!d.rows)process.exit(1)'
+          XR=$(curl -fs -H "$T2" -XPOST -d '{"scheduleId":'$X9',"date":"2030-10-12","qty":1}' $B/team/recovery | JQ 'console.log(d.records.find(r=>r.scheduleId==='$X9').id)')
+          test "$(CODE -H "$H" -XDELETE $B/admin/vol-edu/$X9)" = 400; curl -fs -H "$T2" -XDELETE $B/team/recovery/$XR >/dev/null; curl -fs -H "$H" -XDELETE $B/admin/vol-edu/$X9 | JQ 'if(d.rows.some(r=>r.id==='$X9'))process.exit(1)'
+          # A10. 댓글은 쓴 사람만 고침 · A11. 택배를 지울 수 있는 사람에게만 canDelete
+          BP=$(curl -fs -H "$TH" -XPOST -d '{"title":"글","body":"본문","category":"free"}' $B/board | JQ 'console.log(d.id)'); BC=$(curl -fs -H "$T2" -XPOST -d '{"body":"댓글"}' $B/board/$BP/comments | JQ 'console.log(d.comments[0].id)')
+          test "$(CODE -H "$TH" -XPATCH -d '{"body":"x"}' $B/board-comments/$BC)" = 403; test "$(CODE -H "$H" -XPATCH -d '{"body":"x"}' $B/board-comments/$BC)" = 403; test "$(CODE -H "$T2" -XPATCH -d '{"body":" "}' $B/board-comments/$BC)" = 400
+          test "$(CODE -H "$T2" -XPATCH -d '{"body":"고친 댓글"}' $B/board-comments/$BC)" = 200; curl -fs -H "$TH" $B/board/$BP | JQ 'if(d.comments[0].body!=="고친 댓글")process.exit(1)'; curl -fs -H "$TH" -XDELETE $B/board/$BP >/dev/null
+          S11=$(curl -fs -H "$VH" -XPOST -d '{"direction":"in","partyType":"etc","partyName":"기타","status":"sent"}' $B/ops/shipments | JQ 'if(!d.shipments.find(s=>s.id===d.id).canDelete)process.exit(1);console.log(d.id)')
+          curl -fs -H "$TH" $B/ops/shipments | JQ 'if(d.shipments.some(s=>s.canDelete))process.exit(1)'; curl -fs -H "$VH" $B/ops/shipments | JQ 'if(d.shipments.some(s=>s.recoveryId&&s.canDelete))process.exit(1)'; curl -fs -H "$VH" -XDELETE $B/ops/shipments/$S11 >/dev/null
+          # B. 검수: 샘플 수·불량 합계가 많으면 막음(샘플 검수면 샘플 수 기준), 회수보다 많으면 확인, 이미 저장된 이상한 값은 다른 칸 고치기를 막지 않음
+          INS() { CODE -H "$T2" -X$1 -d "{\"itemId\":$VG,\"stage\":1,\"date\":\"2030-10-13\",$2}" $B/team/inspections$3; }
+          test "$(INS POST '"checkedQty":5,"defects":{"knot":6}')" = 400; test "$(INS POST '"checkedQty":5,"sampled":true,"sampleQty":6')" = 400; test "$(INS POST '"checkedQty":50,"sampled":true,"sampleQty":5,"defects":{"knot":6}')" = 400
+          test "$(INS POST '"checkedQty":50,"sampled":true,"sampleQty":5,"defects":{"knot":5}')" = 201; BI=$(BODY 'console.log(d.id)')
+          DATA=/tmp/ps/pschedule.db node --disable-warning=ExperimentalWarning -e 'const {DatabaseSync}=require("node:sqlite");new DatabaseSync(process.env.DATA).prepare("UPDATE inspections SET checked_qty = 3, sampled = 0, sample_qty = NULL WHERE id = ?").run('$BI')'
+          test "$(INS PATCH '"checkedQty":3,"defects":{"knot":5},"note":"메모만"' /$BI)" = 200; test "$(INS PATCH '"checkedQty":4,"defects":{"knot":5}' /$BI)" = 400; curl -fs -H "$T2" -XDELETE $B/team/inspections/$BI >/dev/null
+          CR=$(NEWREC); test "$(INS POST '"checkedQty":6,"recoveryId":'$CR)" = 409; BODY 'if(d.confirm.mode!=="check")process.exit(1)'; test "$(INS POST '"checkedQty":6,"confirmed":true,"recoveryId":'$CR)" = 201; BI=$(BODY 'console.log(d.id)')
+          test "$(INS PATCH '"checkedQty":6,"note":"메모만"' /$BI)" = 200; test "$(INS PATCH '"checkedQty":7' /$BI)" = 409; curl -fs -H "$T2" -XDELETE $B/team/inspections/$BI >/dev/null
+          # B. 위치 재고보다 많이 옮기기 막음, 이미 있는 이동의 날짜·메모 고치기는 됨
+          LQ=$(curl -fs -H "$H" $B/ops/stock | JQ 'console.log((d.ledgers.find(l=>l.id=='$SLI').options[0].byLoc.find(x=>x.locationId==='$LA')||{qty:0}).qty)')
+          test "$(CODE -H "$H" -XPOST -d '{"ledgerId":'$SLI',"optionId":'$SOPT',"qty":'$((LQ+1))',"fromLocationId":'$LA',"toLocationId":'$LB'}' $B/ops/stock/move)" = 400
+          test "$(CODE -H "$H" -XPOST -d '{"ledgerId":'$SLI',"optionId":'$SOPT',"qty":1,"fromLocationId":'$LA',"toLocationId":'$LB'}' $B/ops/stock/move)" = 201
+          MV9=$(curl -fs -H "$H" $B/ops/stock | JQ 'const m=d.moves.find(x=>x.refType==="move"&&x.type==="out");console.log(m.id)')
+          test "$(CODE -H "$H" -XPATCH -d '{"qty":1,"date":"2030-10-14","note":"메모"}' $B/ops/stock/moves/$MV9)" = 200; MV9=$(curl -fs -H "$H" $B/ops/stock | JQ 'const m=d.moves.find(x=>x.refType==="move"&&x.type==="out");console.log(m.id)')
+          test "$(CODE -H "$H" -XPATCH -d '{"qty":'$((LQ+1))',"date":"2030-10-14"}' $B/ops/stock/moves/$MV9)" = 400; test "$(CODE -H "$H" -XDELETE $B/ops/stock/moves/$MV9)" = 200
           curl -fs -H "$H" -XPATCH -d '{"role":"volunteer","volKinds":["dept"],"volLeader":false}' $B/admin/users/$(USR volb) >/dev/null
           curl -fs -H "$H" -XPATCH -d '{"volLeader":false}' $B/admin/users/$(USR teamv) >/dev/null
           curl -fs -H "$H" -XPUT -d '{"staffOn":false}' $B/ops/perms >/dev/null

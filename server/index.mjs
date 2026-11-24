@@ -2239,6 +2239,7 @@ function monasteriesOut(r) {
 }
 const nameOfUser = (id) => (id ? db.prepare("SELECT name FROM users WHERE id = ?").get(id)?.name || "" : "");
 function shipmentsOut(user) {
+  const canShip = !!user && opsRole(user).can("shipments", "e");
   return db.prepare(`SELECT x.*, m.name AS monastery, u.name AS party_user, e.name AS vendor, h.name AS handler, s.title AS schedule_title, c.name AS author,
       (SELECT id FROM team_recovery r WHERE r.shipment_id = x.id LIMIT 1) AS recovery_id
     FROM shipments x LEFT JOIN monasteries m ON m.id = x.monastery_id LEFT JOIN users u ON u.id = x.user_id LEFT JOIN external_contacts e ON e.id = x.external_contact_id
@@ -2247,7 +2248,7 @@ function shipmentsOut(user) {
     .map((x) => ({ id: x.id, direction: x.direction, partyType: x.party_type, monasteryId: x.monastery_id, userId: x.user_id, externalContactId: x.external_contact_id,
       party: x.monastery || x.party_user || x.vendor || x.party_name || "", partyName: x.party_name, address: x.address, carrier: x.carrier, trackingNo: x.tracking_no, contents: x.contents, qty: x.qty,
       status: x.status, sentDate: x.sent_date || "", arrivedDate: x.arrived_date || "", handlerId: x.handler_id, handler: x.handler || "", scheduleId: x.schedule_id,
-      schedule: x.schedule_title ? x.schedule_title.split(" · ").pop() : "", note: x.note, author: x.author || "", createdBy: x.created_by, recoveryId: x.recovery_id || null, canDelete: !!user && (user.role === "admin" || (x.created_by === user.id && !x.recovery_id)), updatedAt: x.updated_at }));
+      schedule: x.schedule_title ? x.schedule_title.split(" · ").pop() : "", note: x.note, author: x.author || "", createdBy: x.created_by, recoveryId: x.recovery_id || null, canDelete: canShip && (user.role === "admin" || (x.created_by === user.id && !x.recovery_id)), updatedAt: x.updated_at }));
 }
 // 택배를 받을 교육(방문 일정): 택배에 적힌 일정이 그 수도회 것이면 그것, 아니면 그 수도회의 가장 최근 교육
 function shipmentSchedule(sh) {
