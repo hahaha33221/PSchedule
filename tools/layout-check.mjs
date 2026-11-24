@@ -93,6 +93,13 @@ for (const [t, a, b] of [["[A501] 첫 회의 이름이 아주 길어서 잘려�
   ["[A603][가나다라마바사] 시험", "11:00", "12:00"], ["A604 앞에 적은 방", "", ""], ["괄호에 적은 방 (B204)", "12:00", "13:00"], ["[본관 아주긴이름의시험용건물 지하1층] 시험", "", ""], ["[커뮤회의실] 시험", "17:00", "18:00"], ["[경당] 시험", "", ""], ["[대회의실] 시험", "18:00", "21:30"], ["[읽지못하는아주긴표기이름의시험건물과사제관] 시험", "", ""]]) await rv(t, a || null, b || null);
 const cal = Number(db.prepare("INSERT INTO calendars (name, url, color) VALUES ('부재 알림', 'https://example.com/none.ics', 3)").run().lastInsertRowid);
 for (const [t, i] of [["[A302] 부재 시험", 1], ["[가나다] 부재 시험", 2]]) db.prepare("INSERT INTO calendar_events (calendar_id, uid, inst, title, start_date, end_date, start_time, end_time) VALUES (?, ?, 'x', ?, ?, ?, NULL, NULL)").run(cal, "u" + i, t, day(0), day(0));
+// 부재 0건(오늘+6)·5건(+1)·20건(+2): 종일·여러 날·시간 지정·여러 명·못 나누는 제목
+const abs = (d, i, t, o = {}) => db.prepare("INSERT INTO calendar_events (calendar_id, uid, inst, title, start_date, end_date, start_time, end_time) VALUES (?, ?, 'x', ?, ?, ?, ?, ?)").run(cal, `ab${d}-${i}`, t, day(d + (o.from || 0)), day(d + (o.to || 0)), o.a || null, o.b || null);
+for (const d of [1, 2]) for (let i = 0; i < (d === 1 ? 5 : 20); i++) {
+  if (i === 0) abs(d, i, "이재호_연차"); else if (i === 1) abs(d, i, "시험가나, 시험다라, 시험마바, 시험사아, 시험자차, 시험카타_오후 반반차", { a: "21:00", b: "23:00" });
+  else if (i === 2) abs(d, i, "Fr. 시험파하 휴가", { from: 0, to: 0 }); else if (i === 3) abs(d, i, "[시험]나눌 수 없는 아주 긴 제목의 부재 알림 한 줄-어디어디 다녀옴(09~18)"); else abs(d, i, `시험사람${"가나다라"[i % 4]}_오전반차`, i === 4 ? { a: "06:00", b: "08:00" } : {});
+}
+db.prepare("UPDATE calendar_events SET start_date = ?, end_date = ? WHERE uid = 'ab2-2'").run(day(2), day(4));
 // 수정된 일정: 수정됨·날짜 바뀜, 시간 겹침과 함께, 옮김·취소 줄
 const evs = (await call(`/events?from=${day(0)}&to=${day(0)}`)).events, evId = (t) => evs.find((e) => e.title.includes(t)).id;
 await call(`/events/${evId("두 번째 시험")}`, "PATCH", { location: "본관 5층" });
@@ -117,7 +124,7 @@ const setMenu = (steps) => call("/admin/vol-menu", "PUT", { menu: ["home", "sche
 const TEAM = ["thome", "alerts", "tcal", "tedu1", "tedu2", "tmake1", "tmake2", "tins1", "tins2", "tins3", "tins4", "tins5", "vschedule", "tissues", "vboard", `vboard/${bp}`, "vnotices", "vcontacts"];
 const DEPT = ["vhome", "alerts", "dr1", "dr2", "ds1", "ds2", "ds3", "df1", "df2", "vcontacts", "vtraining", "vissues", "vboard", "vnotices"];
 const OPS = ["dash", "mon", "ship-in", "ship-out", "stock", "cut", "buy", "contacts", "groups", "criteria", "duties"].map((k) => `ops/${k}`);
-const STAFF = ["today", `today/${day(1)}`, "dashboard", "tasks", "meetings", "memos", "projects", `projects/${pj}`, "stock", `stock/${led.ledger.id}`, "alerts", "notices", "orgchart", "contacts"];
+const STAFF = ["today", `today/${day(1)}`, `today/${day(2)}`, `today/${day(6)}`, "dashboard", "tasks", "meetings", "memos", "projects", `projects/${pj}`, "stock", `stock/${led.ledger.id}`, "alerts", "notices", "orgchart", "contacts"];
 const RUNS = [
   ["leader", true, TEAM], ["team", true, ["tedu1", "tedu2", "tmake2", "tins1"]], ["dept", true, DEPT],
   ["admin", true, ["alerts", "members", "org", "backup", "board", "volunteers", ...["edu", "roster", "training", "stock", "records", "inspect", "team", "wbs", "menu"].map((k) => `volunteers/${k}`), ...OPS, "ops/perms", ...STAFF.slice(0, 9)]],

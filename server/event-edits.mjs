@@ -52,6 +52,8 @@ export function addEventEditTables(db) {
     CREATE INDEX IF NOT EXISTS event_edits_at ON event_edits (at);`);
   // 마지막으로 견준 주소 표시(주소 자체는 아님). 비었거나 다르면 다음 읽기는 조용히 기준만 잡음
   if (!has("calendars", "edit_base")) db.exec("ALTER TABLE calendars ADD COLUMN edit_base TEXT");
+  // 부재 캘린더: NULL 이름으로 정함('부재'가 들어가면) · 1 부재 · 0 아님
+  if (!has("calendars", "absence")) db.exec("ALTER TABLE calendars ADD COLUMN absence INTEGER");
   // 0 단발 · 1 반복 · 2 이어 볼 수 없음(UID 없음)
   if (!has("calendar_events", "recur")) db.exec("ALTER TABLE calendar_events ADD COLUMN recur INTEGER NOT NULL DEFAULT 0");
 }

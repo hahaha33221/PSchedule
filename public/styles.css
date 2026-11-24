@@ -2317,3 +2317,18 @@ tr.is-flash { animation: none; outline: 3px solid var(--primary, #2f6fed); outli
 .tl-moved__title { min-width: 0; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; text-align: left; overflow-wrap: anywhere; }
 button.tl-moved__title { cursor: pointer; }
 .tl__ev.is-short:has(.edit-tag) .tl__meta { flex-wrap: nowrap; overflow: hidden; min-width: 0; white-space: nowrap; }
+
+/* 부재 알림 (이름으로 모아 보기) */
+:root { --away: #0b7285; --away-soft: #d8f3f8; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --away: #99e9f2; --away-soft: #14404a; } }
+:root[data-theme="dark"] { --away: #99e9f2; --away-soft: #14404a; }
+.today-find__row--absence { --fk: var(--away); background: color-mix(in srgb, var(--away-soft) 55%, var(--surface)); }
+.today-find__kind.is-absence { background: var(--away-soft); color: var(--away); font-weight: 700; }
+.today-away { padding: 10px; border: 1px solid var(--line-2); border-left: 3px solid var(--away); border-radius: 12px; background: var(--surface-2); }
+.today-away h3 { margin: 0 0 6px; font-size: 13.5px; }
+.today-away p { margin: 0; }
+.today-away__list { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 4px 12px; }
+.today-away__row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; width: 100%; min-height: 34px; padding: 4px 8px; border: 0; border-radius: 8px; background: var(--surface); color: var(--ink); font: inherit; font-size: 13.5px; text-align: left; cursor: pointer; }
+.today-away__row:hover, .today-away__row.is-peeked { background: var(--away-soft); }
+.today-away .today-find__title { font-size: 13.5px; }
+.today-away .today-find__time { flex: 0 1 auto; min-width: 0; }

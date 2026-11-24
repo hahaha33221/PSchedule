@@ -52,6 +52,9 @@ jobs:
       - name: 수정된 일정 표시 검사
         run: node --disable-warning=ExperimentalWarning tools/edits-test.mjs
 
+      - name: 부재 제목 검사
+        run: node tools/absence-test.mjs
+
       - name: API 서버 동작 확인
         run: |
           mkdir -p /tmp/ps
@@ -590,6 +593,32 @@ jobs:
           curl -fs -H "$H" -XDELETE $B/events/$ED >/dev/null
           curl -fs -H "$H" "$B/events?from=2031-03-05&to=2031-03-05" | node -e 'const m=JSON.parse(require("fs").readFileSync(0)).moved;if(m.length!==1||m[0].what!=="gone"||m[0].id!==null)process.exit(1)'
           curl -fs -H "$(bearer "$A1")" "$B/events?from=2031-03-05&to=2031-03-05" | node -e 'if(JSON.parse(require("fs").readFileSync(0)).moved.length)process.exit(1)'
+          # 부재 알림: 이름에 '부재'가 든 캘린더는 그대로 부재. 그날·여러 날·시간 지정만, 검색어와 상관없이 모두, 소속이 다르면 안 보임, 제외어·켜고 끄기, 설명은 안 나감
+          SQ() { node --disable-warning=ExperimentalWarning -e 'const {DatabaseSync}=require("node:sqlite");console.log(Number(new DatabaseSync(process.argv[1]).prepare(process.argv[2]).run().lastInsertRowid))' /tmp/ps/pschedule.db "$1"; }
+          AB=$(SQ "INSERT INTO calendars (name, url) VALUES ('시험 부재', 'https://example.com/ab.ics')")
+          AR() { SQ "INSERT INTO calendar_events (calendar_id, uid, inst, title, start_date, end_date, start_time, end_time, description) VALUES ($AB, '$1', 'x', '$2', '$3', '$4', $5, '개인 사유')" >/dev/null; }
+          AR a1 권구택_연차 2032-05-03 2032-05-03 NULL,NULL; AR a2 '김시험, 박견본_휴가' 2032-05-01 2032-05-05 NULL,NULL; AR a3 이예시_오후반차 2032-05-03 2032-05-03 "'13:00','18:00'"; AR a4 최보기_연차 2032-05-04 2032-05-04 NULL,NULL; AR a5 '알 수 없는 꼴 5월' 2032-05-03 2032-05-03 NULL,NULL
+          AE=$(curl -fs -H "$H" -XPOST -d '{"title":"권구택 회의","startDate":"2032-05-03","startTime":"13:00","endTime":"15:00"}' $B/events | node -pe 'JSON.parse(require("fs").readFileSync(0)).event.id')
+          TS() { curl -fs -H "$1" "$B/today-search?date=$2"; }
+          TS "$H" 2032-05-03 | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const a=d.absences,t=a.results.map(x=>x.title).join("|");if(!a.on||a.results.length!==4||t.includes("최보기")||a.excluded)process.exit(1);const f=(n)=>a.results.find(x=>x.title.includes(n));if(f("김시험").who!=="김시험, 박견본"||f("김시험").why!=="휴가"||f("이예시").time!=="13:00"||f("알 수").who||JSON.stringify(a).includes("사유")||"location" in a.results[0])process.exit(1);const g=d.groups.find(x=>x.keyword==="권구택").results;if(g.length!==2||!g.find(x=>x.title==="권구택_연차").absence||g.find(x=>x.title==="권구택 회의").absence)process.exit(1)'
+          TS "$H" 2032-05-04 | node -e 'const a=JSON.parse(require("fs").readFileSync(0)).absences.results;if(a.length!==2||!a.some(x=>x.who==="최보기"))process.exit(1)'
+          TS "$H" 2032-05-06 | node -e 'const a=JSON.parse(require("fs").readFileSync(0)).absences;if(!a.on||a.results.length)process.exit(1)'
+          curl -fs -H "$H" -XPUT -d '{"excludes":["권구택"]}' $B/today-keywords >/dev/null
+          TS "$H" 2032-05-03 | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.absences.results.length!==3||d.absences.excluded!==1||d.groups.find(x=>x.keyword==="권구택").excludedAbsences!==1)process.exit(1)'
+          curl -fs -H "$H" -XPUT -d '{"excludes":[]}' $B/today-keywords >/dev/null
+          TS "$(bearer "$A2")" 2032-05-03 | node -e 'if(JSON.parse(require("fs").readFileSync(0)).absences.results.length!==4)process.exit(1)'
+          curl -fs -H "$H" -XPATCH -d "{\"unitId\":$FB}" $B/admin/calendars/$AB >/dev/null
+          TS "$(bearer "$A2")" 2032-05-03 | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.absences.results.length||d.groups.some(g=>g.results.some(x=>x.absence)))process.exit(1)'
+          TS "$(bearer "$A1")" 2032-05-03 | node -e 'if(JSON.parse(require("fs").readFileSync(0)).absences.results.length!==4)process.exit(1)'
+          curl -fs -H "$H" $B/me | node -e 'const c=JSON.parse(require("fs").readFileSync(0)).calendars;if(!c.find(x=>x.id==='$AB').absence||c.some(x=>x.name==="WYD"&&x.absence))process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPATCH -d '{"absence":"예"}' $B/admin/calendars/$AB)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPATCH -d '{"absence":false}' $B/admin/calendars/$AB)" = 403
+          curl -fs -H "$H" -XPATCH -d '{"absence":false}' $B/admin/calendars/$AB | grep -q '"absence":false,"absenceSet":false'
+          TS "$H" 2032-05-03 | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.absences.on||d.absences.results.length||!d.groups.find(x=>x.keyword==="권구택").results.some(x=>x.title==="권구택_연차"&&!x.absence))process.exit(1)'
+          curl -fs -H "$H" -XPATCH -d '{"name":"다른 이름","absence":true}' $B/admin/calendars/$AB | grep -q '"absence":true,"absenceSet":true'
+          TS "$H" 2032-05-03 | node -e 'if(JSON.parse(require("fs").readFileSync(0)).absences.results.length!==4)process.exit(1)'
+          curl -fs -H "$H" -XPATCH -d '{"absence":null}' $B/admin/calendars/$AB | grep -q '"absence":false,"absenceSet":null'
+          curl -fs -H "$H" -XDELETE $B/admin/calendars/$AB; curl -fs -H "$H" -XDELETE $B/events/$AE
           # 방 별명과 '회의실 아님': 두 줄에 같은 표기는 거절, skip 을 안 보내면 그대로, 봉사자에게는 안 나감, 표기 하나씩도 관리자만
           curl -fs -H "$H" -XPUT -d '{"rooms":["A604호"," A4 소회의실 =A4소, 4A소,, A4소 ,4층 소회의실"],"skip":["A4소","가나다"," 가 나다 "]}' $B/admin/rooms | grep -qF '"rooms":["A604호","A4 소회의실 = A4소, 4A소, 4층 소회의실"],"skip":["가나다"]'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"rooms":["A604호","A4 소회의실 = A 604호"]}' $B/admin/rooms)" = 400

@@ -1984,7 +1984,9 @@
           h("div", { class: "swatches swatches--sm" }, COLOR_NAMES.map((cn, i) => h("button", { class: `swatch c${i}`, type: "button", "aria-label": cn, "aria-pressed": String(c.color === i), onclick: () => patch(c, { color: i }) }))),
           categoryButton(c.categoryId, (id) => patch(c, { categoryId: id }), "select-btn calman__cat"),
           (() => { const b = h("button", { class: "select-btn calman__cat", type: "button", title: "이 캘린더를 쓰는 소속 (소속 화면·'우리 소속'에 반영)" }, c.unitId && unitOf(c.unitId) ? [icon("org"), h("span", { text: unitShort(c.unitId) })] : h("span", { class: "muted", text: "소속 고르기" }));
-            b.addEventListener("click", () => unitPicker(b, c.unitId, (id) => patch(c, { unitId: id }))); return b; })()
+            b.addEventListener("click", () => unitPicker(b, c.unitId, (id) => patch(c, { unitId: id }))); return b; })(),
+          (() => { const x = h("input", { type: "checkbox", checked: c.absence }); x.addEventListener("change", () => quiet(patch(c, { absence: x.checked })));
+            return h("label", { class: "check small", title: "켜면 '이름으로 모아 보기'의 부재 알림에 나오고, 회의실·취소됨 표시에서는 빠져요" }, [x, h("span", { text: `부재 캘린더${c.absenceSet == null && c.absence ? " (이름으로 정함)" : ""}` })]); })()
         ]),
         status(c)
       ])) : [h("p", { class: "muted small", text: "아직 연결한 캘린더가 없어요." })]));
@@ -2090,10 +2092,14 @@
     const memoList = h("div", { class: "today-memos__list" });
     const memoBox = h("div", { class: "card today-memos" }, [h("h2", { class: "card__title", text: "메모" }), quickMemo(day), memoList]);
     // 이름(검색어)마다 시간이 겹치는 일정: 겹치는 것끼리 맨 위로 모으고 '시간 겹침' 표시
-    // 끝 시간이 없으면 30분짜리로 봄. 종일 일정·할 일·메모는 시간이 없어 비교하지 않음
+    // 끝 시간이 없으면 30분짜리로 봄. 종일 일정·할 일·메모는 시간이 없어 비교하지 않음. 부재는 회의가 아니라 비교하지 않고 맨 위로
     const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ""); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
-    function withClashes(results) {
-      const timed = results.map((x, i) => { const a = toMin(x.time); if (a == null || x.type === "task" || x.type === "memo") return null; const e = toMin(x.endTime); return { i, a, b: e != null && e > a ? e : a + 30 }; }).filter(Boolean);
+    function withClashes(all) {
+      const off = all.filter((x) => x.absence), r = clashesOf(all.filter((x) => !x.absence));
+      return { list: [...off, ...r.list], clashes: r.clashes };
+    }
+    function clashesOf(results) {
+      const timed = results.map((x, i) => { const a = toMin(x.time); if (a == null || x.absence || x.type === "task" || x.type === "memo") return null; const e = toMin(x.endTime); return { i, a, b: e != null && e > a ? e : a + 30 }; }).filter(Boolean);
       const hit = new Map();
       for (const p of timed) for (const o of timed) if (p.i !== o.i && p.a < o.b && o.a < p.b) { if (!hit.has(p.i)) hit.set(p.i, []); hit.get(p.i).push(results[o.i].title); }
       if (!hit.size) return { list: results, clashes: 0 };
@@ -2133,23 +2139,43 @@
       const row = (x) => {
         const key = x.ext ? `ext:${x.id}` : x.type === "task" ? `task:${x.id}` : x.type === "memo" ? (x.meetingId ? `event:${x.meetingId}` : `day:${x.date}`) : `event:${x.id}`;
         const kind = FIND_KINDS[x.type] || FIND_KINDS.event;
-        const when = kind.when ? kind.when(x) : kind.label;
+        const when = x.absence ? awayWhen(x) : kind.when ? kind.when(x) : kind.label;
         // 제목이 아닌 곳(설명·안건·메모 등)에서 찾은 것은 + 로 표시
         const extra = x.field && x.field !== "제목";
-        return h("li", {}, h("button", { class: "today-find__row today-find__row--" + (FIND_KINDS[x.type] ? x.type : "event") + (x.clash ? " is-clash" : ""), type: "button", "data-peek": key, title: extra ? `${x.field}에 '${x.keyword || ""}'이(가) 들어 있어요` : null, onclick: () => { const [t, id] = key.split(":"); openPeek(t, t === "day" ? id : Number(id)); } }, [
-          h("span", { class: "today-find__kind", text: kind.label }),
+        return h("li", {}, h("button", { class: "today-find__row today-find__row--" + (x.absence ? "absence" : FIND_KINDS[x.type] ? x.type : "event") + (x.clash ? " is-clash" : ""), type: "button", "data-peek": key, title: extra ? `${x.field}에 '${x.keyword || ""}'이(가) 들어 있어요` : null, onclick: () => { const [t, id] = key.split(":"); openPeek(t, t === "day" ? id : Number(id)); } }, [
+          h("span", { class: "today-find__kind" + (x.absence ? " is-absence" : ""), text: x.absence ? "부재" : kind.label }),
           x.clash ? h("span", { class: "today-find__clash", title: `${x.clash.join(", ")}와(과) 시간이 겹쳐요`, text: "시간 겹침" }) : null,
           editTag(x),
-          h("span", { class: "today-find__title", text: x.title }),
+          x.absence ? awayTitle(x) : h("span", { class: "today-find__title", text: x.title }),
           extra ? h("span", { class: "today-find__plus", "aria-label": `${x.field}에서 찾음`, text: "+" }) : null,
           kind.when ? h("span", { class: "today-find__time", text: when }) : null
         ]));
+      };
+      // 부재: '이름 · 종류'(나눌 수 없으면 제목 그대로), 여러 날이면 기간과 며칠째인지
+      const awayTitle = (x) => h("span", { class: "today-find__title" }, x.who ? [h("strong", { text: x.who }), ` · ${x.why}`] : x.title);
+      const awayWhen = (x) => {
+        const t = x.time ? (x.endTime ? `${x.time}~${x.endTime}` : x.time) : "";
+        if (!x.endDate || x.endDate === x.date) return t || "종일";
+        const days = (a, b) => Math.round((parseYmd(b) - parseYmd(a)) / 86400000) + 1;
+        return `${shortDate(x.date)}~${shortDate(x.endDate)}${t ? " " + t : ""} · ${days(x.date, x.endDate)}일 중 ${days(x.date, findDay)}일째${findDay === t0 ? " (오늘)" : ""}`;
+      };
+      const away = r.absences || { on: false, results: [], excluded: 0 };
+      const AWAY_SHOW = 8;
+      const awayBox = () => {
+        const all = store.get("ps.awayAll", "0") === "1", list = all ? away.results : away.results.slice(0, AWAY_SHOW);
+        return h("section", { class: "today-away", "aria-label": "부재 알림" }, [
+          h("h3", {}, ["부재 알림", h("span", { class: "muted small", text: ` ${away.results.length}건${away.excluded ? ` (제외 ${away.excluded})` : ""}` })]),
+          away.results.length ? h("ul", { class: "today-away__list" }, list.map((x) => h("li", {}, h("button", { class: "today-away__row", type: "button", "data-peek": `ext:${x.id}`, onclick: () => openPeek("ext", x.id) }, [
+            h("span", { class: "today-find__kind is-absence", text: "부재" }), editTag(x), awayTitle(x), h("span", { class: "today-find__time", text: awayWhen(x) })
+          ])))) : h("p", { class: "muted small", text: away.excluded ? "제외어로 모두 빠졌어요." : "이 날 부재가 없어요." }),
+          away.results.length > AWAY_SHOW ? h("button", { class: "link-btn", type: "button", "aria-expanded": String(all), text: all ? "접기" : `모두 보기 (${away.results.length}건)`, onclick: (ev) => { store.set("ps.awayAll", all ? "0" : "1"); ev.currentTarget.closest(".today-away").replaceWith(awayBox()); } }) : null
+        ]);
       };
       const open = store.get("ps.findOpen", "1") === "1"; // 처음에는 펼친 상태
       const toggle = h("button", { class: "today-find__toggle", type: "button", "aria-expanded": String(open), onclick: () => { store.set("ps.findOpen", open ? "0" : "1"); quiet(loadFind()); } }, [
         h("span", { class: "today-find__chev" + (open ? " is-open" : ""), html: ICON.right }),
         h("h2", { class: "card__title", text: "이름으로 모아 보기" }),
-        h("span", { class: "muted small", text: `${r.groups.reduce((n, g) => n + g.results.length, 0)}건` })
+        h("span", { class: "muted small", text: `${r.groups.reduce((n, g) => n + g.results.length, 0)}건${away.on ? ` · 부재 ${away.results.length}건` : ""}` })
       ]);
       findBox.classList.toggle("is-folded", !open);
       fill(findBox,
@@ -2161,9 +2187,10 @@
         open ? h("div", { class: "today-find__chips" }, [...r.common.map((k) => chip(k, false)), ...r.mine.map((k) => chip(k, true)), add]) : null,
         open ? h("div", { class: "today-find__chips today-find__chips--ex" }, [h("span", { class: "muted small", text: "제외" }), ...r.excludes.map(exChip), exAdd, r.excludes.length ? null : h("span", { class: "muted small", text: "이 말이 들어간 것은 결과에서 빼요" })]) : null,
         open ? h("div", { class: "today-find__groups" }, r.groups.map((g) => { const { list, clashes } = withClashes(g.results); return h("div", { class: "today-find__group" + (clashes ? " has-clash" : "") }, [
-          h("h3", {}, [g.keyword, h("span", { class: "muted small", text: ` ${g.results.length}건${g.excluded ? ` (제외 ${g.excluded})` : ""}` }), clashes ? h("span", { class: "today-find__clashsum", text: `시간 겹침 ${clashes}건` }) : null]),
+          h("h3", {}, [g.keyword, h("span", { class: "muted small", text: ` ${g.results.length}건${g.excluded ? ` (제외 ${g.excluded}${g.excludedAbsences ? `, 그중 부재 ${g.excludedAbsences}` : ""})` : ""}` }), clashes ? h("span", { class: "today-find__clashsum", text: `시간 겹침 ${clashes}건` }) : null]),
           g.results.length ? h("ul", { class: "today-find__list" }, list.map((x) => row({ ...x, keyword: g.keyword }))) : h("p", { class: "muted small", text: g.excluded ? "제외어로 모두 빠졌어요." : "이 날 걸린 것이 없어요." })
         ]); })) : null,
+        open && away.on ? awayBox() : null,
         open && r.groups.some((g) => g.results.some((x) => x.field && x.field !== "제목")) ? h("p", { class: "muted small today-find__legend" }, [h("span", { class: "today-find__plus", text: "+" }), " 제목이 아닌 내용(설명·안건·메모 등)에서 찾은 것"]) : null
       );
       markPeeked();
@@ -2171,7 +2198,8 @@
     // 회의실 예약 현황: 회의실(관리자 등록)마다 시간대별로 어떤 일정이 잡혀 있는지
     const roomBox = h("section", { class: "card rooms" });
     const PSR = window.PSRooms; // 읽기 규칙은 rooms.js
-    const noRoom = (e) => PSR.isAbsenceCalendar(e.calendarName || e.sourceName); // 부재 캘린더는 방을 찾지 않음
+    // 부재 캘린더(관리자가 켠 것, 안 정했으면 이름에 '부재')와 휴가·연차 캘린더는 방을 찾지 않음
+    const noRoom = (e) => { const c = e.ext && state.calendars.find((x) => x.id === e.calendarId); return c ? c.absence || PSR.isAbsenceCalendar(c.name.replace(/부재/g, "")) : PSR.isAbsenceCalendar(e.calendarName || e.sourceName); };
     let roomEvents = [], roomNames = [];
     function setRooms(r) { state.rooms = r.rooms; state.roomSkip = r.skip; drawRooms(roomEvents); }
     const unreadChips = (list, done) => h("div", { class: "rooms__unread" }, list.map((u) => h("button", { type: "button", class: "chip-add rooms__word", onclick: () => roomWordDialog(u.name, done) }, [u.name, u.n > 1 ? h("span", { class: "muted", text: ` ${u.n}건` }) : null])));

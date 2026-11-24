@@ -20,7 +20,8 @@ import { autoEduDone, dropEduDone, eduStatus, EDU_STATUS_SQL, logMonStatus, setE
 import { actor, setActor } from "./ctx.mjs";
 import { KEEP_DAYS, TOPICS, makeChanges } from "./changes.mjs";
 import { createCalendarSync, checkUrl, maskUrl } from "./calendars.mjs";
-import { createEventEdits } from "./event-edits.mjs";
+import { createEventEdits, isAbsence } from "./event-edits.mjs";
+import { parseAbsence } from "./absence.mjs";
 import { startAutoBackup, listBackups, backupNow, pruneBackups } from "./backup.mjs";
 import { vapidKeys, sendPush, pushEndpointOk } from "./push.mjs";
 
@@ -176,6 +177,7 @@ const q = {
   calendars: db.prepare("SELECT * FROM calendars ORDER BY id"),
   calendar: db.prepare("SELECT * FROM calendars WHERE id = ?"),
   addCalendar: db.prepare("INSERT INTO calendars (name, url, color, category_id, unit_id) VALUES (?, ?, ?, ?, ?)"),
+  setCalendarAbsence: db.prepare("UPDATE calendars SET absence = ? WHERE id = ?"),
   setCalendar: db.prepare("UPDATE calendars SET name = ?, url = ?, color = ?, category_id = ?, unit_id = ? WHERE id = ?"),
   delCalendar: db.prepare("DELETE FROM calendars WHERE id = ?"),
   externalRange: db.prepare(`SELECT x.*, c.name AS calendar_name, c.color, c.category_id, c.unit_id FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id
@@ -183,6 +185,9 @@ const q = {
       -- 우리 소속으로 넣은 원본은 숨김 (넣은 우리 일정이 보이는 사람에게만): 같은 일정이 두 번 보이지 않게
       AND NOT EXISTS (SELECT 1 FROM events ie WHERE ie.src_calendar_id = x.calendar_id AND ie.src_uid = x.uid AND ie.src_inst = x.inst AND ${EV_VIS("ie")})
     ORDER BY x.start_date, x.start_time IS NOT NULL, x.start_time, x.id LIMIT 3000`),
+  absencesOn: db.prepare(`SELECT x.*, c.name AS calendar_name, c.color FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id
+    WHERE x.start_date <= :day AND x.end_date >= :day AND x.calendar_id IN (SELECT value FROM json_each(:away)) AND ${EXT_VIS("c")}
+    ORDER BY x.start_time IS NOT NULL, x.start_time, x.title, x.id LIMIT 300`),
   // 검색에서 숨길 원본: 보이는 우리 일정으로 이미 넣은 것
   importedKeys: db.prepare(`SELECT e.src_calendar_id AS cal, e.src_uid AS uid_, e.src_inst AS inst FROM events e WHERE e.src_calendar_id IS NOT NULL AND ${EV_VIS("e")}`),
   external: db.prepare(`SELECT x.*, c.name AS calendar_name, c.color, c.category_id, c.unit_id, c.last_ok_at FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id WHERE x.id = ?`),
@@ -859,9 +864,9 @@ function orgDiff(rowsRaw) {
 }
 
 /* ----- 외부 캘린더 ----- */
-const calendarsPublic = () => q.calendars.all().map((c) => ({ id: c.id, name: c.name, color: c.color, categoryId: c.category_id, unitId: c.unit_id }));
+const calendarsPublic = () => q.calendars.all().map((c) => ({ id: c.id, name: c.name, color: c.color, categoryId: c.category_id, unitId: c.unit_id, absence: isAbsence(c) }));
 const calendarAdminOut = (c) => ({
-  id: c.id, name: c.name, color: c.color, categoryId: c.category_id, unitId: c.unit_id, address: maskUrl(c.url),
+  id: c.id, name: c.name, color: c.color, categoryId: c.category_id, unitId: c.unit_id, address: maskUrl(c.url), absence: isAbsence(c), absenceSet: c.absence == null ? null : !!c.absence,
   lastSyncAt: c.last_sync_at, lastOkAt: c.last_ok_at, lastError: c.last_error, eventCount: c.event_count
 });
 // 가져온 일정: 우리 일정과 같은 모양 + ext(읽기 전용) 표시
@@ -1113,9 +1118,21 @@ const TODAY_COMMON_KEYWORDS = ["이재호", "운영총괄부", "권구택"];
 const todayListOf = (userId, col) => { try { const v = JSON.parse(db.prepare(`SELECT ${col} FROM users WHERE id = ?`).get(userId)?.[col] || "[]"); return Array.isArray(v) ? v : []; } catch { return []; } };
 const todayKeywordsOf = (userId) => todayListOf(userId, "today_keywords");
 const todayExcludesOf = (userId) => todayListOf(userId, "today_excludes");
+const absenceMark = (title) => { const p = parseAbsence(title); return { absence: true, ...(p ? { who: p.name, why: p.kind } : {}) }; };
+const absenceCalendars = () => new Set(q.calendars.all().filter(isAbsence).map((c) => c.id));
+// 그날 부재 전체 (검색어와 상관없이). 설명·장소는 보내지 않음
+function absencesOn(v, day, away) {
+  if (!away.size) return [];
+  const ed = eventEdits.view(v);
+  return q.absencesOn.all({ day, away: JSON.stringify([...away]), ...extV(v) }).map((x) => ({
+    type: "ext", ext: true, id: x.id, title: x.title, date: x.start_date, endDate: x.end_date, time: x.start_time, endTime: x.end_time,
+    calendarId: x.calendar_id, calendarName: x.calendar_name, color: x.color, ...(ed.external(x) ? { edited: ed.external(x) } : {}), ...absenceMark(x.title)
+  }));
+}
 const searchKey = (r) => `${r.type}:${r.id}`;
 // day 를 주면 그날에 걸친 것만 (일정은 시작~끝, 할 일은 마감일, 메모는 날짜)
-function runSearch(q, kind, v, day) {
+// away: 부재 캘린더 id 들 (이름으로 모아 보기). 부재는 제목만 보고(설명에 사유가 있을 수 있음) 부재라고 표시
+function runSearch(q, kind, v, day, away) {
   const re = searchPattern(q);
   if (!re) return { results: [], total: 0 };
   // 볼 수 있는 항목만
@@ -1147,16 +1164,18 @@ function runSearch(q, kind, v, day) {
         ...parseAgenda(e.agenda).map((a) => ["안건", a]), ...(links.get(e.id) || []).map((x) => ["관련 문서", x]),
         ...(comments.get(e.id) || []).map((x) => ["댓글", x]), ...(tags.get(e.id) || []).map((x) => ["태그", x]),
         ["분류", cats.get(e.category_id)], ...(att.get(e.id) || []).map((x) => ["참석자", x.name]), ...(guests.get(e.id) || []).map((x) => ["외부 참석자", x])];
-      const h = hit(fields);
+      const off = e.src_calendar_id && away?.has(e.src_calendar_id);
+      const h = hit(off ? [["제목", e.title]] : fields);
       if (h) out.push({ type: e.kind, id: e.id, title: e.title, date: e.start_date, endDate: e.end_date, time: e.start_time, endTime: e.end_time, sourceName: sourceName(e),
-        categoryId: e.category_id, unitId: e.unit_id, createdBy: e.created_by, attendeeIds: (att.get(e.id) || []).map((x) => x.user_id), ...(ed?.event(e.id) ? { edited: ed.event(e.id) } : ed?.source(e) ? { sourceEdited: ed.source(e) } : {}), ...h });
+        categoryId: e.category_id, unitId: e.unit_id, createdBy: e.created_by, attendeeIds: (att.get(e.id) || []).map((x) => x.user_id), ...(ed?.event(e.id) ? { edited: ed.event(e.id) } : ed?.source(e) ? { sourceEdited: ed.source(e) } : {}), ...(off ? absenceMark(e.title) : {}), ...h });
     }
     const imported = new Set(searchQ_vis.imported.all(v).map((k) => `${k.cal}|${k.uid_}|${k.inst}`));
     for (const x of searchQ.external.all()) {
       if (!seeCal.has(x.calendar_id) || imported.has(`${x.calendar_id}|${x.uid}|${x.inst}`)) continue;
-      const h = hit([["제목", x.title], ["장소", x.location], ["설명", x.description]]);
+      const off = away?.has(x.calendar_id);
+      const h = hit(off ? [["제목", x.title]] : [["제목", x.title], ["장소", x.location], ["설명", x.description]]);
       if (h) out.push({ type: "ext", id: x.id, title: x.title, date: x.start_date, endDate: x.end_date, time: x.start_time, endTime: x.end_time,
-        calendarId: x.calendar_id, calendarName: x.calendar_name, color: x.color, categoryId: x.category_id, ext: true, ...(ed?.external(x) ? { edited: ed.external(x) } : {}), ...h });
+        calendarId: x.calendar_id, calendarName: x.calendar_name, color: x.color, categoryId: x.category_id, ext: true, ...(ed?.external(x) ? { edited: ed.external(x) } : {}), ...(off ? absenceMark(x.title) : {}), ...h });
     }
   }
   if (kind === "all" || kind === "task") {
@@ -4106,13 +4125,15 @@ async function api(req, res, path) {
     if (!isDate(day)) throw bad("날짜를 확인해 주세요.");
     const mine = todayKeywordsOf(user.id), excludes = todayExcludesOf(user.id);
     const words = [...new Set([...TODAY_COMMON_KEYWORDS, ...mine])];
+    const away = absenceCalendars();
     // 제외어: 같은 방식으로 찾아서 걸린 항목은 모든 묶음에서 뺌
     const drop = new Set(excludes.flatMap((x) => runSearch(x, "all", V, day).results.map(searchKey)));
+    const offAll = absencesOn(V, day, away), off = offAll.filter((r) => !drop.has(searchKey(r)) && !excludes.some((x) => squash(r.title).includes(squash(x))));
     return send(res, 200, { common: TODAY_COMMON_KEYWORDS, mine, excludes, groups: words.map((k) => {
-      const all = runSearch(k, "all", V, day).results;
+      const all = runSearch(k, "all", V, day, away).results;
       const results = all.filter((r) => !drop.has(searchKey(r)));
-      return { keyword: k, results, excluded: all.length - results.length };
-    }) });
+      return { keyword: k, results, excluded: all.length - results.length, excludedAbsences: all.filter((r) => r.absence && drop.has(searchKey(r))).length };
+    }), absences: { on: away.size > 0, results: off, excluded: offAll.length - off.length } });
   }
   if (path === "/api/today-keywords" && method === "PUT") {
     const b = await readJson(req);
@@ -4632,7 +4653,9 @@ async function api(req, res, path) {
       if (!calm[2] && method === "PATCH") {
         const b = await readJson(req);
         const { values, warn } = calendarInput(b, c);
+        if (has(b, "absence") && ![true, false, null].includes(b.absence)) throw bad("부재 캘린더 값을 확인해 주세요.");
         q.setCalendar.run(...values, c.id);
+        if (has(b, "absence")) q.setCalendarAbsence.run(b.absence === null ? null : b.absence ? 1 : 0, c.id);
         const sync = has(b, "url") ? await calendarSync.syncOne(c.id) : null;
         return send(res, 200, { calendar: calendarAdminOut(q.calendar.get(c.id)), sync, warn });
       }
