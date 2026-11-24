@@ -2182,3 +2182,34 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .ship-kinds ul { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 14px; }
 .ship-filters { margin: 10px 0; }
 .addr-row { display: flex; gap: 8px; } .addr-row input { flex: 1; min-width: 0; } .addr-row .btn { flex-shrink: 0; }
+
+/* 품목 색 · 품목별 재고 갤러리 (기능확인 이미지2) */
+.opt-dot { display: inline-block; flex-shrink: 0; width: 14px; height: 14px; border-radius: 50%; border: 1px solid rgba(0, 0, 0, .35); }
+.opt-dot--big { width: 20px; height: 20px; }
+.opt-name { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.vm-opts--gallery { margin-top: 10px; border: 1.5px solid var(--ink); border-radius: 12px; padding: 0 12px; background: var(--surface); }
+.vm-opts--gallery summary { align-items: center; min-height: 46px; font-size: 15px; font-weight: 700; }
+.vm-opts--gallery summary svg { width: 18px; height: 18px; }
+.vm-opts--gallery summary::after { content: "펼치기"; margin-left: auto; color: var(--ink-2); font-size: 13px; }
+.vm-opts--gallery[open] summary::after { content: "접기"; }
+.vm-opts ul.opt-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin: 4px 0 12px; }
+.vm-opts ul.opt-gallery li.opt-card { display: flex; flex-direction: column; justify-content: space-between; gap: 14px; min-width: 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; color: #111; }
+.opt-card__top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px 8px; }
+.opt-card__name { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.opt-card__top strong { font-size: 21px; font-variant-numeric: tabular-nums; }
+.opt-card__sub { font-size: 13px; color: #444; font-variant-numeric: tabular-nums; }
+.vm-extra--open { border: 0; padding: 0; } .vm-extra__title { margin: 0 0 8px; font-size: 14px; }
+@media (max-width: 420px) { .vm-opts ul.opt-gallery { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; } }
+/* 추가 전달 물량: PC 는 넓게, 좁으면 가로 스크롤 없이 카드로 */
+.vol__main:has(.vol-visits) { max-width: 1320px; }
+@media (min-width: 641px) and (max-width: 1240px) {
+  .vol-visits .table-wrap { overflow: visible; }
+  .vol-visits .table thead { display: none; }
+  .vol-visits .table, .vol-visits .table tbody, .vol-visits .table tfoot { display: block; width: 100%; }
+  .vol-visits .table tr { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 12px; padding: 10px 12px; border-bottom: 1px solid var(--line-2); }
+  .vol-visits .table td, .vol-visits .table th { display: block; padding: 0; border: 0; text-align: left; white-space: normal; min-width: 0; width: auto; }
+  .vol-visits .table td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 600; color: var(--muted); }
+  .vol-visits .table td[data-label=""]::before { display: none; }
+  .vol-visits .table td.num { text-align: left; }
+  .vol-visits .table th[colspan] { grid-column: 1 / -1; }
+}

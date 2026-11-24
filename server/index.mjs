@@ -333,7 +333,7 @@ const q = {
   addLedger: db.prepare("INSERT INTO stock_ledgers (item_id, name, unit, in_label, out_label, contract, after) VALUES (?, ?, ?, ?, ?, ?, ?)"),
   setLedger: db.prepare("UPDATE stock_ledgers SET name = ?, unit = ?, in_label = ?, out_label = ?, contract = ?, after = ? WHERE id = ?"),
   delLedger: db.prepare("DELETE FROM stock_ledgers WHERE id = ?"),
-  stockOptions: db.prepare("SELECT id, name FROM stock_options WHERE ledger_id = ? ORDER BY id"),
+  stockOptions: db.prepare("SELECT id, name, color FROM stock_options WHERE ledger_id = ? ORDER BY id"),
   addStockOption: db.prepare("INSERT INTO stock_options (ledger_id, name) VALUES (?, ?)"),
   setStockOption: db.prepare("UPDATE stock_options SET name = ? WHERE id = ? AND ledger_id = ?"),
   delStockOption: db.prepare("DELETE FROM stock_options WHERE id = ?"),
@@ -1986,6 +1986,9 @@ function saveStockOptions(ledgerId, list) {
     if (id) q.setStockOption.run(name, id, ledgerId); else q.addStockOption.run(ledgerId, name);
   }
 }
+// 품목 색: 관리자가 고른 색 → 이름으로 정한 기본색 → 없음 (모르는 품목)
+const OPT_COLORS = { 진비취: "#2fac62", 물비취: "#86eae3", 초록: "#1f7d34", 연두: "#a6d84e", 청색: "#1f4fc4", 진보라: "#4b2a86", 중보라: "#8a63c9", 자주: "#8e1f4f", 꽃분홍: "#f0529c", 빨강: "#d9232e", 노랑: "#ffd62e", 황금: "#c9a13b", 백색: "#ffffff" };
+const optColor = (o) => (o.color === "none" ? "" : o.color || OPT_COLORS[String(o.name || "").replace(/\s/g, "")] || "");
 function ledgerOut(l, p, user) {
   const qty = new Map();
   for (const r of q.stockQtyOfLedger.all(l.id)) { if (!qty.has(r.move_id)) qty.set(r.move_id, {}); qty.get(r.move_id)[r.option_id] = r.qty; }
@@ -1995,7 +1998,7 @@ function ledgerOut(l, p, user) {
   return {
     ledger: { id: l.id, name: l.name, unit: l.unit, inLabel: l.in_label, outLabel: l.out_label, contract: l.contract, after: JSON.parse(l.after), canDelete: user.role === "admin" || p.created_by === user.id, volunteerEntry: !!volLedgerProject(l) },
     project: { id: p.id, name: p.name, unitId: p.unit_id }, itemName: item.name,
-    options: q.stockOptions.all(l.id),
+    options: q.stockOptions.all(l.id).map((o) => ({ id: o.id, name: o.name, color: optColor(o) })),
     moves: q.stockMoves.all(l.id).map((m) => ({
       id: m.id, type: m.type, date: m.date, handler: m.handler, note: m.note, issue: m.issue || "", photos: photos.get(m.id) || [], inspectOk: m.inspect_ok ?? null, inspectBad: m.inspect_bad ?? null, qty: qty.get(m.id) || {}, mine: m.created_by === user.id, refType: m.ref_type || "", guide: moveGuide(m, user),
       ...(user.volunteer ? {} : { enteredBy: (m.created_by && q.userById.get(m.created_by)?.name) || "" }) // 입력한 사람: 직원 화면만
@@ -2793,7 +2796,13 @@ async function opsRoute(req, res, user, path, method) {
     if (!r.can("stock", "e")) return deny("안전재고는 직원·부서 봉사자와 관리자가 정해요.");
     const o = db.prepare("SELECT * FROM stock_options WHERE id = ?").get(Number(om2[1]));
     if (!o) throw notFound("품목");
-    db.prepare("UPDATE stock_options SET safety_qty = ? WHERE id = ?").run(teamQty((await readJson(req)).safetyQty, "안전재고"), o.id);
+    const b = await readJson(req);
+    if (has(b, "color")) {
+      if (!r.admin) return deny("품목 색은 관리자가 정해요.");
+      if (!/^(#[0-9a-f]{6}|none)?$/i.test(String(b.color))) throw bad("색을 확인해 주세요.");
+      db.prepare("UPDATE stock_options SET color = ? WHERE id = ?").run(String(b.color).toLowerCase(), o.id);
+    }
+    if (has(b, "safetyQty")) db.prepare("UPDATE stock_options SET safety_qty = ? WHERE id = ?").run(teamQty(b.safetyQty, "안전재고"), o.id);
     return ok(200, { ...stockOut(), canEdit: true, canLocations: r.admin });
   }
   if ((path === "/api/ops/stock/move" || path === "/api/ops/stock/adjust") && method === "POST") {
@@ -3087,7 +3096,7 @@ function stockOut() {
     id: l.id, name: l.name, unit: l.unit, item: l.item,
     options: db.prepare("SELECT * FROM stock_options WHERE ledger_id = ? ORDER BY id").all(l.id).map((o) => {
       const rows = byLoc.filter((x) => x.oid === o.id);
-      return { id: o.id, name: o.name, safety: o.safety_qty ?? null, qty: rows.reduce((n, x) => n + x.n, 0), byLoc: rows.filter((x) => x.n).map((x) => ({ locationId: x.lid, qty: x.n })) };
+      return { id: o.id, name: o.name, safety: o.safety_qty ?? null, color: optColor(o), qty: rows.reduce((n, x) => n + x.n, 0), byLoc: rows.filter((x) => x.n).map((x) => ({ locationId: x.lid, qty: x.n })) };
     })
   }));
   const moves = db.prepare(`SELECT m.*, l.name AS ledger, l.unit, a.name AS loc, b.name AS to_loc, (SELECT group_concat(o.name || ' ' || q.qty, ', ') FROM stock_qty q JOIN stock_options o ON o.id = q.option_id WHERE q.move_id = m.id) AS items,

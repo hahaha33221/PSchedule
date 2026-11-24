@@ -5058,7 +5058,7 @@
       const form = h("form", { class: "stack", novalidate: true }, [
         lock ? h("p", { class: "ref-guide small", text: m.guide }) : null,
         h("div", { class: "row2" }, [field(type === "in" ? "입고일" : "출고일", date), type === "out" ? field("전달자", handler) : null]),
-        inputs.length ? h("div", { class: "stock-grid" }, inputs.map((x) => h("label", { class: "stock-grid__cell" }, [h("span", { class: "small", text: x.o.name }), x.el, h("span", { class: "muted stock-grid__left", text: `재고 ${fmtN(leftOf(x.o.id))}` })]))) : h("p", { class: "muted small", text: "먼저 1단계 기본 정보에서 품목 열을 추가해 주세요." }),
+        inputs.length ? h("div", { class: "stock-grid" }, inputs.map((x) => h("label", { class: "stock-grid__cell" }, [h("span", { class: "small opt-name" }, [optDot(x.o), x.o.name]), x.el, h("span", { class: "muted stock-grid__left", text: `재고 ${fmtN(leftOf(x.o.id))}` })]))) : h("p", { class: "muted small", text: "먼저 1단계 기본 정보에서 품목 열을 추가해 주세요." }),
         sum, field("비고", note),
         type === "in" ? h("div", { class: "row2" }, [field("검수 합격", insOk), field("검수 불량", insBad, "검수했으면 적어 주세요. 불량이 있으면 아래 이슈에도 적어 주세요.")]) : null,
         field("이슈 (문제가 된 점)", issue, "이 날짜·물량에 문제가 있었으면 적어 주세요. 나중에 모아서 업체에 보낼 수 있어요."),
@@ -5856,11 +5856,14 @@
       stage.value = r?.stage || presetStage || "in";
       const date = h("input", { type: "date", value: r?.date || today(), required: true });
       const name = h("input", { value: r?.name || "", maxlength: "80", placeholder: cfg.namePh[stage.value] || "" });
-      stage.addEventListener("change", () => { name.placeholder = cfg.namePh[stage.value] || ""; });
+      // 어디서·어디로: 입고(입고 장소 · 보낸 대상)와 출고(출고 장소 · 받는 대상)에서만 보임. 저장된 값은 지우지 않음
+      const nameF = field("입고 장소 · 보낸 대상 (선택)", name);
+      const syncName = () => { name.placeholder = cfg.namePh[stage.value] || ""; nameF.hidden = !["in", "out"].includes(stage.value); nameF.querySelector(".field__label").textContent = stage.value === "out" ? "출고 장소 · 받는 대상 (선택)" : "입고 장소 · 보낸 대상 (선택)"; };
+      stage.addEventListener("change", syncName); syncName();
       const qty = h("input", { type: "number", min: "0", inputmode: "numeric", value: r ? String(r.qty) : "", required: true, autofocus: true });
       const note = h("input", { value: r?.note || "", maxlength: "300" });
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: r ? "저장" : "추가" });
-      const form = h("form", { class: "stack" }, [h("div", { class: "row2" }, [field("단계", stage), field("날짜", date)]), h("div", { class: "row2" }, [field("수량", qty), field("어디서·어디로 (선택)", name)]), field("메모 (선택)", note), err,
+      const form = h("form", { class: "stack" }, [h("div", { class: "row2" }, [field("단계", stage), field("날짜", date)]), h("div", { class: "row2" }, [field("수량", qty), nameF]), field("메모 (선택)", note), err,
         h("div", { class: "actions" }, [r ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
           if (!confirm("이 기록을 지울까요?")) return;
           const x = await act(() => apiAsk(`/volunteer/records/${r.id}`, { method: "DELETE" })); if (!x) return; rows = x.records; closeDialog(); draw();
@@ -5891,7 +5894,7 @@
         h("div", { class: "vol-fg__sell" }, [h("span", { text: "바로 판매 가능한 재고 (패키징 완료 − 출고)" }), h("strong", { class: wait.sell < 0 ? "stock-minus" : null, text: fmtN(wait.sell) })]),
         filter ? h("p", { class: "muted small" }, [`'${cfg.labels[filter]}' 기록만 보는 중 · `, h("button", { class: "link-btn", type: "button", text: "전체 보기", onclick: () => { filter = ""; draw(); } })]) : null,
         shown.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" }, [
-          h("thead", {}, h("tr", {}, [h("th", { text: "날짜" }), h("th", { text: "단계" }), h("th", { class: "num", text: "수량" }), h("th", { text: "어디서·어디로" }), h("th", { text: "메모" }), h("th", { text: "적은 사람" }), h("th")])),
+          h("thead", {}, h("tr", {}, [h("th", { text: "날짜" }), h("th", { text: "단계" }), h("th", { class: "num", text: "수량" }), h("th", { text: "입고·출고 장소 (대상)" }), h("th", { text: "메모" }), h("th", { text: "적은 사람" }), h("th")])),
           h("tbody", {}, shown.map((r) => h("tr", {}, [
             h("td", { class: "nowrap", text: shortDate(r.date) }), h("td", { class: "nowrap" }, h("span", { class: `vol-fg__tag vol-fg__tag--${r.stage || "in"}`, text: cfg.labels[r.stage || "in"] })), h("td", { class: "num", text: fmtN(r.qty) }),
             h("td", { text: r.name }), h("td", { class: "muted small", text: r.note }), h("td", { class: "muted small", text: r.author }),
@@ -5916,7 +5919,7 @@
         h("tbody", {}, list.map((v, i) => h("tr", {}, [h("td", { class: "num muted", text: String(i + 1) }), h("td", { class: "nowrap", text: shortDate(v.date) }), h("td", { text: v.title.split(" · ").pop() }), h("td", { class: "num", text: fmtN(v.threadQty) }), h("td", { class: "num", text: v.crossQty != null ? fmtN(v.crossQty) : "-" })]))),
         h("tfoot", {}, h("tr", { class: "vol-more__sum" }, [h("th", { colspan: "3", text: `합계 (${list.length}곳)` }), h("td", { class: "num", text: fmtN(total) }), h("td", { class: "num", text: fmtN(list.reduce((n, v) => n + (v.crossQty || 0), 0)) })]))
       ])) : h("p", { class: "muted", text: "아직 자른실 출고 기록이 없어요." }),
-      h("p", { class: "muted small", text: "자른실은 제작 수도회에 보낸 실이에요. 값은 '추가 전달 물량 › 수량 입력'에서 고쳐요. 위 '1) 실타래 입출고'는 창고의 실타래(타래 단위) 입출고예요." })
+      h("p", { class: "muted small", text: "자른실은 제작 수도회에 보낸 실이에요. '고치기'를 누르면 '추가 전달 물량 › 수량 입력'으로 가요. 관리자뿐 아니라 부서 봉사자도 고칠 수 있고, 고친 사람 이름이 남아요. 위 '1) 실타래 입출고'는 창고의 실타래(타래 단위) 입출고예요." })
     ]);
   }
   async function volRecordCard(itemId, kind) {
@@ -6175,6 +6178,8 @@
   // 데이터·API 는 그대로: /volunteer/stock/:id, .../moves, /volunteer/stock-moves/:id, .../photos
   const vmPhotoCache = new Map();
   const vmPhotoSrc = (pid) => { if (!vmPhotoCache.has(pid)) vmPhotoCache.set(pid, fetch(API + `/volunteer/stock-photos/${pid}`, { headers: { Authorization: "Bearer " + state.token } }).then((r) => (r.ok ? r.blob() : null)).then((b) => (b ? URL.createObjectURL(b) : null)).catch(() => null)); return vmPhotoCache.get(pid); };
+  // 품목 색 동그라미 (색만으로 구분하지 않게 이름과 함께 씀, 색이 없는 품목은 안 보임)
+  const optDot = (o, big) => (o.color ? h("i", { class: "opt-dot" + (big ? " opt-dot--big" : ""), style: `background:${o.color}`, "aria-hidden": "true" }) : null);
   const vmPhotoImg = (pid) => { const img = h("img", { class: "move-photo", alt: "기록 사진" }); vmPhotoSrc(pid).then((u) => { if (u) img.src = u; }); return img; };
   const vmSum = (m) => Object.values(m.qty || {}).reduce((n, v) => n + (Number(v) || 0), 0);
   const vmDay = (s) => (/^\d{4}-\d{2}-\d{2}$/.test(String(s || "")) ? volDay(s) : String(s || "-"));
@@ -6200,7 +6205,7 @@
         if (part === "cut") {
           const cut = volCutCard(opts.cut);
           const t = cut.querySelector(".card__title"); if (t) t.textContent = "자른실 출고";
-          for (const p of cut.querySelectorAll("p.muted")) if (p.textContent.includes("1) 실타래 입출고")) p.textContent = "자른실은 제작 수도회에 보낸 실이에요. 값은 '추가 전달 물량 › 수량 입력'에서 고쳐요. 창고의 실타래(타래 단위)는 '실타래 출고' 탭에 적어요.";
+          for (const p of cut.querySelectorAll("p.muted")) if (p.textContent.includes("1) 실타래 입출고")) p.textContent = "자른실은 제작 수도회에 보낸 실이에요. '고치기'를 누르면 '추가 전달 물량 › 수량 입력'으로 가요. 관리자뿐 아니라 부서 봉사자도 고칠 수 있고, 고친 사람 이름이 남아요. 창고의 실타래(타래 단위)는 '실타래 출고' 탭에 적어요.";
           kids.push(cut); return box.replaceChildren(...kids);
         }
       }
@@ -6220,9 +6225,11 @@
       kids.push(h("section", { class: "card vm-sum" }, [
         h("h2", { class: "vm-sum__name", text: l.name }),
         h("div", { class: "vm-stats" }, [stat(`${label()} 합계`, sumType(type)), stat("재고", stock, stock < 0), stat(`이번 달 ${label()}`, list.filter((m) => String(m.date).startsWith(month)).reduce((n, m) => n + vmSum(m), 0))]),
-        options.length ? h("details", { class: "vm-opts" }, [
-          h("summary", {}, [h("span", { text: "품목별 재고" }), h("span", { class: "vm-opts__peek muted", text: options.slice(0, 3).map((o) => `${o.name} ${fmtN(leftOf(o.id))}`).join(" · ") + (options.length > 3 ? " …" : "") })]),
-          h("ul", {}, options.map((o) => h("li", {}, [h("span", { text: o.name }), h("span", { class: "muted small", text: `입고 ${fmtN(sumType("in", o.id))} · 출고 ${fmtN(sumType("out", o.id))}` }), h("strong", { class: leftOf(o.id) < 0 ? "stock-minus" : null, text: fmtN(leftOf(o.id)) })])))
+        options.length ? h("details", { class: "vm-opts vm-opts--gallery", open: store.get("ps.vmOpts", "0") === "1", ontoggle: (e) => store.set("ps.vmOpts", e.currentTarget.open ? "1" : "0") }, [
+          h("summary", {}, [icon("grid"), h("span", { text: "품목별 재고 현황 확인하기" }), h("span", { class: "muted small vm-opts__n", text: `${options.length}가지` })]),
+          h("ul", { class: "opt-gallery" }, options.map((o) => h("li", { class: "opt-card" }, [
+            h("span", { class: "opt-card__top" }, [h("span", { class: "opt-card__name" }, [o.name, optDot(o, true)]), h("strong", { class: leftOf(o.id) < 0 ? "stock-minus" : null, text: `${fmtN(leftOf(o.id))}${unit}` })]),
+            h("span", { class: "opt-card__sub", text: `입고 ${fmtN(sumType("in", o.id))} | 출고 ${fmtN(sumType("out", o.id))}` })])))
         ]) : h("p", { class: "muted small", text: "아직 품목이 없어요. 관리자에게 문의해 주세요." })
       ]));
       const card = (m) => {
@@ -6271,7 +6278,7 @@
         const warn = h("span", { class: "vm-row__warn", hidden: true });
         const step = (d) => { const v = Math.max(0, (Number(inp.value) || 0) + d); inp.value = v ? String(v) : ""; upd(); };
         return { o, inp, warn, el: h("div", { class: "vm-row" }, [
-          h("div", { class: "vm-row__name" }, [h("strong", { text: o.name }), h("span", { class: "muted small", text: `재고 ${fmtN(leftWithout(o.id))}` }), warn]),
+          h("div", { class: "vm-row__name" }, [h("strong", { class: "opt-name" }, [optDot(o), o.name]), h("span", { class: "muted small", text: `재고 ${fmtN(leftWithout(o.id))}` }), warn]),
           h("div", { class: "vm-step" }, [h("button", { type: "button", class: "vm-step__btn", "aria-label": `${o.name} 1 빼기`, text: "−", onclick: () => step(-1) }), inp, h("button", { type: "button", class: "vm-step__btn", "aria-label": `${o.name} 1 더하기`, text: "+", onclick: () => step(1) })])
         ]) };
       });
@@ -6320,7 +6327,6 @@
         total.textContent = `합계 ${fmtN(n)} ${unit}`;
         sumLine.replaceChildren(`합계 ${fmtN(n)} ${unit} · `, h("span", { class: needPhoto && !photos ? "is-bad" : null, text: needPhoto && !photos ? "사진 0장 (1장 이상 필요)" : `사진 ${photos}장` }));
       }
-      const extraOpen = !!(m && (m.note || m.issue || m.inspectOk != null || m.inspectBad != null));
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: m ? "저장하기" : `${lab} 저장하기` });
       if (lock) { for (const el of [date, handler]) el.disabled = true; for (const x of rows) for (const el of x.el.querySelectorAll("input, button")) el.disabled = true; }
       const form = h("form", { class: "vm-form", novalidate: true }, [
@@ -6329,7 +6335,7 @@
         h("div", { class: "field" }, [h("span", { class: "field__label", text: "수량" }),
           rows.length ? h("div", { class: "vm-rows" }, rows.map((x) => x.el)) : h("p", { class: "muted small", text: "아직 품목이 없어요. 관리자에게 문의해 주세요." }), total]),
         h("div", { class: "field" }, [h("span", { class: "field__label" }, [t === "in" ? "영수증·사진" : "출고 사진", needPhoto ? h("span", { class: "vm-need", text: " (1장 이상 필요)" }) : " (선택)"]), photoBox, photoBtns, photoHint]),
-        h("details", { class: "vm-extra", open: extraOpen }, [h("summary", { text: t === "in" ? "검수 · 비고 · 이슈 (선택)" : "비고 · 이슈 (선택)" }), h("div", { class: "stack" }, [
+        h("section", { class: "vm-extra vm-extra--open" }, [h("h3", { class: "vm-extra__title", text: t === "in" ? "검수 · 비고 · 이슈 (선택)" : "비고 · 이슈 (선택)" }), h("div", { class: "stack" }, [
           t === "in" ? h("div", { class: "row2" }, [field("검수 합격", insOk), field("검수 불량", insBad, "불량이 있으면 이슈에도 적어 주세요.")]) : null,
           field("비고", note),
           field("이슈 (문제가 된 점)", issue, "이 날짜·물량에 문제가 있었으면 적어 주세요.")
@@ -7901,15 +7907,19 @@
     const edit = (l0, o0) => {
       const opts = d.ledgers.flatMap((l) => l.options.map((o) => [`${l.id}:${o.id}`, `${l.name} · ${o.name} (${fmtN(o.qty)})`]));
       const what = opsSel(opts, l0 ? `${l0.id}:${o0.id}` : "", "품목 고르기");
-      const mode = opsSel([["adjust", "실사 조정 (실제 센 수량)"], ["move", "위치 이동"], ["safety", "안전재고 정하기"]], "adjust");
+      const mode = opsSel([["adjust", "실사 조정 (실제 센 수량)"], ["move", "위치 이동"], ["safety", "안전재고 정하기"], ...(isAdmin() ? [["color", "품목 색 정하기 (관리자)"]] : [])], "adjust");
+      const cNow = () => { const [a, b] = what.value.split(":").map(Number); return d.ledgers.find((l) => l.id === a)?.options.find((o) => o.id === b); };
+      const color = h("input", { type: "color", value: o0?.color || "#888888" }), noColor = h("input", { type: "checkbox", checked: !!o0 && !o0.color });
+      what.addEventListener("change", () => { const o = cNow(); color.value = o?.color || "#888888"; noColor.checked = !!o && !o.color; });
+      const fColor = h("div", { class: "field" }, [h("span", { class: "field__label", text: "품목 색" }), color, h("label", { class: "check" }, [noColor, h("span", { text: "색 없음" })])]);
       const locs = d.locations.filter((x) => x.active).map((x) => [x.id, x.name]);
       const from = opsSel(locs, "", "위치 미정"), to = opsSel(locs, "", "옮길 위치 고르기"), loc = opsSel(locs, "", "위치 전체");
       const qty = h("input", { type: "number", min: "0", inputmode: "numeric" }), note = h("input", { maxlength: "300", placeholder: "사유·메모" });
       const safety = h("input", { type: "number", min: "0", inputmode: "numeric", value: o0?.safety ?? "" });
       const fMove = h("div", { class: "row2" }, [field("보낸 위치", from), field("받는 위치", to)]), fLoc = field("센 위치", loc, "위치를 고르면 그 위치 기록과 비교해요"), fQty = field("수량", qty), fSafe = field("안전재고 (비우면 안 봄)", safety), fNote = field("메모", note);
-      const sync = () => { fMove.hidden = mode.value !== "move"; fLoc.hidden = mode.value !== "adjust"; fSafe.hidden = mode.value !== "safety"; fQty.hidden = mode.value === "safety"; fNote.hidden = mode.value === "safety"; fQty.querySelector(".field__label").textContent = mode.value === "move" ? "옮길 수량" : "실제 센 수량"; };
+      const sync = () => { fMove.hidden = mode.value !== "move"; fLoc.hidden = mode.value !== "adjust"; fSafe.hidden = mode.value !== "safety"; fColor.hidden = mode.value !== "color"; fQty.hidden = fNote.hidden = ["safety", "color"].includes(mode.value); fQty.querySelector(".field__label").textContent = mode.value === "move" ? "옮길 수량" : "실제 센 수량"; };
       mode.addEventListener("change", sync); sync();
-      opsSheet("재고 고치기", [field("품목", what), field("할 일", mode), fMove, fLoc, fQty, fSafe, fNote], {
+      opsSheet("재고 고치기", [field("품목", what), field("할 일", mode), fMove, fLoc, fQty, fSafe, fColor, fNote], {
         save: async () => {
           if (!what.value) throw new Error("품목을 골라 주세요.");
           const [ledgerId, optionId] = what.value.split(":").map(Number);
@@ -7917,7 +7927,8 @@
             const o = d.ledgers.find((l) => l.id === ledgerId).options.find((x) => x.id === optionId), have = o.byLoc.find((x) => String(x.locationId ?? "") === from.value)?.qty || 0;
             if (Number(qty.value) > have) throw new Error(`${from.value ? "보낸 위치" : "위치 미정"}에는 ${fmtN(have)}개만 있어요. 그보다 많이 옮길 수 없어요.`);
           }
-          if (mode.value === "safety") d = { ...d, ...(await api(`/ops/stock-options/${optionId}`, { method: "PATCH", body: { safetyQty: safety.value } })) };
+          if (mode.value === "color") d = { ...d, ...(await api(`/ops/stock-options/${optionId}`, { method: "PATCH", body: { color: noColor.checked ? "none" : color.value } })) };
+          else if (mode.value === "safety") d = { ...d, ...(await api(`/ops/stock-options/${optionId}`, { method: "PATCH", body: { safetyQty: safety.value } })) };
           else if (mode.value === "move") d = { ...d, ...(await api("/ops/stock/move", { method: "POST", body: { ledgerId, optionId, qty: qty.value, fromLocationId: from.value, toLocationId: to.value, note: note.value } })) };
           else d = { ...d, ...(await api("/ops/stock/adjust", { method: "POST", body: { ledgerId, optionId, actualQty: qty.value, locationId: loc.value, note: note.value } })) };
           toast("저장했어요."); draw();
@@ -8347,7 +8358,7 @@
       const err = errorLine(), STG = { in: "입고", checked: "검수완료", packed: "패키징 완료", out: "출고" };
       const stage = opsSel(Object.entries(STG), r.stage), date = h("input", { type: "date", value: r.date }), qty = h("input", { type: "number", min: "0", inputmode: "numeric", value: String(r.qty) }), name = h("input", { value: r.name, maxlength: "80" }), note = h("input", { value: r.note, maxlength: "300" });
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: "저장" });
-      const form = h("form", { class: "stack", novalidate: true }, [h("p", { class: "muted small", text: `${r.group} · 적은 사람 ${r.author || "-"}` }), h("div", { class: "row2" }, [r.kind === "recovery" ? field("단계", stage) : null, field("날짜", date)]), h("div", { class: "row2" }, [field("수량", qty), field("어디서·어디로", name)]), field("메모", note), err,
+      const form = h("form", { class: "stack", novalidate: true }, [h("p", { class: "muted small", text: `${r.group} · 적은 사람 ${r.author || "-"}` }), h("div", { class: "row2" }, [r.kind === "recovery" ? field("단계", stage) : null, field("날짜", date)]), h("div", { class: "row2" }, [field("수량", qty), field("입고·출고 장소 (대상)", name)]), field("메모", note), err,
         h("div", { class: "actions" }, [h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 기록을 지울까요?")) return; if (!(await act(() => apiAsk(`/volunteer/records/${r.id}`, { method: "DELETE" })))) return; closeDialog(); await page.reload(); } }),
           h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])]);
       form.addEventListener("submit", (e) => { e.preventDefault(); busy(ok, async () => { try { if (!(await apiAsk(`/volunteer/records/${r.id}`, { method: "PATCH", body: { stage: stage.value, date: date.value, qty: qty.value, name: name.value, note: note.value } }))) return; closeDialog(); toast("저장했어요."); await page.reload(); } catch (ex) { showError(err, ex.message); } }); });
@@ -8381,7 +8392,7 @@
       ])) : h("div", { class: "card empty", text: "아직 봉사자가 입력한 기록이 없어요." });
       // 봉사자가 적은 원자재 보유물량 · 제품 회수물량
       const recView = volRecords.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
-        h("thead", {}, h("tr", {}, ["종류", "묶음", "날짜", "어디서·어디로", "수량", "메모", "적은 사람"].map((x) => h("th", { text: x })))),
+        h("thead", {}, h("tr", {}, ["종류", "묶음", "날짜", "입고·출고 장소 (대상)", "수량", "메모", "적은 사람"].map((x) => h("th", { text: x })))),
         h("tbody", {}, volRecords.map((r) => h("tr", rowAttrs(() => recordDialog(r)), [
           h("td", { class: "nowrap", text: r.kind === "material" ? "원자재 보유" : `완제품 · ${{ in: "입고", checked: "검수완료", packed: "패키징 완료", out: "출고" }[r.stage] || "입고"}` }), h("td", { class: "nowrap", text: r.group }), h("td", { class: "nowrap", text: r.date }), h("td", { text: r.name || "-" }), h("td", { class: "num nowrap", text: fmtN(r.qty) }), h("td", { class: "muted small", text: r.note }), h("td", { class: "nowrap", text: r.author || "-" })
         ])))

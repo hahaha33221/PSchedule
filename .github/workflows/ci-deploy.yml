@@ -1127,6 +1127,10 @@ jobs:
           curl -fs -H "$VH" -XPATCH -d '{"kind":"inspect"}' $B/ops/shipments/$KS | JQ 'if(d.shipments.find(x=>x.id==='$KS').kind!=="inspect")process.exit(1)'; test "$(REC $KS | cut -d/ -f1,2)/$(MON $KM status)" = "$K1/4/recovered"
           curl -fs -H "$VH" -XPATCH -d '{"kind":"vendor"}' $B/ops/shipments/$KS >/dev/null; test "$(REC $KS)/$(MON $KM status)" = "없음/new"
           curl -fs -H "$VH" $B/ops/shipments | JQ 'if(!d.shipments.some(x=>x.kind==="material_make"&&x.direction==="out")||!d.shipments.some(x=>x.kind===""))process.exit(1)'
+          # 품목 색: 관리자만 고름, 모르는 품목은 색 없음, 이상한 값 막음
+          test "$(CODE -H "$VH" -XPATCH -d '{"color":"#123456"}' $B/ops/stock-options/$SOPT)" = 403; test "$(CODE -H "$H" -XPATCH -d '{"color":"red;x"}' $B/ops/stock-options/$SOPT)" = 400
+          curl -fs -H "$H" -XPATCH -d '{"color":"#123456"}' $B/ops/stock-options/$SOPT >/dev/null; curl -fs -H "$H" $B/stock/$SLI | JQ 'if(d.options.find(o=>o.id=='$SOPT').color!=="#123456")process.exit(1)'
+          curl -fs -H "$H" -XPATCH -d '{"color":"none"}' $B/ops/stock-options/$SOPT >/dev/null; curl -fs -H "$H" $B/ops/stock | JQ 'if(d.ledgers.find(l=>l.id=='$SLI').options[0].color!=="")process.exit(1)'
           curl -fs -H "$H" -XPATCH -d '{"role":"volunteer","volKinds":["dept"],"volLeader":false}' $B/admin/users/$(USR volb) >/dev/null
           curl -fs -H "$H" -XPATCH -d '{"volLeader":false}' $B/admin/users/$(USR teamv) >/dev/null
           curl -fs -H "$H" -XPUT -d '{"staffOn":false}' $B/ops/perms >/dev/null
