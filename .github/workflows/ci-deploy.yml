@@ -33,7 +33,7 @@ jobs:
 
       - name: 문법 검사
         run: |
-          for f in public/app.js public/sw.js server/*.mjs tools/*.mjs; do node --check "$f"; done
+          for f in public/app.js public/rooms.js public/sw.js server/*.mjs tools/*.mjs; do node --check "$f"; done
           # 알림 종류(서버 PUSH_KINDS)와 화면 이름표(PUSH_KIND_LABEL)가 어긋나면 막음
           node -e '
             const fs = require("fs"), a = fs.readFileSync("public/app.js", "utf8"), s = fs.readFileSync("server/index.mjs", "utf8");
@@ -45,6 +45,9 @@ jobs:
 
       - name: iCal 가져오기 검사
         run: node tools/ical-test.mjs
+
+      - name: 회의실 읽기 규칙 검사
+        run: node tools/rooms-test.mjs
 
       - name: API 서버 동작 확인
         run: |
@@ -569,6 +572,18 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPUT -d '{"rooms":["A604호"]}' $B/admin/rooms)" = 403
           curl -fs -H "$H" -XPUT -d '{"rooms":["A604호"," A301호 ","A604호",""]}' $B/admin/rooms | grep -q '"rooms":\["A604호","A301호"\]'
           curl -fs -H "$(bearer "$A1")" $B/me | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.rooms.join()!=="A604호,A301호")process.exit(1)'
+          # 방 별명과 '회의실 아님': 두 줄에 같은 표기는 거절, skip 을 안 보내면 그대로, 봉사자에게는 안 나감, 표기 하나씩도 관리자만
+          curl -fs -H "$H" -XPUT -d '{"rooms":["A604호"," A4 소회의실 =A4소, 4A소,, A4소 ,4층 소회의실"],"skip":["A4소","가나다"," 가 나다 "]}' $B/admin/rooms | grep -qF '"rooms":["A604호","A4 소회의실 = A4소, 4A소, 4층 소회의실"],"skip":["가나다"]'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"rooms":["A604호","A4 소회의실 = A 604호"]}' $B/admin/rooms)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"rooms":["= A4소"]}' $B/admin/rooms)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPOST -d '{"word":"라마"}' $B/admin/rooms/word)" = 403
+          curl -fs -H "$H" -XPOST -d '{"word":"라마","room":"A604호"}' $B/admin/rooms/word | grep -qF '"rooms":["A604호 = 라마"'
+          curl -fs -H "$H" -XPOST -d '{"word":"가나다","room":"가나다"}' $B/admin/rooms/word | grep -qF ',"가나다"],"skip":[]'
+          curl -fs -H "$H" -XPOST -d '{"word":"바사"}' $B/admin/rooms/word | grep -qF '"skip":["바사"]'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"word":"라마","room":"가나다"}' $B/admin/rooms/word)" = 400
+          curl -fs -H "$H" -XPUT -d '{"rooms":["A604호"]}' $B/admin/rooms | grep -qF '"rooms":["A604호"],"skip":["바사"]'
+          curl -fs -H "$(bearer "$A1")" $B/me | grep -qF '"roomSkip":["바사"]'
+          if curl -fs -H "$VH" $B/me | grep -q 'roomSkip\|"rooms"'; then echo "봉사자 응답에 회의실 설정이 있어요"; exit 1; fi
           if curl -fs -H "$VH" $B/volunteer/stock/$VL | grep -q '"history"'; then echo "봉사자 응답에 수정 기록이 있어요"; exit 1; fi
           HN=$(curl -fs -H "$H" $B/stock/$VL | node -pe 'JSON.parse(require("fs").readFileSync(0)).history.length')
           J="{\"qty\":{\"$VO\":8}}"; curl -fs -H "$VH" -XPATCH -d "$J" $B/volunteer/stock-moves/$VM >/dev/null

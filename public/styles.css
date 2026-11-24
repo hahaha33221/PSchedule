@@ -1789,7 +1789,8 @@ th.num .sort-th__btn { justify-content: flex-end; }
 @media (max-width: 720px) { .vol-fg__flow { grid-template-columns: 1fr 1fr; } .vol-fg__arrow { display: none; } }
 /* 오늘: 회의실 예약 현황 (회의실 = 열, 시간 = 행) */
 .rooms { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
-.rooms .card__head { gap: 10px; }
+.rooms .card__head { gap: 10px; justify-content: flex-start; flex-wrap: wrap; }
+.rooms .card__head .btn--admin { margin-left: auto; }
 .rooms__scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; }
 .rooms__grid { display: grid; min-width: max-content; }
 .rooms__axiswrap, .rooms__col { display: flex; flex-direction: column; border-left: 1px solid var(--line-2); }
@@ -1808,6 +1809,27 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .rooms__ev strong { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rooms__ev span { color: var(--ink-2); white-space: nowrap; }
 .rooms__ev.is-ext { border-left-style: dashed; }
+.rooms__ev.is-clash, .rooms__ev.is-dup { outline: 2px solid var(--fc); outline-offset: -2px; }
+.rooms__ev.is-clash, .rooms__name.is-clash, .rooms__flag { --fc: var(--danger); }
+.rooms__ev.is-dup, .rooms__name.is-dup, .rooms__flag--dup { --fc: var(--warn); }
+.rooms__evflag { align-self: flex-start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 5px; border-radius: 4px; background: var(--fc); color: #fff; font-style: normal; font-size: 10.5px; font-weight: 700; line-height: 16px; }
+.rooms__ev.is-short { flex-direction: row; align-items: center; gap: 4px; padding-block: 0; }
+.rooms__ev.is-short .rooms__evflag { flex: none; align-self: center; }
+.rooms__ev.is-short strong { min-width: 0; }
+.rooms__ev.is-short > span { display: none; }
+.rooms__name.is-clash, .rooms__name.is-dup { box-shadow: inset 0 3px 0 var(--fc); }
+.rooms__name b { color: var(--fc); }
+.rooms__name .small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rooms__grid { position: relative; }
+.rooms__col .rooms__name, .rooms__col .rooms__allday { width: 0; min-width: 100%; }
+.rooms__flag { border: 0; font-family: inherit; cursor: pointer; padding: 3px 8px; border-radius: 999px; background: color-mix(in srgb, var(--fc) 14%, transparent); color: var(--fc); font-size: 12px; font-weight: 700; line-height: 1.3; white-space: nowrap; }
+.rooms__off { margin: 0; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--warn) 10%, transparent); color: var(--ink); font-size: 13px; }
+.rooms__unreadbox { display: flex; flex-direction: column; gap: 8px; }
+.rooms__unreadbox p { margin: 0; }
+.rooms__unread { display: flex; flex-wrap: wrap; gap: 6px; }
+.rooms__word { height: auto; min-height: 30px; max-width: 100%; padding: 4px 10px; color: var(--ink); text-align: left; overflow-wrap: anywhere; }
+.rooms__wordname { margin: 0; overflow-wrap: anywhere; }
+.rooms__more > summary { cursor: pointer; padding: 6px 0; font-size: 13px; font-weight: 600; }
 .insp-defects { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; }
 .board-item.is-locked { opacity: .7; cursor: default; }
 .board-lock { font-size: 12px; }

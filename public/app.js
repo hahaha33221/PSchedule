@@ -2138,78 +2138,118 @@
     }
     // 회의실 예약 현황: 회의실(관리자 등록)마다 시간대별로 어떤 일정이 잡혀 있는지
     const roomBox = h("section", { class: "card rooms" });
-    let roomEvents = [];
+    const PSR = window.PSRooms; // 읽기 규칙은 rooms.js
+    const noRoom = (e) => PSR.isAbsenceCalendar(e.calendarName || e.sourceName); // 부재 캘린더는 방을 찾지 않음
+    let roomEvents = [], roomNames = [];
+    function setRooms(r) { state.rooms = r.rooms; state.roomSkip = r.skip; drawRooms(roomEvents); }
+    const unreadChips = (list, done) => h("div", { class: "rooms__unread" }, list.map((u) => h("button", { type: "button", class: "chip-add rooms__word", onclick: () => roomWordDialog(u.name, done) }, [u.name, u.n > 1 ? h("span", { class: "muted", text: ` ${u.n}건` }) : null])));
+    // 읽지 못한 표기 하나: 방 별명에 넣거나 '회의실 아님'으로
+    function roomWordDialog(word, done) {
+      const listed = PSR.makeReader(state.rooms, state.roomSkip).listed;
+      const byName = new Map((state.rooms || []).map((r, i) => [listed[i], PSR.parseLine(r).name])); // 보여 주는 이름 → 적힌 이름
+      const names = [...new Set([...listed, ...roomNames, PSR.A4])];
+      const pick = h("select", {}, [h("option", { value: "", text: "방을 골라 주세요" }), ...names.map((n) => h("option", { value: n, text: n })), h("option", { value: "+", text: "새 방으로 만들기" })]);
+      const name = h("input", { maxlength: "30", value: word.slice(0, 30) });
+      const nameField = field("새 방 이름", name);
+      nameField.hidden = true;
+      pick.addEventListener("change", () => { nameField.hidden = pick.value !== "+"; });
+      const err = errorLine();
+      const back = () => (done ? done() : closeDialog());
+      const save = (btn, body, msg) => busy(btn, async () => {
+        try { setRooms(await api("/admin/rooms/word", { method: "POST", body: { word, ...body } })); toast(msg); back(); } catch (ex) { showError(err, ex.message); }
+      });
+      const ok = h("button", { class: "btn btn--primary", type: "submit", text: "이 방으로 읽기" });
+      const no = h("button", { class: "btn btn--ghost", type: "button", text: "회의실 아님", onclick: () => save(no, {}, `'${word}'은(는) 회의실이 아닌 것으로 기억했어요.`) });
+      const form = h("form", { class: "stack" }, [
+        h("p", { class: "muted small", text: "고르면 이 표기가 적힌 일정이 모두 그 방에 모여요. 일정은 고치지 않아요." }),
+        h("p", { class: "rooms__wordname" }, [h("strong", { text: `[${word}]` })]),
+        field("어느 방인가요?", pick), nameField, err,
+        h("div", { class: "actions" }, [done ? h("button", { class: "btn btn--ghost", type: "button", text: "뒤로", onclick: back }) : null, no, ok])
+      ]);
+      form.addEventListener("submit", (e) => {
+        e.preventDefault();
+        const room = pick.value === "+" ? name.value.trim() : byName.get(pick.value) || pick.value;
+        if (!room) return showError(err, pick.value === "+" ? "새 방 이름을 적어 주세요." : "방을 골라 주세요.");
+        save(ok, { room }, `'${word}'을(를) ${pick.value === "+" ? room : pick.value}(으)로 읽어요.`);
+      });
+      openDialog("회의실 표기", form, { admin: true });
+    }
     function roomsDialog() {
-      const ta = h("textarea", { rows: "8", maxlength: "1200", placeholder: "한 줄에 하나씩\nA604호\nA301호\n영성센터 B동 401호" }, (state.rooms || []).join("\n"));
+      const ta = h("textarea", { rows: "8", maxlength: "9000", placeholder: "한 줄에 하나씩\nA604호\nA4 소회의실 = A4소, 4A소, 4층 소회의실\n영성센터 B동 401호" }, (state.rooms || []).join("\n"));
+      const skip = h("textarea", { rows: "4", maxlength: "9000", placeholder: "한 줄에 하나씩" }, (state.roomSkip || []).join("\n"));
       const err = errorLine();
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: "저장" });
+      const lines = (x) => x.value.split("\n").map((y) => y.trim()).filter(Boolean);
+      const unreadBox = h("div", { class: "stack" }, h("p", { class: "muted small", text: "찾는 중…" }));
       const form = h("form", { class: "stack" }, [
         h("p", { class: "muted small", text: "회의실은 일정 제목의 [A602] 같은 표기로 자동으로 잡혀요. 여기에 적은 회의실은 이 순서대로 맨 앞에, 예약이 없는 날에도 보여요. 30개까지예요." }),
-        field("회의실 목록", ta), err, h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])
+        field("회의실 목록", ta, "같은 방을 다르게 적는 표기가 있으면 '방 이름 = 다른 표기, 다른 표기'로 적어 주세요. 그 표기가 이 방으로 모여요."),
+        h("details", { class: "rooms__more" }, [h("summary", {}, ["회의실 아님으로 기억한 표기 ", h("span", { class: "muted", text: `${(state.roomSkip || []).length}개` })]), field("한 줄에 하나씩 (지우면 다시 찾아요)", skip)]),
+        err, h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok]),
+        h("div", { class: "rooms__unreadbox" }, [h("h3", { class: "card__title", text: "회의실로 읽지 못한 표기" }), unreadBox])
       ]);
       form.addEventListener("submit", (e) => {
         e.preventDefault();
         busy(ok, async () => {
-          try { const r = await api("/admin/rooms", { method: "PUT", body: { rooms: ta.value.split("\n").map((x) => x.trim()).filter(Boolean) } }); state.rooms = r.rooms; closeDialog(); toast("회의실 목록을 저장했어요."); drawRooms(roomEvents); }
+          try { setRooms(await api("/admin/rooms", { method: "PUT", body: { rooms: lines(ta), skip: lines(skip) } })); closeDialog(); toast("회의실 목록을 저장했어요."); }
           catch (ex) { showError(err, ex.message); }
         });
       });
       openDialog("회의실 관리", form, { admin: true });
+      // 앞뒤 일정에서 읽지 못한 표기를 모아 보여 줌 (고치다 만 글이 있으면 먼저 저장하도록)
+      api(`/events?from=${shiftYmd(day, -30)}&to=${shiftYmd(day, 60)}`).then((ev) => {
+        const b = PSR.makeReader(state.rooms, state.roomSkip).board(dedupeImported(allEvents(ev)), { noRoom });
+        const dirty = () => ta.value !== ta.defaultValue || skip.value !== skip.defaultValue;
+        const chips = unreadChips(b.unread.slice(0, 60), roomsDialog);
+        chips.addEventListener("click", (e) => { if (dirty() && e.target.closest("button")) { e.stopPropagation(); showError(err, "고친 목록을 먼저 저장해 주세요."); } }, true);
+        unreadBox.replaceChildren(
+          h("p", { class: "muted small", text: b.unread.length ? `${dateLabel(shiftYmd(day, -30))}부터 ${dateLabel(shiftYmd(day, 60))}까지 일정 제목의 대괄호예요. 누르면 방을 정하거나 회의실이 아니라고 기억할 수 있어요.` : "앞뒤 일정에는 읽지 못한 표기가 없어요." }),
+          b.unread.length ? chips : "",
+          b.unread.length > 60 ? h("p", { class: "muted small", text: `많이 나온 60개만 보여요. 모두 ${b.unread.length}개예요.` }) : "");
+      }).catch(() => unreadBox.replaceChildren(h("p", { class: "muted small", text: "불러오지 못했어요." })));
     }
-    function drawRooms(events) {
-      roomEvents = events;
-      // 회의실 = 제목의 대괄호 표기 ([A602] 회의, [A311, A301] …). 'A311호'·'a301' 은 A311·A301 로, 알파벳 없는 '501' 은 그날 하나뿐인 A501 같은 곳으로
-      const squash = (x) => String(x || "").replace(/\s/g, "").toLowerCase();
-      const codesOf = (e) => {
-        const out = [];
-        for (const m of String(e.title || "").matchAll(/\[([^\]]+)\]/g)) {
-          let letter = "";
-          for (const tok of m[1].split(/[,/·]|\bor\b/i)) {
-            const c = tok.match(/([A-Za-z])\s*-?\s*(\d{3})/) || tok.match(/^\s*(\d{3})\s*호?\s*$/);
-            if (!c) continue;
-            if (c.length === 3) { letter = c[1].toUpperCase(); out.push(letter + c[2]); } else out.push(letter ? letter + c[1] : c[1]);
-          }
-        }
-        return [...new Set(out)];
-      };
-      // 대괄호가 없으면 장소 칸: 'A604호' 같은 번호가 있으면 번호로, 없으면 회의실·층·호·홀·센터가 들어간 장소 이름 그대로 (온라인·외부 주소·사람 이름은 뺌)
-      const placeOf = (e) => {
-        const loc = String(e.location || "").replace(/\s+/g, " ").trim();
-        if (!loc) return [];
-        const coded = codesOf({ title: `[${loc.replace(/\[|\]/g, "")}]` });
-        if (coded.length) return coded;
-        if (/teams|zoom|온라인|대한민국|https?:/i.test(loc) || loc.length > 30) return [];
-        return /회의실|호|층|홀|센터|집무실|강당|세미나실/.test(loc) ? [loc] : [];
-      };
-      const evCodes = events.map((e) => { const c = codesOf(e); return { e, codes: c.length ? c : placeOf(e) }; });
-      const lettered = new Set(evCodes.flatMap((x) => x.codes).filter((c) => /^[A-Z]/.test(c)));
-      const fix = (c) => { if (/^[A-Z]/.test(c)) return c; const m = [...lettered].filter((x) => x.endsWith(c)); return m.length === 1 ? m[0] : c; };
-      // 관리자 목록은 순서·늘 보일 회의실용 (예약이 없어도 보임), 그 뒤에 그날 표기된 회의실
-      const listed = (state.rooms || []).map((r) => { const c = codesOf({ title: `[${r}]` })[0]; return c ? fix(c) : r; });
-      const found = [...new Set(evCodes.flatMap((x) => x.codes.map(fix)))].filter((c) => !listed.includes(c)).sort();
-      const rooms = [...new Set([...listed, ...found])];
-      const byRoom = new Map(rooms.map((r) => [r, []]));
-      for (const { e, codes } of evCodes) {
-        const hit = codes.map(fix);
-        // 대괄호가 없으면 관리자 목록 이름이 장소 칸에 들어 있는지 봄 (예전 방식)
-        if (!hit.length) { const loc = squash(e.location); const r = loc && (state.rooms || []).find((x) => loc.includes(squash(x))); if (r) hit.push(listed[(state.rooms || []).indexOf(r)]); }
-        for (const r of new Set(hit)) byRoom.get(r)?.push(e);
-      }
+    // all: 그날 일정 전부(분류와 상관없이). 왼쪽 '내 캘린더'에서 끈 것은 빼고 그리되, 빠진 예약이 있으면 알려 줌
+    function drawRooms(all) {
+      roomEvents = all;
+      if (!PSR) return fill(roomBox, h("h2", { class: "card__title", text: "회의실 예약 현황" }), h("p", { class: "muted", text: "새 버전이 나왔어요. 화면을 새로 고치면 보여요." }));
+      const reader = PSR.makeReader(state.rooms, state.roomSkip);
+      const events = dedupeImported(all.filter(showEv));
+      const { rooms, byRoom, events: used, usedRooms, unread } = reader.board(events, { noRoom });
+      roomNames = rooms;
+      const hidden = dedupeImported(all).filter((e) => !showEv(e) && !noRoom(e) && reader.read(e).rooms.length);
+      const offNames = [...new Set(hidden.map((e) => (e.ext ? e.calendarName : KIND[e.kind]?.label) || "일정"))];
+      const over = new Map(rooms.map((r) => [r, PSR.overlaps(byRoom.get(r), day)]));
+      const sum = (k) => [...over.values()].reduce((n, o) => n + o[k], 0);
+      const clashes = sum("clash"), dups = sum("dup");
       const timed = [...byRoom.values()].flat().filter((e) => e.startTime && e.startDate === day);
       const startH = Math.min(8, ...timed.map((e) => Math.floor(minutes(e.startTime) / 60)));
       const endH = Math.max(20, ...timed.map((e) => Math.ceil(minutes(e.endTime && e.endTime > e.startTime ? e.endTime : e.startTime) / 60) + (e.endTime && e.endTime > e.startTime ? 0 : 1)));
       const RH = 40, H = (endH - startH) * RH;
       const nowTop = day === today() ? (() => { const n = new Date(), m = n.getHours() * 60 + n.getMinutes(); return m >= startH * 60 && m <= endH * 60 ? ((m - startH * 60) / 60) * RH : null; })() : null;
-      const used = [...byRoom.values()].reduce((n, l) => n + l.length, 0);
+      // 누를 때마다 다음 겹친 방으로 (옆으로 밀어 보여 줌)
+      const at = { clash: -1, dup: -1 };
+      const toFlag = (k) => {
+        const hits = [...roomBox.querySelectorAll(`.rooms__name.is-${k}`)], box = roomBox.querySelector(".rooms__scroll");
+        if (!hits.length) return;
+        at[k] = (at[k] + 1) % hits.length;
+        const c = hits[at[k]].parentElement;
+        box.scrollLeft = c.offsetLeft - 60;
+        c.querySelector(`.rooms__ev.is-${k}`)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      };
       const head = h("div", { class: "card__head" }, [
         h("h2", { class: "card__title", text: "회의실 예약 현황" }),
-        h("span", { class: "muted small", text: rooms.length ? `${dateLabel(day)} · 예약 ${used}건` : "" }),
+        h("span", { class: "muted small", text: rooms.length ? `${dateLabel(day)} · 일정 ${used}건 · 쓰는 방 ${usedRooms}곳` : "" }),
+        clashes ? h("button", { type: "button", class: "rooms__flag", title: "겹친 방 보기", onclick: () => toFlag("clash"), text: `시간 겹침 ${clashes}건` }) : null,
+        dups ? h("button", { type: "button", class: "rooms__flag rooms__flag--dup", title: "중복일 수 있는 방 보기", onclick: () => toFlag("dup"), text: `중복일 수 있음 ${dups}건` }) : null,
         isAdmin() ? h("button", { class: "btn btn--ghost btn--sm btn--admin", type: "button", title: "관리자 전용", onclick: roomsDialog }, [icon("lock"), "회의실 관리"]) : null
       ]);
-      if (!rooms.length) return fill(roomBox, head, h("p", { class: "muted", text: "이 날은 회의실 예약이 없어요. 일정 제목 앞에 [A602]처럼 회의실을 적으면 여기에 보여요." }));
+      const offNote = hidden.length ? h("p", { class: "rooms__off", text: `왼쪽 '내 캘린더'에서 ${offNames.join(", ")}을(를) 꺼 두어서 회의실 일정 ${hidden.length}건이 안 보여요. 비어 보이는 방도 예약이 있을 수 있어요.` }) : null;
+      const unreadNote = isAdmin() && unread.length ? h("div", { class: "rooms__unreadbox" }, [h("p", { class: "muted small" }, [adminBadge(), ` 회의실로 읽지 못한 표기 ${unread.length}개 · 눌러서 방을 정하거나 회의실이 아니라고 기억해요.`]), unreadChips(unread)]) : null;
+      if (!rooms.length) return fill(roomBox, head, offNote, h("p", { class: "muted", text: offNote ? "보이는 일정 가운데 회의실 예약이 없어요." : "이 날은 회의실 예약이 없어요. 일정 제목 앞에 [A602]처럼 회의실을 적으면 여기에 보여요." }), unreadNote);
       const axis = h("div", { class: "rooms__axis", style: `height:${H}px` }, Array.from({ length: endH - startH }, (_, i) => h("span", { style: `top:${i * RH}px`, text: `${pad(startH + i)}:00` })));
+      const FLAG = { clash: "시간 겹침", dup: "중복일 수 있음" };
       const col = (r) => {
-        const list = byRoom.get(r);
+        const list = byRoom.get(r), ov = over.get(r);
         const allDay = list.filter((e) => !e.startTime || e.startDate !== day);
         const items = list.filter((e) => e.startTime && e.startDate === day).map((e) => { const s0 = minutes(e.startTime); const en = e.endTime && e.endTime > e.startTime ? minutes(e.endTime) : s0 + 60; return { e, s: s0, en, lane: 0 }; }).sort((a, b) => a.s - b.s);
         for (const it of items) { const busyL = new Set(items.filter((x) => x !== it && x.s < it.en && x.en > it.s && items.indexOf(x) < items.indexOf(it)).map((x) => x.lane)); while (busyL.has(it.lane)) it.lane++; }
@@ -2217,24 +2257,27 @@
         const body = h("div", { class: "rooms__body", style: `height:${H}px` }, [
           ...Array.from({ length: endH - startH }, (_, i) => h("i", { class: "rooms__line", style: `top:${i * RH}px` })),
           nowTop != null ? h("i", { class: "rooms__now", style: `top:${nowTop}px` }) : null,
-          ...items.map((it) => h("button", {
-            type: "button", class: `rooms__ev c${evColor(it.e)}` + (it.e.ext ? " is-ext" : ""), "data-peek": evKey(it.e), onclick: () => openEv(it.e),
-            title: `${it.e.title} · ${timeRange(it.e)}${it.e.location ? " · " + it.e.location : ""}`,
+          ...items.map((it) => { const f = ov.of.get(it.e); return h("button", {
+            type: "button", class: `rooms__ev c${evColor(it.e)}` + (it.e.ext ? " is-ext" : "") + (f ? ` is-${f}` : "") + (it.en - it.s < 75 && f ? " is-short" : ""), "data-peek": evKey(it.e), onclick: () => openEv(it.e),
+            title: `${f ? `[${FLAG[f]}] ` : ""}${it.e.title} · ${timeRange(it.e)}${it.e.location ? " · " + it.e.location : ""}`,
             style: `top:${((it.s - startH * 60) / 60) * RH}px;height:${Math.max(22, ((it.en - it.s) / 60) * RH - 2)}px;left:calc(100% * ${it.lane / lanes} + 2px);width:calc(100% / ${lanes} - 4px)`
-          }, [h("strong", { text: it.e.title }), h("span", { text: timeRange(it.e).replace(/^[^·]*·\s*/, "") })]))
+          }, [f ? h("em", { class: "rooms__evflag", text: FLAG[f] }) : null, h("strong", { text: it.e.title }), h("span", { text: timeRange(it.e).replace(/^[^·]*·\s*/, "") })]); })
         ]);
-        return h("div", { class: "rooms__col" }, [
-          h("div", { class: "rooms__name" }, [h("strong", { text: r }), h("span", { class: "muted small", text: list.length ? `${list.length}건` : "비어 있음" })]),
+        const flag = ov.clash ? "clash" : ov.dup ? "dup" : "";
+        return h("div", { class: "rooms__col" + (lanes > 1 ? " is-wide" : "") }, [
+          h("div", { class: "rooms__name" + (flag ? ` is-${flag}` : "") }, [h("strong", { text: r, title: r }), h("span", { class: "muted small" }, [list.length ? `${list.length}건` : "비어 있음", flag ? h("b", { text: ` · ${FLAG[flag]}` }) : null])]),
           allDay.length ? h("div", { class: "rooms__allday" }, allDay.map((e) => h("button", { type: "button", class: `rooms__chip c${evColor(e)}`, onclick: () => openEv(e), text: `종일 · ${e.title}` }))) : h("div", { class: "rooms__allday" }),
           body
         ]);
       };
-      fill(roomBox, head,
-        h("div", { class: "rooms__scroll" }, h("div", { class: "rooms__grid", style: `grid-template-columns:52px repeat(${rooms.length}, minmax(130px, 1fr))` }, [
+      const cols = rooms.map(col);
+      fill(roomBox, head, offNote,
+        h("div", { class: "rooms__scroll" }, h("div", { class: "rooms__grid", style: `grid-template-columns:52px ${cols.map((c, i) => (c.classList.contains("is-wide") ? "minmax(230px, 1.4fr)" : rooms[i].length > 9 ? "minmax(180px, 1fr)" : "minmax(130px, 1fr)")).join(" ")}` }, [
           h("div", { class: "rooms__axiswrap" }, [h("div", { class: "rooms__name rooms__name--blank" }), h("div", { class: "rooms__allday" }), axis]),
-          ...rooms.map(col)
+          ...cols
         ])),
-        h("p", { class: "muted small", text: "일정 제목 앞의 [A602]·[B204] 같은 표기로 회의실을 잡아요. 눌러서 자세히 보거나 고칠 수 있어요." })
+        unreadNote,
+        h("p", { class: "muted small", text: "일정 제목의 [A602] 같은 표기로 회의실을 잡아요. 분류를 골라도 여기는 모든 분류의 일정을 보여 줘요. 두 방을 쓰는 일정은 방마다 보여요. 눌러서 자세히 보거나 고칠 수 있어요." })
       );
     }
     setMain("today", [quickbar, findBox, roomBox, h("div", { class: "today-grid" }, [timelineBox, h("div", { class: "today-side" }, [tasksBox, memoBox])])]);
@@ -2247,8 +2290,8 @@
       const inCat = catFilter();
       const events = dedupeImported(allEvents(ev).filter((e) => showEv(e) && inCat(e)));
       drawTimeline(events);
-      // 회의실 예약은 분류 거르기와 관계없이 그날 보이는 일정 전부로
-      drawRooms(dedupeImported(allEvents(ev).filter(showEv)));
+      // 회의실 예약은 분류 거르기와 관계없이 그날 일정 전부로 (끈 캘린더는 안에서 빼고 알려 줌)
+      drawRooms(allEvents(ev));
       drawTasks(tk.tasks.filter(inCat));
       memoList.replaceChildren(memoRows(mm.memos.filter(inCat), { empty: "이 날 남긴 메모가 없어요." }));
       markPeeked();
@@ -3000,7 +3043,7 @@
 
   async function reloadTeam() {
     const me = await api("/me");
-    state.user = me.user; state.team = me.team; state.units = me.units || []; state.tags = me.tags; state.categories = me.categories || []; state.calendars = me.calendars || []; state.rooms = me.rooms || [];
+    state.user = me.user; state.team = me.team; state.units = me.units || []; state.tags = me.tags; state.categories = me.categories || []; state.calendars = me.calendars || []; state.rooms = me.rooms || []; state.roomSkip = me.roomSkip || [];
   }
 
   function showIssued(title, p) {
@@ -8699,7 +8742,7 @@
   async function boot() {
     app.replaceChildren(loading(true));
     const r = await api("/me");
-    state.user = r.user; state.team = r.team; state.units = r.units || []; state.tags = r.tags; state.calendars = r.calendars || []; state.rooms = r.rooms || []; state.unreadNotices = r.unreadNotices || 0;
+    state.user = r.user; state.team = r.team; state.units = r.units || []; state.tags = r.tags; state.calendars = r.calendars || []; state.rooms = r.rooms || []; state.roomSkip = r.roomSkip || []; state.unreadNotices = r.unreadNotices || 0;
     setCategories(r.categories);
     layout.main = null;
     render();

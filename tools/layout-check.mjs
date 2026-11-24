@@ -87,6 +87,13 @@ await post("/admin/vol-trainings", { title: "기본 교육", body: "내용", dat
 await post("/admin/vol-schedules", { title: "포장 봉사", date: day(2), startTime: "10:00", audience: "all", place: "시험 건물" });
 await post("/team/docs", { category: "inspect", title: "검수 기준 자료", url: "https://example.com/a/very/long/path/that/does/not/break/easily", note: "설명" });
 await call("/ops/perms", "PUT", { staffOn: true });
+// 회의실 예약 현황: 방 12곳 이상·시간 겹침·중복·읽지 못한 표기·부재 캘린더
+const rv = (title, startTime, endTime, location = "") => post("/events", { kind: "meeting", title, startDate: day(0), endDate: day(0), startTime, endTime, location, unitId: unit });
+for (const [t, a, b] of [["[A501] 첫 회의 이름이 아주 길어서 잘려야 하는 시험 회의", "13:30", "15:30"], ["[A501호] 두 번째 시험 회의", "14:00", "17:00"], ["[A602] 같은 시험 회의", "10:00", "11:00"], ["[A602] 같은 시험 회의", "10:00", "11:00"], ["[A301] 앞", "06:00", "07:00"], ["[A301] 뒤", "07:00", "08:00"], ["[A4소] 짧은 회의", "08:00", "08:15"], ["[4A소회의실] 겹치는 짧은 회의", "08:00", "08:15"], ["[A311, A601] 두 방", "09:00", "10:00"],
+  ["[A603][가나다라마바사] 시험", "11:00", "12:00"], ["A604 앞에 적은 방", "", ""], ["괄호에 적은 방 (B204)", "12:00", "13:00"], ["[본관 아주긴이름의시험용건물 지하1층] 시험", "", ""], ["[커뮤회의실] 시험", "17:00", "18:00"], ["[경당] 시험", "", ""], ["[대회의실] 시험", "18:00", "21:30"], ["[읽지못하는아주긴표기이름의시험건물과사제관] 시험", "", ""]]) await rv(t, a || null, b || null);
+const cal = Number(db.prepare("INSERT INTO calendars (name, url, color) VALUES ('부재 알림', 'https://example.com/none.ics', 3)").run().lastInsertRowid);
+for (const [t, i] of [["[A302] 부재 시험", 1], ["[가나다] 부재 시험", 2]]) db.prepare("INSERT INTO calendar_events (calendar_id, uid, inst, title, start_date, end_date, start_time, end_time) VALUES (?, ?, 'x', ?, ?, ?, NULL, NULL)").run(cal, "u" + i, t, day(0), day(0));
+await call("/admin/rooms", "PUT", { rooms: ["A604호", "A4 소회의실 = 4층 소회의실", "비어 있는 아주 긴 이름의 회의실 이름"], skip: [] });
 const setMenu = (steps) => call("/admin/vol-menu", "PUT", { menu: ["home", "schedule", "training", "notices", "wbs", "req", "in", "out", "recovery", "moves2", ...(steps ? ["steps2"] : [])] });
 
 /* ---- 볼 화면: 주소와 눌러 열 것(글자) ---- */
@@ -163,7 +170,7 @@ for (const [role, steps, list] of RUNS) {
       note(key, w, await ev(FIND));
       await shot(`${role}${steps ? "" : "0"}-${path}-${w}`);
       // 입력 판: 이 화면의 적기·추가 단추와 첫 줄·첫 카드를 눌러 봄 (저장하지 않고 닫음)
-      const pick = `(() => { const m = document.querySelector("main"); if (!m) return 0; const b = [...m.querySelectorAll("button")].filter((x) => x.getClientRects().length && !x.disabled && !x.matches(".pick-tile, .vm-card, .alert, [role=tab]") && /적기|추가|등록|만들기|기록$|배분$|요청$|올리기|고치기|입력$|알려|물량 배정/.test(x.textContent.trim()) && !/지우기|모두 읽음|사진 올리기/.test(x.textContent)).slice(0, 4); const r = [...m.querySelectorAll("tr.stock-row, button.vm-card, li.stock-row")].filter((x) => x.getClientRects().length).slice(0, 2); window.__t = [...new Set([...b, ...r])]; return window.__t.length; })()`; // 다시 그려지면 단추가 바뀌므로 누를 때마다 다시 찾음
+      const pick = `(() => { const m = document.querySelector("main"); if (!m) return 0; const b = [...m.querySelectorAll("button")].filter((x) => x.getClientRects().length && !x.disabled && !x.matches(".pick-tile, .vm-card, .alert, [role=tab]") && /회의실 관리|^읽지못하는|적기|추가|등록|만들기|기록$|배분$|요청$|올리기|고치기|입력$|알려|물량 배정/.test(x.textContent.trim()) && !/지우기|모두 읽음|사진 올리기/.test(x.textContent)).slice(0, 4); const r = [...m.querySelectorAll("tr.stock-row, button.vm-card, li.stock-row")].filter((x) => x.getClientRects().length).slice(0, 2); window.__t = [...new Set([...b, ...r])]; return window.__t.length; })()`; // 다시 그려지면 단추가 바뀌므로 누를 때마다 다시 찾음
       const n = await ev(pick);
       for (let i = 0; i < n; i++) {
         await ev(pick);

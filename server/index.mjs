@@ -3282,6 +3282,44 @@ const VOL_MENU_KEYS = ["home", "schedule", "training", "notices", "wbs", "req", 
 const VOL_MENU_DEFAULT = ["home", "notices", "in", "out"];
 // 회의실 목록 (관리자가 등록). 일정 장소 글자에 이름이 들어 있으면 그 회의실 예약으로 봄
 const meetingRooms = () => { try { const v = JSON.parse(q.setting.get("meeting_rooms")?.value || "[]"); return Array.isArray(v) ? v.filter((x) => typeof x === "string") : []; } catch { return []; } };
+// '회의실 아님'으로 기억한 표기
+const roomSkip = () => { try { const v = JSON.parse(q.setting.get("meeting_rooms_skip")?.value || "[]"); return Array.isArray(v) ? v.filter((x) => typeof x === "string") : []; } catch { return []; } };
+const roomKey = (x) => String(x ?? "").normalize("NFKC").replace(/\s+/g, "").toLowerCase(); // public/rooms.js 의 key 와 같음
+const roomParse = (line) => { const [name, ...rest] = String(line).split("="); return { name: name.trim(), alias: rest.join(",").split(/[,，]/).map((x) => x.trim()).filter(Boolean) }; };
+const roomWord = (v, max, label) => { const s = text(v, max, label).replace(/\s+/g, " "); if (/[=,，]/.test(s)) throw bad(`${label}에는 = 와 쉼표를 쓸 수 없어요.`); return s; };
+function roomLines(list) {
+  if (!Array.isArray(list) || list.length > 60) throw bad("회의실은 30개까지 등록할 수 있어요.");
+  const out = [], seen = new Map();
+  for (const line of list) {
+    const p = roomParse(text(line, 900, "회의실 한 줄"));
+    if (!p.name) { if (p.alias.length) throw bad("'=' 앞에 회의실 이름을 적어 주세요."); continue; }
+    const name = roomWord(p.name, 30, "회의실 이름");
+    if (!p.alias.length && seen.get(roomKey(name)) === name) continue; // 같은 이름 줄은 하나로
+    const alias = [];
+    for (const x of p.alias) { const w = roomWord(x, 40, "다른 표기"); if (roomKey(w) !== roomKey(name) && !alias.some((y) => roomKey(y) === roomKey(w))) alias.push(w); }
+    if (alias.length > 20) throw bad(`'${name}'의 다른 표기는 20개까지 적을 수 있어요.`);
+    for (const w of [name, ...alias]) {
+      const other = seen.get(roomKey(w));
+      if (other) throw bad(`'${w}'이(가) '${other}'와(과) '${name}' 두 줄에 있어요. 한 곳에만 적어 주세요.`);
+      seen.set(roomKey(w), name);
+    }
+    out.push(alias.length ? `${name} = ${alias.join(", ")}` : name);
+  }
+  if (out.length > 30) throw bad("회의실은 30개까지 등록할 수 있어요.");
+  return out;
+}
+// 방 이름·별명에 있는 표기는 '회의실 아님'에서 빠짐
+function roomSkipInput(list, rooms) {
+  if (!Array.isArray(list)) throw bad("회의실 아님 표기를 확인해 주세요.");
+  const used = new Set(rooms.flatMap((r) => { const p = roomParse(r); return [p.name, ...p.alias].map(roomKey); })), out = new Map();
+  for (const x of list) { const w = text(x, 40, "회의실 아님 표기"); if (w && !used.has(roomKey(w)) && !out.has(roomKey(w))) out.set(roomKey(w), w); }
+  if (out.size > 300) throw bad("회의실 아님 표기는 300개까지 기억해요.");
+  return [...out.values()];
+}
+function saveRooms(user, rooms, skip) {
+  inTx(() => { q.setSetting.run("meeting_rooms", JSON.stringify(rooms)); q.setSetting.run("meeting_rooms_skip", JSON.stringify(skip)); });
+  console.log(`[admin] ${user.login} → 회의실 목록 ${rooms.length}개 · 회의실 아님 ${skip.length}개`);
+}
 const volMenu = () => { try { const v = JSON.parse(q.setting.get("vol_menu")?.value || "null"); return Array.isArray(v) ? v.filter((k) => VOL_MENU_KEYS.includes(k)) : VOL_MENU_DEFAULT; } catch { return VOL_MENU_DEFAULT; } };
 // 기록 사진: 줄여 올린 JPG·PNG·WEBP 만, 기록당 4장까지
 const MOVE_PHOTO_MAX = 4;
@@ -3645,7 +3683,7 @@ async function api(req, res, path) {
 
   // 화면을 그리는 데 늘 필요한 것: 나, 팀원, 태그, 분류
   if (path === "/api/me" && method === "GET") {
-    return send(res, 200, { user: publicUser(user), team: teamOut(), units: unitsOut(), tags: q.tags.all(), categories: categoriesOut(), calendars: calendarsPublic(), rooms: meetingRooms(), unreadNotices: unreadOf(user) });
+    return send(res, 200, { user: publicUser(user), team: teamOut(), units: unitsOut(), tags: q.tags.all(), categories: categoriesOut(), calendars: calendarsPublic(), rooms: meetingRooms(), roomSkip: roomSkip(), unreadNotices: unreadOf(user) });
   }
 
   // 비밀번호 변경 (본인)
@@ -4471,14 +4509,29 @@ async function api(req, res, path) {
     if (path === "/api/admin/vol-records" && method === "GET") {
       return send(res, 200, { records: q.volRecordsAll.all().map((r) => ({ id: r.id, kind: r.kind, stage: r.stage || "in", group: r.group_name, date: r.date, name: r.name, qty: r.qty, note: r.note, author: r.author || "", updatedAt: r.updated_at })) });
     }
-    // 회의실 목록: 한 줄에 하나, 30자·30개까지, 같은 이름은 하나로
+    // 회의실 목록: 한 줄에 하나 '이름' 또는 '이름 = 다른 표기, 다른 표기'. skip 은 '회의실 아님'으로 기억한 표기 (안 보내면 그대로)
     if (path === "/api/admin/rooms" && method === "PUT") {
       const b = await readJson(req);
-      if (!Array.isArray(b.rooms) || b.rooms.length > 30) throw bad("회의실은 30개까지 등록할 수 있어요.");
-      const rooms = [...new Set(b.rooms.map((x) => text(x, 30, "회의실 이름")).filter(Boolean))];
-      q.setSetting.run("meeting_rooms", JSON.stringify(rooms));
-      console.log(`[admin] ${user.login} → 회의실 목록 ${rooms.length}개`);
-      return send(res, 200, { rooms });
+      const rooms = roomLines(b.rooms), skip = has(b, "skip") ? roomSkipInput(b.skip, rooms) : roomSkip();
+      saveRooms(user, rooms, skip);
+      return send(res, 200, { rooms, skip });
+    }
+    // 읽지 못한 표기 하나를 방 별명에 넣거나(room) '회의실 아님'으로 기억
+    if (path === "/api/admin/rooms/word" && method === "POST") {
+      const b = await readJson(req);
+      const word = roomWord(b.word, 40, "표기"), room = roomWord(b.room, 30, "회의실 이름");
+      if (!word) throw bad("표기를 적어 주세요.");
+      let rooms = meetingRooms(), skip = roomSkip().filter((x) => roomKey(x) !== roomKey(word));
+      if (room) {
+        // 새 방 이름이 표기와 같으면 이름만, 이미 있는 방이면 그 줄에 별명으로
+        const i = rooms.findIndex((r) => roomKey(roomParse(r).name) === roomKey(room));
+        if (i < 0) rooms.push(roomKey(room) === roomKey(word) ? room : `${room} = ${word}`);
+        else if (![room, ...roomParse(rooms[i]).alias].some((x) => roomKey(x) === roomKey(word))) rooms[i] = `${rooms[i]}${rooms[i].includes("=") ? "," : " ="} ${word}`;
+        rooms = roomLines(rooms);
+        skip = roomSkipInput(skip.filter((x) => roomKey(x) !== roomKey(room)), rooms);
+      } else skip = roomSkipInput([...skip, word], rooms);
+      saveRooms(user, rooms, skip);
+      return send(res, 200, { rooms, skip });
     }
     // 봉사자 메뉴 공개 범위
     if (path === "/api/admin/vol-menu" && method === "GET") return send(res, 200, { menu: volMenu(), keys: VOL_MENU_KEYS });
