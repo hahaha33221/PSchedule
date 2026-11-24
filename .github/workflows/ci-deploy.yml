@@ -1143,6 +1143,49 @@ jobs:
           test "$(CPOST "$T2" ok "")" = 403; test "$(CPOST "$TH" bad "")" = 400; test "$(CPOST "$TH" bad 없음)" = 400
           for i in 1 2 3 4; do test "$(CPOST "$TH" bad knot)" = 201; done; CP=$(BODY 'if(d.photos.length!==4)process.exit(1);console.log(d.photos[0].id)')
           test "$(CPOST "$TH" bad knot)" = 400; test "$(CODE -H "$T2" $B/ops/criteria-photos/$CP)" = 200; test "$(CODE -H "$T2" -XDELETE $B/ops/criteria-photos/$CP)" = 403; test "$(CODE -H "$TH" -XDELETE $B/ops/criteria-photos/$CP)" = 200
+          # 알림(변경 내역): 누가 무엇을 고쳤는지, 역할마다 볼 수 있는 것만, 메뉴를 열면 그 사람 숫자만 사라짐
+          CHG() { curl -fs -H "$1" $B/changes/counts | JQ 'console.log(d.counts["'$2'"]||0)'; }
+          SEEN() { printf '{"menu":"%s"}' "$2" > /tmp/ps/j.json; curl -fs -H "$1" -XPOST -d @/tmp/ps/j.json $B/changes/seen >/dev/null; }
+          HAS() { curl -fs -H "$1" "$B/changes" | JQ 'console.log(d.changes.some(c=>'"$2"')?1:0)'; }
+          test "$(curl -s -o /dev/null -w '%{http_code}' $B/changes)" = 401
+          printf '{"menu":["home","notices","in","out","steps2"]}' > /tmp/ps/j.json; curl -fs -H "$H" $B/admin/vol-menu > /tmp/ps/menu.json; curl -fs -H "$H" -XPUT -d @/tmp/ps/j.json $B/admin/vol-menu >/dev/null
+          CM=$(curl -fs -H "$H" -XPOST -d '{"name":"알림확인수도회"}' $B/ops/monasteries | JQ 'console.log(d.monasteries.find(m=>m.name=="알림확인수도회").id)')
+          SEEN "$TH" tedu1; SEEN "$H" ops; test "$(CHG "$TH" tedu1)" = 0
+          printf '{"phone":"02-555-0142","address":"알림시험로 7"}' > /tmp/ps/j.json; curl -fs -H "$H" -XPATCH -d @/tmp/ps/j.json $B/ops/monasteries/$CM >/dev/null
+          curl -fs -H "$H" -XPATCH -d '{"status":"making"}' $B/ops/monasteries/$CM >/dev/null
+          test "$(CHG "$TH" tedu1)" = 2; test "$(CHG "$H" ops)" = 0   # 내가 고친 것은 안 셈
+          test "$(CHG "$VH" tedu1)" = 0                             # 부서 봉사자에게는 수도회 메뉴가 없음
+          test "$(HAS "$TH" 'c.refId=='$CM'&&c.detail.includes("연락처 고침")&&c.menu=="tedu1"&&c.unread')" = 1
+          test "$(HAS "$TH" 'c.refId=='$CM'&&c.detail.includes("등록 → 제작 중")')" = 1
+          test "$(SQL "SELECT count(*) FROM changes WHERE title || detail LIKE '%0142%' OR title || detail LIKE '%알림시험로%'" 1)" = 0   # 값은 저장하지 않음
+          SEEN "$T2" tedu1; test "$(CHG "$T2" tedu1)" = 0; test "$(CHG "$TH" tedu1)" = 2   # 다른 사람 숫자는 그대로
+          SEEN "$TH" tedu1; test "$(CHG "$TH" tedu1)" = 0; test "$(HAS "$TH" 'c.refId=='$CM)" = 1   # 본 뒤에도 내역은 남음
+          curl -fs -H "$H" -XDELETE $B/ops/monasteries/$CM >/dev/null; test "$(HAS "$TH" 'c.refId=='$CM'&&c.action=="delete"&&c.title=="알림확인수도회"')" = 1
+          # 직원: '직원도 쓰기'가 꺼져 있으면 수도회·물류 변경은 안 보임, 켜면 보임
+          curl -fs -H "$H" -XPUT -d '{"staffOn":false}' $B/ops/perms >/dev/null; test "$(HAS "$SH1" 'c.topic=="mon"||c.topic=="ship_in"||c.topic=="contacts"')" = 0
+          test "$(HAS "$SH1" 'c.topic=="edu"||c.topic=="board"||c.topic=="issue"||c.topic=="inspect"')" = 0
+          curl -fs -H "$H" -XPUT -d '{"staffOn":true}' $B/ops/perms >/dev/null; test "$(HAS "$SH1" 'c.topic=="mon"')" = 1
+          curl -fs -H "$H" -XPUT -d '{"staffOn":false}' $B/ops/perms >/dev/null
+          # 비밀글은 남지 않고, 공개 글을 비밀글로 바꾸면 지난 알림도 사라짐
+          curl -fs -H "$VH" -XPOST -d '{"title":"알림비밀글","body":"비밀","secret":true}' $B/board >/dev/null; test "$(SQL "SELECT count(*) FROM changes WHERE title LIKE '%알림비밀글%'" 1)" = 0
+          BP=$(curl -fs -H "$VH" -XPOST -d '{"title":"알림공개글","body":"공개"}' $B/board | JQ 'console.log(d.id||d.post.id)'); test "$(HAS "$TH" 'c.topic=="board"&&c.title=="알림공개글"')" = 1
+          curl -fs -H "$VH" -XPATCH -d '{"category":"free","title":"알림공개글","body":"공개","secret":true}' $B/board/$BP >/dev/null; test "$(SQL "SELECT count(*) FROM changes WHERE title LIKE '%알림공개글%'" 1)" = 0
+          # 개인 일정은 남지 않음
+          curl -fs -H "$VH" -XPOST -d '{"title":"알림개인일정","date":"2027-03-03"}' $B/volunteer/schedules >/dev/null; test "$(SQL "SELECT count(*) FROM changes WHERE title LIKE '%알림개인일정%'" 1)" = 0
+          # 데드라인은 보는 사람에게만
+          curl -fs -H "$H" -XPOST -d '{"title":"알림부서마감","date":"2027-03-04","audience":"dept"}' $B/ops/deadlines >/dev/null; test "$(HAS "$TH" 'c.title=="알림부서마감"')" = 0
+          test "$(HAS "$VH" 'c.title=="알림부서마감"')" = 1; test "$(HAS "$TH" 'c.title=="알림부서마감"')" = 0
+          # 택배 도착 → 팀의 회수에도 남음, 팀은 수도회 검수 택배만. 재료 택배는 부서만
+          AE=$(EDU 알림택배수도회 2026-01-05); AM=$(ORG $AE monasteryId); SEEN "$TH" tmake2; SEEN "$VH" dr1
+          printf '{"direction":"in","kind":"inspect","partyType":"monastery","monasteryId":%s,"status":"sent","qty":5}' $AM > /tmp/ps/j.json; AS=$(curl -fs -H "$VH" -XPOST -d @/tmp/ps/j.json $B/ops/shipments | JQ 'console.log(d.shipments.reduce((n,x)=>Math.max(n,x.id),0))')
+          printf '{"direction":"in","kind":"material_done","partyType":"etc","partyName":"알림시험이름","status":"sent","qty":5}' > /tmp/ps/j.json; curl -fs -H "$VH" -XPOST -d @/tmp/ps/j.json $B/ops/shipments >/dev/null
+          test "$(CHG "$TH" tmake2)" = 1; test "$(SQL "SELECT count(*) FROM changes WHERE title LIKE '%알림시험이름%'" 1)" = 0
+          curl -fs -H "$VH" -XPATCH -d '{"status":"arrived"}' $B/ops/shipments/$AS >/dev/null; test "$(HAS "$TH" 'c.topic=="recovery"&&c.title.includes("알림택배수도회")')" = 1; test "$(CHG "$VH" dr1)" = 0
+          test "$(HAS "$TH" 'c.topic=="ship_in"&&c.refId=='$AS'&&c.detail.includes("상태 발송 → 도착")')" = 1
+          curl -fs -H "$TH" -XPOST -d '{"menu":"*"}' $B/changes/seen | JQ 'if(Object.keys(d.counts).length||d.alarm)process.exit(1)'
+          node -e 'process.stdout.write(JSON.stringify({menu:JSON.parse(require("fs").readFileSync("/tmp/ps/menu.json")).menu}))' > /tmp/ps/j.json; curl -fs -H "$H" -XPUT -d @/tmp/ps/j.json $B/admin/vol-menu >/dev/null
+          # 막힌 요청·바뀐 것이 없는 저장은 남기지 않음
+          N0=$(SQL "SELECT count(*) FROM changes" 1); curl -s -o /dev/null -H "$VH" -XPOST -d '{"name":"알림막힘"}' $B/ops/monasteries; printf '{"status":"arrived"}' > /tmp/ps/j.json; curl -fs -H "$VH" -XPATCH -d @/tmp/ps/j.json $B/ops/shipments/$AS >/dev/null; test "$(SQL "SELECT count(*) FROM changes" 1)" = "$N0"
           curl -fs -H "$H" -XPATCH -d '{"role":"volunteer","volKinds":["dept"],"volLeader":false}' $B/admin/users/$(USR volb) >/dev/null
           curl -fs -H "$H" -XPATCH -d '{"volLeader":false}' $B/admin/users/$(USR teamv) >/dev/null
           curl -fs -H "$H" -XPUT -d '{"staffOn":false}' $B/ops/perms >/dev/null

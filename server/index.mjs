@@ -18,6 +18,7 @@ import crypto from "node:crypto";
 import { parseOutline, importOutline, cleanContact, openDb, ensureAdmin, verifyPassword, hashPassword, tempPassword } from "./db.mjs";
 import { autoEduDone, dropEduDone, eduStatus, EDU_STATUS_SQL, logMonStatus, setEduStatus, setMonStatus } from "./edu-status.mjs";
 import { actor, setActor } from "./ctx.mjs";
+import { KEEP_DAYS, TOPICS, makeChanges } from "./changes.mjs";
 import { createCalendarSync, checkUrl, maskUrl } from "./calendars.mjs";
 import { startAutoBackup, listBackups, backupNow, pruneBackups } from "./backup.mjs";
 import { vapidKeys, sendPush, pushEndpointOk } from "./push.mjs";
@@ -3393,6 +3394,109 @@ function projectItemFields(b, cur) {
   return [text(get("name", cur?.name), 80, "이름", true), status, assignee, due, text(get("note", cur?.note), 1000, "메모")];
 }
 
+/* ---------- 알림(변경 내역) ---------- */
+const changeLog = makeChanges(db);
+changeLog.prune();
+// 대장·완제품이 속한 봉사자 묶음 이름 (묵주·손십자가). 봉사자에게 안 보이는 것이면 ""
+function volGroupNameOf(itemId) {
+  for (let i = q.projectItem.get(itemId), n = 0; i && n < 20; i = i.parent_id ? q.projectItem.get(i.parent_id) : null, n++) {
+    if (i.kind === "group" && VOLUNTEER_GROUPS.includes(i.name) && q.volProject.get(VOLUNTEER_PROJECT_TEAM, i.project_id)) return i.name;
+  }
+  return "";
+}
+// 지금 권한으로 이 변경을 볼 메뉴 (없으면 안 보임). role 은 보는 화면: dept · team · staff · admin
+function changeView(user, role) {
+  const r = opsRole(user), steps = user.role === "admin" || volMenu().includes("steps2"), menuOn = volMenu(), memo = new Map();
+  const once = (k, f) => { if (!memo.has(k)) memo.set(k, f()); return memo.get(k); };
+  const row = (sql, id) => once(sql + id, () => db.prepare(sql).get(id));
+  const vol = role === "dept" || role === "team";
+  const projectOk = (pid) => once(`p${pid}`, () => { const p = pid && q.project.get(pid); return p ? projectAllowed(user, p) : r.admin; });
+  const ledger = (id) => row("SELECT l.*, i.project_id FROM stock_ledgers l JOIN project_items i ON i.id = l.item_id WHERE l.id = ?", id);
+  const groupName = (itemId) => once(`g${itemId}`, () => volGroupNameOf(itemId));
+  return (c) => {
+    const t = TOPICS[c.topic];
+    if (!t) return null;
+    let menu = vol && !steps ? t[`${role}0`] : t[role];
+    if (!menu || (t.perm && !r.can(t.perm, "v"))) return null;
+    const link = role === "admin" ? t.link : role === "staff" ? t.staffLink || t.link : null;
+    const out = (m, l) => ({ menu: m, link: l || m });
+    if (["stock_in", "stock_out", "stockops", "ledger"].includes(c.topic) && c.scope_id) {
+      const l = ledger(c.scope_id);
+      if (!l) return r.admin ? out(menu, link) : null; // 지운 대장은 관리자만
+      if (vol) { if (groupName(l.item_id) !== VOLUNTEER_GROUP) return null; }
+      else if (c.topic === "stockops" ? false : !projectOk(l.project_id)) return null;
+      if (!vol && c.topic !== "stockops") return out(menu, `stock/${c.scope_id}`);
+    }
+    if (c.topic === "proj") return projectOk(c.scope_id) ? out(menu, `projects/${c.scope_id}`) : null;
+    if (c.topic === "fin") {
+      const g = groupName(c.scope_id);
+      if (vol && !g) return null;
+      if (role === "dept" && g !== VOLUNTEER_GROUP) menu = steps ? "df2" : "recovery";
+      if (role === "staff") { const it = row("SELECT project_id FROM project_items WHERE id = ?", c.scope_id); return it && projectOk(it.project_id) ? out(menu, `projects/${it.project_id}`) : null; }
+      if (role === "dept" && !steps) return menuOn.includes("recovery") ? out(`vp/${g === VOLUNTEER_GROUP ? "rosary" : "cross"}/recovery`) : null;
+    }
+    if (c.topic === "req") {
+      if (role === "team" && c.action !== "edit") return null; // 새 교육·지운 교육은 '교육'으로 이미 보임
+      if (role === "staff") { const s = row("SELECT i.project_id FROM vol_schedules s JOIN project_items i ON i.id = s.project_item_id WHERE s.id = ?", c.ref_id); return s && projectOk(s.project_id) ? out(menu, `projects/${s.project_id}`) : null; }
+    }
+    if (role === "admin" && c.topic === "req" && c.action !== "edit") return null;
+    if (c.topic === "ship_in" && role === "team" && !c.scope_id) return null; // 팀은 수도회에서 오는 검수 택배만
+    if (c.topic === "deadline" && vol) {
+      const d = row("SELECT audience FROM deadlines WHERE id = ?", c.ref_id), a = d ? d.audience : ["all", "dept", "team"][c.scope_id || 0];
+      if (a !== "all" && a !== role) return null;
+    }
+    if (c.topic === "sched" && vol) { const s = row("SELECT audience FROM vol_schedules WHERE id = ?", c.ref_id); if (s && s.audience !== "all") return null; }
+    if (c.topic === "board") { const b = row("SELECT secret FROM board_posts WHERE id = ?", c.ref_id); if (b?.secret) return null; }
+    if (role === "dept" && !steps) {
+      if (["in", "out", "req"].includes(menu)) return menuOn.includes(menu) ? out(`vp/rosary/${menu}`) : null;
+      const key = { vschedule: "schedule", vtraining: "training" }[menu];
+      if (key && !menuOn.includes(key)) return null;
+    }
+    return out(menu, link);
+  };
+}
+// 안 본 변경 = 그 메뉴를 마지막으로 연 뒤의, 내가 하지 않은 변경. 계정을 만든 뒤 것만
+function changesOut(user, role) {
+  const view = changeView(user, role);
+  const seen = new Map(db.prepare("SELECT menu, last_id FROM change_seen WHERE user_id = ?").all(user.id).map((x) => [x.menu, x.last_id]));
+  const since = db.prepare("SELECT created_at FROM users WHERE id = ?").get(user.id)?.created_at || "";
+  const list = [], counts = {};
+  let alarm = 0;
+  for (const c of db.prepare(`SELECT * FROM changes WHERE at >= datetime('now', '-${KEEP_DAYS} days') ORDER BY id DESC LIMIT 3000`).all()) {
+    const v = view(c);
+    if (!v) continue;
+    const mine = c.actor_id === user.id, fresh = !mine && c.at >= since;
+    const unread = fresh && c.id > (seen.get(v.menu) || 0);
+    if (unread) counts[v.menu] = (counts[v.menu] || 0) + 1;
+    if (fresh && unread && c.id > (seen.get("alarm") || 0)) alarm++;
+    list.push({ id: c.id, at: c.at, who: c.actor_name, mine, topic: c.topic, label: TOPICS[c.topic].label, action: c.action, title: c.title, detail: c.detail, refId: c.ref_id, ...(["stock_in", "stock_out"].includes(c.topic) ? { ledgerId: c.scope_id } : {}), menu: v.menu, link: v.link, unread });
+  }
+  return { list, counts, alarm };
+}
+async function changesRoute(req, res, user, path, method, url) {
+  const as = url.searchParams.get("as");
+  const role = user.role === "admin" ? (["dept", "team"].includes(as) ? as : "admin") : opsRole(user).role; // 관리자 미리보기는 그 봉사자 화면 기준
+  if (path === "/api/changes" && method === "GET") {
+    const o = changesOut(user, role), topic = url.searchParams.get("topic") || "", before = Number(url.searchParams.get("before")) || Infinity;
+    const list = o.list.filter((c) => (!topic || c.topic === topic) && c.id < before && (url.searchParams.get("unread") !== "1" || c.unread));
+    const topics = [...new Set(o.list.map((c) => c.topic))].map((k) => ({ key: k, label: TOPICS[k].label }));
+    return send(res, 200, { changes: list.slice(0, 50), more: list.length > 50, topics, counts: o.counts, alarm: o.alarm, keepDays: KEEP_DAYS });
+  }
+  if (path === "/api/changes/counts" && method === "GET") { const o = changesOut(user, role); return send(res, 200, { counts: o.counts, alarm: o.alarm }); }
+  // 메뉴를 열었음: 그 사람의 그 메뉴 숫자만 사라짐. '*' 는 모두 읽음
+  if (path === "/api/changes/seen" && method === "POST") {
+    const b = await readJson(req), menu = text(b.menu, 60, "메뉴", true);
+    const known = new Set(["alarm", ...Object.values(TOPICS).flatMap((t) => [t.dept, t.team, t.dept0, t.team0, t.staff, t.admin]), "df2", "vp/cross/recovery", ...["in", "out", "req", "recovery"].map((k) => `vp/rosary/${k}`)].filter(Boolean));
+    const menus = menu === "*" ? ["alarm", ...Object.keys(changesOut(user, role).counts)] : [menu];
+    const last = db.prepare("SELECT coalesce(max(id), 0) AS n FROM changes").get().n;
+    for (const m of menus.filter((x) => known.has(x))) // 변경이 없는 메뉴(홈·공지 등)는 남기지 않음
+       db.prepare("INSERT INTO change_seen (user_id, menu, last_id) VALUES (?, ?, ?) ON CONFLICT(user_id, menu) DO UPDATE SET last_id = max(last_id, excluded.last_id)").run(user.id, m, last);
+    const o = changesOut(user, role);
+    return send(res, 200, { counts: o.counts, alarm: o.alarm });
+  }
+  return send(res, 404, { error: "찾을 수 없어요." });
+}
+
 /* ---------- API ---------- */
 async function api(req, res, path) {
   const method = req.method;
@@ -3445,6 +3549,8 @@ async function api(req, res, path) {
   const user = auth(req);
   if (!user) return send(res, 401, { error: "로그인이 필요해요." });
   setActor(user);
+  res.onChanged = changeLog.watch(path, method, user); // 성공하면 변경 내역에 남김 (아래 서버 입구)
+  if (path === "/api/changes" || path.startsWith("/api/changes/")) return changesRoute(req, res, user, path, method, url);
   // 알림 구독 (직원·봉사자 모두): 기기마다 하나, 같은 주소는 지금 계정으로 옮김
   if (path === "/api/push/key" && method === "GET") return send(res, 200, { key: VAPID.publicKey });
   if (path === "/api/push/subscribe" && method === "POST") {
@@ -4794,7 +4900,11 @@ function serveStatic(req, res, pathname) {
 createServer(async (req, res) => {
   const { pathname } = new URL(req.url, "http://localhost");
   try {
-    if (pathname.startsWith("/api/")) return await api(req, res, pathname);
+    if (pathname.startsWith("/api/")) {
+      await api(req, res, pathname);
+      if (res.onChanged && res.statusCode < 300) { try { res.onChanged(); } catch (e) { console.error(`[changes] ${e.message}`); } } // 알림을 못 남겨도 저장은 그대로
+      return;
+    }
     if (STATIC_DIR) return serveStatic(req, res, pathname);
     send(res, 404, { error: "Not found" });
   } catch (e) {
@@ -4807,7 +4917,8 @@ createServer(async (req, res) => {
   console.log(`P-Schedule 서버: http://localhost:${PORT}${STATIC_DIR ? " (정적 파일 포함)" : ""}`);
 });
 // 연락 후속 조치 알림: 한 시간마다 확인 (하루 한 번만 보냄)
-setInterval(() => { try { const ids = autoEduDone(db); if (ids.length) console.log(`[auto] 교육 날짜가 지난 수도회 ${ids.length}곳 → 교육 완료`); } catch (e) { console.log(`[auto] ${e.message}`); } }, 60 * 60 * 1000).unref();
+setInterval(() => { try { changeLog.prune(); } catch (e) { console.log(`[changes] ${e.message}`); } }, 60 * 60 * 1000).unref();
+setInterval(() => { try { const at = changeLog.logMax(), ids = autoEduDone(db); changeLog.statusLogs(at); if (ids.length) console.log(`[auto] 교육 날짜가 지난 수도회 ${ids.length}곳 → 교육 완료`); } catch (e) { console.log(`[auto] ${e.message}`); } }, 60 * 60 * 1000).unref();
 setInterval(() => { try { followupReminders(); } catch (e) { console.log(`[followup] ${e.message}`); } }, 60 * 60 * 1000).unref();
 
 // ---- 묵주 교육 기록 (교육 회차·진행상태·출납 상세·참여 봉사자) · 계정 없는 봉사자 명단 · 봉사자별 집계. 관리자만

@@ -785,6 +785,22 @@
     state.unreadNotices = n;
     if (layout.nav) drawNav(navActive);
   }
+  // 알림(변경 내역): 메뉴마다 안 본 변경 수. 메뉴를 열면 그 메뉴 숫자만 사라짐 (서버에 사람마다 남겨 기기 사이에도 같음)
+  const chgN = (menu) => (state.chg?.counts || {})[menu] || 0;
+  const chgBadge = (n) => (n ? h("span", { class: "nav-badge nav-badge--chg", "aria-label": `새 변경 ${n}건`, title: `새 변경 ${n}건`, text: n > 99 ? "99+" : String(n) }) : null);
+  const chgAs = () => (state.volPreview ? `?as=${state.volPreview}` : "");
+  function setChg(r) {
+    const key = JSON.stringify([r.counts, r.alarm]);
+    if (key === state.chgKey) return;
+    state.chgKey = key; state.chg = { counts: r.counts, alarm: r.alarm };
+    if (state.drawVolNav) state.drawVolNav(); else if (layout.nav && navActive) drawNav(navActive);
+  }
+  let chgSeq = 0;
+  // 메뉴를 열었을 때: 그 메뉴를 본 것으로. 늦게 온 예전 답이 새 값을 덮지 않게 차례를 셈
+  const seeMenu = (menu) => { const n = ++chgSeq; quiet(api(`/changes/seen${chgAs()}`, { method: "POST", body: { menu } }).then((r) => { if (n === chgSeq) setChg(r); })); };
+  const checkChanges = () => { if (!state.token || !state.user || state.user.mustChangePassword || document.visibilityState !== "visible") return; const n = ++chgSeq; quiet(api(`/changes/counts${chgAs()}`).then((r) => { if (n === chgSeq) setChg(r); })); };
+  setInterval(checkChanges, 120000);
+  document.addEventListener("visibilitychange", checkChanges);
   const checkNotices = () => { if (state.token && state.user && state.user.role !== "volunteer" && document.visibilityState === "visible") quiet(api("/notices/unread").then((r) => setUnreadNotices(r.unreadNotices))); };
   setInterval(checkNotices, 120000);
   document.addEventListener("visibilitychange", checkNotices);
@@ -834,7 +850,7 @@
     const account = h("button", { class: "side__account", type: "button" }, [avatar(state.user.id), h("span", { class: "side__who" }, [h("strong", { text: state.user.name }),
       h("small", { text: personSub(state.user) || (isAdmin() ? "" : "소속 없음") }), isAdmin() ? h("small", { class: "side__adminmark" }, [icon("lock"), "관리자 권한"]) : null])]);
     account.addEventListener("click", () => popover(account, h("div", { class: "pop__list" }, [
-      h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); toggleNav(false); appDialog(); } }, "알림 · 앱 설치"),
+      h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); toggleNav(false); appDialog(); } }, "휴대폰 알림 · 앱 설치"),
       h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); openDialog("비밀번호 변경", passwordForm(closeDialog)); } }, "비밀번호 변경"),
       h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); logout(); } }, "로그아웃")
     ])));
@@ -896,6 +912,7 @@
       ...(opsSees() ? [{ id: "ops", label: "수도회·물류", icon: "db" }] : []), // 직원은 권한표에서 켜야 보임
       { id: "orgchart", label: "조직도", icon: "org" },
       { id: "contacts", label: "연락처", icon: "phone" },
+      { id: "alerts", label: "알림", icon: "clock", alarm: true },
       { id: "notices", label: "공지", icon: "bell", badge: state.unreadNotices } // 맨 아래, 안 읽은 공지 수
     ];
     const isOpen = (it) => (it.id === "projects" ? state.navProjOpen : state.navDashOpen);
@@ -912,7 +929,7 @@
         if (it.kids) { const again = it.id === active; setOpen(it, again ? !isOpen(it) : true); if (again) drawNav(active); }
         toggleNav(false);
       }
-    }, [icon(it.icon), h("span", { class: "side__text", text: it.label }), it.badge ? h("span", { class: "nav-badge", "aria-label": `안 읽은 공지 ${it.badge}개`, text: it.badge > 99 ? "99+" : String(it.badge) }) : null]);
+    }, [icon(it.icon), h("span", { class: "side__text", text: it.label }), it.badge ? h("span", { class: "nav-badge", "aria-label": `안 읽은 공지 ${it.badge}개`, text: it.badge > 99 ? "99+" : String(it.badge) }) : chgBadge(it.alarm ? state.chg?.alarm : chgN(it.id))]);
     layout.nav.replaceChildren(...items.map((it) => (it.kids ? h("div", { class: "side__group" }, [
       h("div", { class: "side__row" }, [link(it), h("button", {
         class: "side__toggle" + (isOpen(it) ? " is-open" : ""), type: "button", html: ICON.right, "aria-expanded": String(isOpen(it)), "aria-label": `${it.label} 아래 메뉴 ${isOpen(it) ? "접기" : "펼치기"}`,
@@ -951,7 +968,7 @@
     const sub = route().id;
     const link = (id, label, ic, onclick, on) => (onclick
       ? h("button", { class: "side__link side__link--admin", type: "button", title: label, onclick: () => { toggleNav(false); onclick(); } }, [icon(ic), h("span", { class: "side__text", text: label })])
-      : h("a", { class: "side__link side__link--admin" + (on ?? id === active ? " is-active" : ""), href: "#/" + id, title: label, "aria-current": (on ?? id === active) ? "page" : null, onclick: () => toggleNav(false) }, [icon(ic), h("span", { class: "side__text", text: label })]));
+      : h("a", { class: "side__link side__link--admin" + (on ?? id === active ? " is-active" : ""), href: "#/" + id, title: label, "aria-current": (on ?? id === active) ? "page" : null, onclick: () => toggleNav(false) }, [icon(ic), h("span", { class: "side__text", text: label }), chgBadge(chgN(id))]));
     const part = (label) => h("div", { class: "side__adminpart", text: label });
     const wip = adminProjects === null ? [h("p", { class: "side__adminnote", text: "불러오는 중…" })]
       : adminProjects.length ? adminProjects.map((p) => link(`projects/${p.id}`, p.name, "folder", null, active === "projects" && String(sub) === String(p.id)))
@@ -5238,6 +5255,15 @@
         ]) : null
       ]);
     }
+    const staffRef = !vol && ["stock_in", "stock_out"].includes(state.openRef?.topic) && state.openRef.ledgerId === id ? state.openRef : null; // 알림에서 온 기록 바로 열기
+    if (staffRef) {
+      state.openRef = null;
+      const r = await api(base), em = r.moves.find((x) => x.id === staffRef.id);
+      if (em) { step = em.type; store.set(`ps.stockStep.${id}`, step); }
+      apply(r);
+      if (em) moveDialog(em.type, em); else toast(REF_GONE);
+      return;
+    }
     if (vol) {
       if (vol.open) { step = vol.open; store.set(`ps.stockStep.${id}`, step); }
       // 프로젝트 화면의 '고치기'로 오면 그 기록 고치기 창을 바로 엶
@@ -5280,7 +5306,7 @@
     const teamSteps = STEP_CATS.team.flatMap((c) => c.steps.map((x) => x[0])), deptSteps = STEP_CATS.dept.flatMap((c) => c.steps.map((x) => x[0]));
     // 합친 단계의 예전 주소 → 새 화면 (교육 결과 → 교육 일정·결과, 회수 받기 → 회수)
     if (team && steps && { tedu3: 1, tmake3: 1 }[name]) return location.replace({ tedu3: "#/tedu2", tmake3: "#/tmake2" }[name]);
-    const tab = team ? ([...TEAM_TABS, "vnotices", "vboard", ...(steps ? [...teamSteps, "tedu4", "vcontacts", "vschedule", "vdeadlines"] : [])].includes(name) ? name : "thome") : ["vschedule", "vtraining", "vstock", "vprojects", "vp", "vnotices", "vboard", ...(steps ? [...deptSteps, "vissues", "vcontacts", "vdeadlines"] : [])].includes(name) ? name : "vhome";
+    const tab = team ? ([...TEAM_TABS, "vnotices", "vboard", ...(steps ? [...teamSteps, "tedu4", "vcontacts", "vschedule", "vdeadlines"] : []), "alerts"].includes(name) ? name : "thome") : ["vschedule", "vtraining", "vstock", "vprojects", "vp", "vnotices", "vboard", ...(steps ? [...deptSteps, "vissues", "vcontacts", "vdeadlines"] : []), "alerts"].includes(name) ? name : "vhome";
     const vpView = tab === "vp" ? location.hash.split("/")[3] || "" : null; // 요약 / wbs / in / req / out
     document.title = `봉사자 · ${TITLE}`;
     // 왼쪽 메뉴: 직원 화면과 같은 틀 (묵주 아래에 입출고를 접고 펴기)
@@ -5291,7 +5317,7 @@
       const link = (id, label, ic, sub, onclick, badge) => h("a", {
         class: "side__link" + (sub ? " side__link--sub" : "") + (id === tab ? " is-active" : ""), href: `#/${id}`, "aria-current": id === tab ? "page" : null, title: badge ? `${label} · 새 글 ${badge}개` : label,
         onclick: () => { if (onclick) onclick(); toggleNav(false); }
-      }, [icon(ic), h("span", { class: "side__text", text: label }), badge ? h("span", { class: "nav-badge", "aria-label": `안 읽은 공지 ${badge}개`, text: badge > 99 ? "99+" : String(badge) }) : null]);
+      }, [icon(ic), h("span", { class: "side__text", text: label }), badge ? h("span", { class: "nav-badge", "aria-label": `안 읽은 공지 ${badge}개`, text: badge > 99 ? "99+" : String(badge) }) : chgBadge(id === "alerts" ? state.chg?.alarm : chgN(id))]);
       // 묶음(묵주·손십자가)마다 프로젝트 관리 메뉴: 요약 아래 WBS · 입고 · 요청수량 · 출고
       const groupNav = (g) => {
         const key = "ps.navVg." + g.key;
@@ -5300,7 +5326,7 @@
         const setOpen = (o) => { store.set(key, o ? "1" : "0"); drawVolNav(); };
         const sub = (view, label, ic) => {
           const on = here && vpView === view;
-          return h("a", { class: "side__link side__link--sub" + (on ? " is-active" : ""), href: `#/vp/${g.key}/${view}`, "aria-current": on ? "page" : null, title: label, onclick: () => toggleNav(false) }, [icon(ic), h("span", { class: "side__text", text: label })]);
+          return h("a", { class: "side__link side__link--sub" + (on ? " is-active" : ""), href: `#/vp/${g.key}/${view}`, "aria-current": on ? "page" : null, title: label, onclick: () => toggleNav(false) }, [icon(ic), h("span", { class: "side__text", text: label }), chgBadge(chgN(`vp/${g.key}/${view}`))]);
         };
         const top = here && !vpView;
         return h("div", { class: "side__group" }, [
@@ -5312,13 +5338,13 @@
         ]);
       };
       if (steps) {
-        const c = state.opsCounts || {};
         const stepLink = (k, label, n) => h("a", { class: "side__link side__link--sub side__step" + (k === tab ? " is-active" : ""), href: `#/${k}`, "aria-current": k === tab ? "page" : null, title: label, onclick: () => toggleNav(false) }, [
-          h("span", { class: "side__stepnum", text: String(n) }), h("span", { class: "side__text", text: label }), c[k] ? h("span", { class: "nav-badge", "aria-label": `처리할 일 ${c[k]}건`, text: String(c[k]) }) : null]);
+          h("span", { class: "side__stepnum", text: String(n) }), h("span", { class: "side__text", text: label }), chgBadge(chgN(k))]);
         const group = (ic, name, kids) => h("div", { class: "side__group side__cat" }, [h("div", { class: "side__catlabel" }, [icon(ic), h("span", { class: "side__text", text: name })]), ...kids.filter(Boolean)]);
         const sub = (id, label, ic, badge) => link(id, label, ic, true, null, badge);
         return navBox.replaceChildren(...[
           link(team ? "thome" : "vhome", "홈 (오늘 할 일)", "home"),
+          link("alerts", "알림", "clock"),
           team ? link("tcal", "캘린더", "cal") : null,
           ...STEP_CATS[team ? "team" : "dept"].map((cat) => group(cat.icon, cat.name, cat.steps.map(([k, l], i) => stepLink(k, l, i + 1)))),
           group("chat", "소통", team
@@ -5328,10 +5354,11 @@
         ].filter(Boolean));
       }
       if (team) return navBox.replaceChildren(
-        link("thome", "홈", "grid"), link("tcal", "캘린더", "cal"), link("torgs", "수도회·교육", "people"), link("trecov", "제품 회수", "db"), link("tinsp", "제품 검수", "check"),
+        link("thome", "홈", "grid"), link("alerts", "알림", "clock"), link("tcal", "캘린더", "cal"), link("torgs", "수도회·교육", "people"), link("trecov", "제품 회수", "db"), link("tinsp", "제품 검수", "check"),
         link("tissues", "이슈 등록", "note"), link("tdocs", "자료실", "folder"), link("vboard", "게시판", "chat"), link("vnotices", "공지", "bell", false, null, state.unreadNotices));
       navBox.replaceChildren(...[
         volOn("home") ? link("vhome", "대시보드", "grid") : null,
+        link("alerts", "알림", "clock"),
         volOn("schedule") ? link("vschedule", "일정", "cal") : null,
         volOn("training") ? link("vtraining", "기본 교육", "check") : null,
         ...VOL_GROUPS.map(groupNav),
@@ -5340,6 +5367,9 @@
       ].filter(Boolean));
     };
     drawVolNav();
+    state.drawVolNav = drawVolNav;
+    // 이 메뉴를 열었으니 이 메뉴의 '새 변경' 숫자는 지움 (알림 화면은 '알림' 숫자)
+    seeMenu(tab === "alerts" ? "alarm" : tab === "vp" ? `vp/${id}/${vpView}` : tab);
     const account = h("button", { class: "side__account", type: "button", "aria-label": "내 계정" }, [
       h("span", { class: `avatar c${state.user.id % 6}`, text: state.user.name.replace(/\s/g, "").slice(-2) }),
       h("span", { class: "side__who" }, [h("strong", { text: state.user.name }), h("small", { text: (preview ? "관리자 미리보기 · " : "") + (team ? "팀 봉사자" : "부서 봉사자") })])
@@ -5348,7 +5378,7 @@
     const switchVol = async () => {
       closePop();
       const r = await act(() => api("/vol-mode", { method: "POST", body: { mode: other } }));
-      state.user = r.user; state.volMenu = null; store.set("ps.loginAs", other === "team" ? "team" : "volunteer");
+      state.user = r.user; state.volMenu = null; state.chg = null; state.chgKey = ""; store.set("ps.loginAs", other === "team" ? "team" : "volunteer");
       location.hash = other === "team" ? "#/thome" : "#/vhome"; render();
     };
     // 로고 옆: 어떤 봉사자인지 버튼 (권한이 둘이면 누르면 다른 화면으로)
@@ -5359,7 +5389,7 @@
       h("button", { type: "button", class: "pop__item", onclick: endVolPreview }, "미리보기 끝내기 (관리자 화면으로)")
     ] : [
       other ? h("button", { type: "button", class: "pop__item", onclick: () => quiet(switchVol()) }, other === "team" ? "팀 봉사자 화면으로" : "부서 봉사자 화면으로") : null,
-      h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); toggleNav(false); appDialog(); } }, "알림 · 앱 설치"),
+      h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); toggleNav(false); appDialog(); } }, "휴대폰 알림 · 앱 설치"),
       h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); openDialog("비밀번호 변경", passwordForm(closeDialog)); } }, "비밀번호 변경"),
       h("button", { type: "button", class: "pop__item", onclick: () => { closePop(); logout(); } }, "로그아웃")
     ])));
@@ -5408,6 +5438,7 @@
           main.querySelector(".stepbar__next")?.replaceWith(fresh[fresh.length - 1]);
         }
       } : null;
+      if (tab === "alerts") { document.title = `알림 · ${TITLE}`; return show(await alertsView()); }
       if (steps) {
         // 단계 화면마다 처리할 건수를 새로 받아 메뉴·진행 표시에 씀
         try { state.opsCounts = (await api("/ops/counts")).counts; } catch (e) { state.opsCounts = state.opsCounts || {}; }
@@ -5640,6 +5671,7 @@
       );
     };
     draw();
+    openRef("sched", (id) => list.find((s) => s.id === id), (s) => { volCal.sel = s.date; volCal.month = s.date.slice(0, 7); draw(); });
     return [
       h("div", { class: "page-head" }, [h("h1", { class: "vol__hello", text: "일정" })]),
       box
@@ -5656,7 +5688,7 @@
       list.length ? h("div", { class: "stack" }, list.map((t) => {
         const meta = [t.date ? volDay(t.date) : "", t.startTime, t.place].filter(Boolean).join(" · ");
         const btn = h("button", { class: `btn btn--sm ${t.done ? "btn--ghost" : "btn--primary"}`, type: "button", text: t.done ? "이수 취소" : "이수했어요", onclick: () => toggle(t, btn) });
-        return h("section", { class: "card vol__card" }, [
+        return h("section", { class: "card vol__card", "data-ref": `training:${t.id}` }, [
           h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: t.title }), t.done ? h("span", { class: "vol-done", text: "이수 완료" }) : null]),
           meta ? h("p", { class: "muted small", text: meta }) : null,
           t.body ? h("p", { class: "vol-pre", text: t.body }) : null,
@@ -5691,7 +5723,11 @@
     if (view === "wbs") return [...head("WBS"), g.key === "rosary" ? volWbsRosary() : volWbs({ name: g.name }, visits)];
     if (view === "req") return [...head(`${g.name} 추가 전달 물량`), volVisits(visits, `${g.name} 추가 전달 물량`)];
     if (view === "in" || view === "out") {
-      if (volOn("moves2") || opts.steps) return [...head(view === "in" ? "입고" : "출고"), volMovesPage(view, ledgers, { cut: view === "out" && g.key === "rosary" ? visits : null })];
+      if (volOn("moves2") || opts.steps) {
+        const ref = ["stock_in", "stock_out"].includes(state.openRef?.topic) ? state.openRef : null; // 알림에서 온 기록 바로 열기
+        if (ref) state.openRef = null;
+        return [...head(view === "in" ? "입고" : "출고"), volMovesPage(view, ledgers, { cut: view === "out" && g.key === "rosary" ? visits : null, ...(ref ? { ledgerId: ref.ledgerId, editId: ref.id } : {}) })];
+      }
       const moves = volMoveCard(view, ledgers, await volLedgerDetails(ledgers));
       // 묵주 출고: 1) 실타래(창고) 입출고와 2) 자른실(제작 수도회) 출고를 나눠서
       if (view === "out" && g.key === "rosary") { const t = moves.querySelector(".card__title"); if (t) t.textContent = "1) 실타래 입출고 · 출고"; return [...head("출고"), moves, volCutCard(visits)]; }
@@ -5898,7 +5934,7 @@
         filter ? h("p", { class: "muted small" }, [`'${cfg.labels[filter]}' 기록만 보는 중 · `, h("button", { class: "link-btn", type: "button", text: "전체 보기", onclick: () => { filter = ""; draw(); } })]) : null,
         shown.length ? h("div", { class: "table-wrap" }, h("table", { class: "table" }, [
           h("thead", {}, h("tr", {}, [h("th", { text: "날짜" }), h("th", { text: "단계" }), h("th", { class: "num", text: "수량" }), h("th", { text: "입고·출고 장소 (대상)" }), h("th", { text: "메모" }), h("th", { text: "적은 사람" }), h("th")])),
-          h("tbody", {}, shown.map((r) => h("tr", {}, [
+          h("tbody", {}, shown.map((r) => h("tr", { "data-ref": `fin:${r.id}` }, [
             h("td", { class: "nowrap", text: shortDate(r.date) }), h("td", { class: "nowrap" }, h("span", { class: `vol-fg__tag vol-fg__tag--${r.stage || "in"}`, text: cfg.labels[r.stage || "in"] })), h("td", { class: "num", text: fmtN(r.qty) }),
             h("td", { text: r.name }), h("td", { class: "muted small", text: r.note }), h("td", { class: "muted small", text: r.author }),
             h("td", {}, r.canEdit ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => edit(r) }) : null)
@@ -6033,7 +6069,7 @@
         return h("td", { class: "num" }, [input, by ? h("small", { class: "vol-visits__by muted", title: at || "", text: by }) : null]);
       };
       const shown = visits.filter(hit);
-      const row = (v, i) => h("tr", { class: v.date < today() ? "is-past" : null }, [
+      const row = (v, i) => h("tr", { class: v.date < today() ? "is-past" : null, "data-ref": `req:${v.id}` }, [
         h("td", { class: "num muted", text: String(i + 1) }),
         h("td", { class: "nowrap" }, [volDay(v.date), v.startTime ? h("small", { class: "muted", text: ` ${v.startTime}` }) : null]),
         h("td", {}, [h("span", { text: orgOf(v) }), v.place ? h("small", { class: "muted", text: ` · ${v.place}` }) : null, ...orgTags(v), whoOf(v) ? h("small", { class: "vol-visits__who muted", text: whoOf(v) }) : null]),
@@ -6836,7 +6872,7 @@
       dialog.addEventListener("close", () => { quiet(reloadIfChanged()); }, { once: true });
     }
     draw();
-    openRef(["edu", "made"], (id) => orgs.find((o) => o.id === id), orgDialog);
+    openRef(["edu", "made", "req"], (id) => orgs.find((o) => o.id === id), orgDialog);
     if (mode) return [h("p", { class: "muted small", text: { edu: "교육 날짜·시간을 정하고, 마친 교육의 결과를 적어요. 위 칸을 누르면 그 교육만 보여요. 줄을 누르면 열려요.", schedule: "교육 날짜·시간·상태를 정해요. 날짜가 미정인 교육부터 정해 주세요. 줄을 누르면 열려요.", result: "날짜가 지난 교육의 참석 인원·특이사항을 적고 상태를 '완료'로 바꿔요. 줄을 누르면 열려요.", made: "교육을 마친 수도회의 예상 완성 수량과 완성 예정 시기를 적어요. 줄을 누르면 열려요." }[mode] }), box];
     return [...teamHead("수도회·교육", "담당 수도회마다 교육 일정·결과, 문의, 제작 진행을 적어요. 원자재(실·십자가)는 조회만 해요. 줄을 누르면 열려요."), box];
   }
@@ -6859,6 +6895,7 @@
       const redraw = async (reload) => { if (reload && opts.waiting) waiting = (await api("/ops/inspect-waiting").catch(() => ({ waiting }))).waiting; fill(box, waitBox(), h("div", { class: "actions actions--start" }, h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => mod.dialog(null) }, [icon("plus"), "검수 결과 입력"])), mod.view()); };
       mod = inspModule("/team", redraw, "검수할 때마다 한 줄씩 적어요. 사진은 선택이고, 불량이 있으면 붙여 주면 좋아요. 불합격품은 수도회로 반송할지 현장에서 고칠지 골라 주세요.");
       await mod.load(); redraw();
+      openRef(["inspect", "defect"], (id) => mod.data().inspections.find((x) => x.id === id), mod.dialog);
     } else if (sub === "products") {
       const { records } = await api("/team/products");
       const stage = { in: "입고", checked: "검수 완료", packed: "패키징 완료", out: "출고" };
@@ -6875,7 +6912,7 @@
           h("div", { class: "actions actions--start" }, [h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => dailyDialog(null) }, [icon("plus"), "기록 추가"]), h("span", { class: "muted small", text: `총 ${fmtN(total)}개 · ${byDate.size}일` })]),
           daily.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
             h("thead", {}, h("tr", {}, ["날짜", "검수 수량", "그날 합계", "함께한 봉사자", "메모", "입력"].map((t) => h("th", { text: t })))),
-            h("tbody", {}, daily.map((x) => h("tr", x.canEdit ? { class: "stock-row", tabindex: "0", onclick: () => dailyDialog(x) } : { title: "적은 사람과 리더 봉사자·관리자만 고쳐요" }, [h("td", { class: "nowrap", text: x.date }), h("td", { class: "num", text: fmtN(x.qty) }), h("td", { class: "num muted", text: fmtN(byDate.get(x.date)) }), h("td", { text: x.workers || "-" }), h("td", { class: "muted small", text: x.note || "" }), h("td", { class: "muted small", text: x.author || "-" })]))),
+            h("tbody", {}, daily.map((x) => h("tr", x.canEdit ? { class: "stock-row", tabindex: "0", onclick: () => dailyDialog(x) } : { "data-ref": `daily:${x.id}`, title: "적은 사람과 리더 봉사자·관리자만 고쳐요" }, [h("td", { class: "nowrap", text: x.date }), h("td", { class: "num", text: fmtN(x.qty) }), h("td", { class: "num muted", text: fmtN(byDate.get(x.date)) }), h("td", { text: x.workers || "-" }), h("td", { class: "muted small", text: x.note || "" }), h("td", { class: "muted small", text: x.author || "-" })]))),
             h("tfoot", {}, h("tr", { class: "vol-more__sum" }, [h("th", { text: "합계" }), h("td", { class: "num", text: fmtN(total) }), h("td", { colspan: "4" })]))
           ])) : h("div", { class: "card empty", text: "아직 하루 검수 기록이 없어요." }));
       };
@@ -6890,11 +6927,12 @@
         openDialog(x ? "하루 검수 기록 고치기" : "하루 검수 기록 추가", form);
       };
       draw();
+      openRef("daily", (id) => daily.find((x) => x.id === id), (x) => (x.canEdit ? dailyDialog(x) : flashRef("daily", x.id)));
     } else if (sub === "shifts") {
       let shifts = (await api("/team/shifts")).shifts;
       const draw = () => fill(box,
         h("div", { class: "actions actions--start" }, h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => shiftDialog() }, [icon("plus"), "봉사일 만들기"])),
-        shifts.length ? h("ul", { class: "card team-days" }, shifts.map((s) => h("li", { class: "team-day" }, [
+        shifts.length ? h("ul", { class: "card team-days" }, shifts.map((s) => h("li", { class: "team-day", "data-ref": `shifts:${s.id}` }, [
           h("div", { class: "team-day__when" }, [h("strong", { text: volDay(s.date) }), s.startTime ? h("span", { class: "muted small", text: ` ${s.startTime}` }) : null]),
           h("div", { class: "team-day__what" }, [h("div", { text: `필요 ${s.need}명 · 신청 ${s.people.length}명${s.people.length >= s.need ? " (다 찼어요)" : ""}` }), s.people.length ? h("small", { class: "muted", text: s.people.join(", ") }) : null, s.note ? h("small", { class: "muted vol-pre", text: s.note }) : null]),
           h("span", { class: "actions" }, [
@@ -6978,7 +7016,7 @@
     if (opts.bare) return [h("p", { class: "muted small", text: "직접 찾아가서 받았거나 수도회가 가져온 완성품을 적어요. 택배로 받은 것은 부서 봉사자가 도착 처리하면 저절로 생겨요 ('택배에서 옴' 표시)." }), box];
     return [...teamHead("제품 회수", "수도회에서 완성품을 받으면 날짜·수량·방법을 적어요. 받은 완성품은 '제품 검수'에서 검수해요."), box];
   }
-  const docList = (docs, empty) => docs.length ? h("ul", { class: "stack stack--sm team-docs" }, docs.map((d) => h("li", { class: "card team-doc" }, [
+  const docList = (docs, empty) => docs.length ? h("ul", { class: "stack stack--sm team-docs" }, docs.map((d) => h("li", { class: "card team-doc", "data-ref": `docs:${d.id}` }, [
     h("strong", { text: d.title }), d.note ? h("p", { class: "vol-pre small", text: d.note }) : null,
     d.url ? h("a", { class: "link-btn", href: d.url, target: "_blank", rel: "noopener noreferrer", text: "열기 / 내려받기" }) : null
   ]))) : h("div", { class: "card empty", text: empty });
@@ -7062,6 +7100,7 @@
       openDialog(x ? "이슈" : "이슈 등록", form, { wide: true });
     };
     draw();
+    openRef("issue", (id) => issues.find((x) => x.id === id), issueDialog);
     return [...teamHead("이슈", "문제가 생기면 바로 등록해 주세요. 조직위가 처리 상태와 답을 적어요."), box];
   }
 
@@ -7316,14 +7355,14 @@
   };
   const stepsOn = () => !!state.volPreview || volOn("steps2");
   // 관리자 미리보기: 봉사자 화면을 관리자 계정으로 열어 봄 (이 브라우저 탭에서만)
-  function startVolPreview(kind) {
-    state.volPreview = kind; state.opsCounts = null;
+  function startVolPreview(kind, to) {
+    state.volPreview = kind; state.opsCounts = null; state.chg = null; state.chgKey = "";
     try { sessionStorage.setItem("ps.volPreview", kind); } catch (e) { /* 저장 못 해도 이번만 */ }
-    location.hash = kind === "team" ? "#/thome" : "#/vhome";
-    render();
+    const hash = to || (kind === "team" ? "#/thome" : "#/vhome");
+    if (location.hash !== hash) location.hash = hash; else render();
   }
   function endVolPreview() {
-    state.volPreview = ""; state.opsCounts = null; state.opsRefresh = null;
+    state.volPreview = ""; state.opsCounts = null; state.opsRefresh = null; state.chg = null; state.chgKey = ""; state.drawVolNav = null;
     try { sessionStorage.removeItem("ps.volPreview"); } catch (e) { /* 무시 */ }
     closePop(); closeDialog();
     location.hash = "#/volunteers";
@@ -7339,10 +7378,10 @@
       h("nav", { class: "stepbar", "aria-label": `${cat.name} 단계` }, [
         h("span", { class: "stepbar__cat" }, [icon(cat.icon), cat.name]),
         h("ol", {}, cat.steps.map(([k, label], j) => h("li", {}, h("a", { class: "stepbar__step" + (j === i ? " is-active" : "") + (j < i ? " is-past" : ""), href: `#/${k}`, "aria-current": j === i ? "step" : null, title: label }, [
-          h("span", { class: "stepbar__num", text: String(j + 1) }), h("span", { class: "stepbar__label", text: label }), c[k] ? h("span", { class: "nav-badge", "aria-label": `처리할 일 ${c[k]}건`, text: String(c[k]) }) : null
+          h("span", { class: "stepbar__num", text: String(j + 1) }), h("span", { class: "stepbar__label", text: label }), j === i ? null : chgBadge(chgN(k))
         ]))))
       ]),
-      h("h1", { class: "vol__hello stepbar__title", text: `${i + 1}. ${cat.steps[i][1]}` }),
+      h("h1", { class: "vol__hello stepbar__title" }, [`${i + 1}. ${cat.steps[i][1]}`, n ? h("span", { class: "stepbar__todo", text: `처리할 일 ${n}건` }) : null]),
       ...[].concat(kids),
       h("div", { class: "stepbar__next" }, next
         ? (n ? h("p", { class: "muted small", text: `이 단계에서 처리할 일이 ${n}건 남았어요. 다 하면 다음 단계로 넘어가요.` }) : h("a", { class: "btn btn--primary", href: `#/${next[0]}` }, `다음 단계 → ${i + 2}. ${next[1]}`))
@@ -7396,12 +7435,86 @@
   // 누르면 아래 목록이 바뀌는 칸 (수도회 확인·교육)
   const pickTile = (label, n, unit, on, onclick, warn) => h("button", { type: "button", class: "pick-tile" + (on ? " is-on" : "") + (warn && n ? " is-warn" : ""), "aria-pressed": String(on), onclick }, [h("span", { text: label }), h("strong", { text: `${fmtN(n)}${unit}` })]);
   // 알림에서 눌러 온 기록 열기: 화면을 다 그린 뒤 그 기록을 찾아 열고, 없으면 안내
+  const REF_GONE = "그 기록을 찾을 수 없어요. 지워졌거나 지금은 볼 수 없는 기록이에요.";
   function openRef(topic, find, open) {
     const r = state.openRef;
     if (!r || ![].concat(topic).includes(r.topic)) return;
     state.openRef = null;
     const x = find(r.id);
-    setTimeout(() => { if (x) open(x); else toast("그 기록을 찾을 수 없어요. 지워졌거나 지금은 볼 수 없는 기록이에요."); }, 60);
+    setTimeout(() => { if (x) open(x); else toast(REF_GONE); }, 60);
+  }
+  // 여는 창이 없는 목록: data-ref 를 단 줄로 가서 잠깐 밝게 (접힌 칸은 펼침). 한동안 못 찾으면 안내
+  function seekRef() {
+    const r = state.openRef, hash = location.hash, until = Date.now() + 6000;
+    const tick = () => {
+      if (state.openRef !== r) return;
+      if (location.hash !== hash) { state.openRef = null; return; }
+      let el = document.querySelector(`main [data-ref~="${r.topic}:${r.id}"]`); if (el?.hidden) el = el.parentElement;
+      if (el) { state.openRef = null; return flashEl(el); }
+      if (Date.now() > until) { state.openRef = null; return toast(REF_GONE); }
+      setTimeout(tick, 150);
+    };
+    setTimeout(tick, 250);
+  }
+  function flashEl(el) {
+    for (let p = el.parentElement; p; p = p.parentElement) if (p.tagName === "DETAILS") p.open = true;
+    el.scrollIntoView({ block: "center" });
+    el.classList.add("is-flash");
+    setTimeout(() => el.classList.remove("is-flash"), 2600);
+  }
+  const flashRef = (topic, id) => { let el = document.querySelector(`main [data-ref~="${topic}:${id}"]`); if (el?.hidden) el = el.parentElement; if (el) flashEl(el); else toast(REF_GONE); };
+  // ---- 알림 (변경 내역): 누가 · 언제 · 무엇을 · 어떻게. 누르면 그 화면의 그 기록으로
+  const CHG_ACT = { add: "추가", edit: "고침", delete: "지움" };
+  const NO_REF = ["criteria", "need", "stockops"]; // 기록 하나가 아니라 화면 전체인 것
+  function openChange(c) {
+    let link = c.link;
+    if (c.topic === "board" && c.refId && c.action !== "delete") link = `${link}/${c.refId}`;
+    state.openRef = null;
+    const hash = `#/${link}`;
+    if (c.action === "delete") toast("지운 기록이에요. 그 화면으로 왔어요.");
+    else if (c.refId && !NO_REF.includes(c.topic) && !["board", "proj", "ledger"].includes(c.topic)) state.openRef = { topic: c.topic, id: c.refId, ledgerId: c.ledgerId };
+    if (hash.startsWith("#/projects/")) state.openRef = null; // 프로젝트 화면까지만
+    const ref = state.openRef;
+    // 관리자 화면이 따로 없는 팀 기록은 '팀 봉사자 화면 미리보기'로 엶
+    const pre = isAdmin() && !state.volPreview && { recovery: "tmake2", shifts: "tins2", daily: "tins5", made: "tmake1", need: "thome" }[c.topic];
+    if (pre) { startVolPreview("team", `#/${pre}`); toast("팀 봉사자 화면 미리보기로 열었어요."); if (ref) setTimeout(() => { if (state.openRef === ref) seekRef(); }, 50); return; }
+    go(hash);
+    if (ref) setTimeout(() => { if (state.openRef === ref) seekRef(); }, 50);
+  }
+  async function alertsView() {
+    let topic = "", only = false, d = await api(`/changes${chgAs()}`), list = d.changes;
+    const box = h("div", { class: "stack alerts" });
+    const q = (before) => `/changes?${new URLSearchParams({ ...(state.volPreview ? { as: state.volPreview } : {}), ...(topic ? { topic } : {}), ...(only ? { unread: "1" } : {}), ...(before ? { before: String(before) } : {}) })}`;
+    const reload = async () => { d = await act(() => api(q())); list = d.changes; draw(); };
+    const when = (s) => { const t = new Date(s.replace(" ", "T") + "Z"); return `${pad(t.getHours())}:${pad(t.getMinutes())}`; };
+    const item = (c) => h("li", {}, h("button", { type: "button", class: "alert" + (c.unread ? " is-new" : ""), onclick: () => openChange(c) }, [
+      h("span", { class: "alert__top" }, [c.unread ? h("span", { class: "alert__dot", "aria-label": "안 읽음" }) : null, h("span", { class: "vm-tag", text: c.label }), h("strong", { class: "alert__title", text: c.title }), h("span", { class: `alert__act is-${c.action}`, text: CHG_ACT[c.action] })]),
+      c.detail ? h("span", { class: "alert__detail", text: c.detail }) : null,
+      h("span", { class: "alert__meta muted small", text: `${c.mine ? "나" : c.who} · ${when(c.at)} (${ago(c.at)})` })
+    ]));
+    const draw = () => {
+      const days = new Map();
+      for (const c of list) { const k = dayOf(c.at); if (!days.has(k)) days.set(k, []); days.get(k).push(c); }
+      const total = Object.values(d.counts).reduce((n, x) => n + x, 0);
+      fill(box,
+        h("div", { class: "page-head" }, [h("h1", { class: layout.main ? null : "vol__hello", text: "알림" }), h("button", { class: "btn btn--ghost btn--sm page-head__end", type: "button", disabled: !total, text: "모두 읽음", onclick: async () => { const r = await act(() => api(`/changes/seen${chgAs()}`, { method: "POST", body: { menu: "*" } })); setChg(r); await reload(); } })]),
+        h("p", { class: "muted small", text: `누가 무엇을 바꿨는지 최신순으로 보여요(${d.keepDays}일 동안). 누르면 그 기록으로 가요. 메뉴 옆 숫자는 그 메뉴의 안 본 변경 수이고, 그 메뉴를 열면 사라져요.` }),
+        h("div", { class: "filters" }, [
+          opsSeg([["all", "전체"], ["new", `안 읽음 ${total}`]], only ? "new" : "all", (k) => { only = k === "new"; quiet(reload()); }),
+          (() => { const s2 = opsSel(d.topics.map((t) => [t.key, t.label]), topic, "모든 종류"); s2.setAttribute("aria-label", "종류 고르기"); s2.addEventListener("change", () => { topic = s2.value; quiet(reload()); }); return s2; })()]),
+        ...(list.length ? [...days].map(([k, rows]) => h("section", { class: "stack stack--sm" }, [h("h2", { class: "alerts__day", text: k === today() ? `오늘 · ${volDay(k)}` : volDay(k) }), h("ul", { class: "card alerts__list" }, rows.map(item))])) : [h("div", { class: "card empty", text: only ? "안 읽은 변경이 없어요." : topic ? "이 종류의 변경이 아직 없어요." : "아직 변경 내역이 없어요. 이 기능을 연 뒤의 변경부터 쌓여요." })]),
+        d.more ? h("button", { class: "btn btn--ghost", type: "button", text: "더 보기", onclick: async () => { const r = await act(() => api(q(list[list.length - 1].id))); list = [...list, ...r.changes]; d.more = r.more; draw(); } }) : null);
+    };
+    draw();
+    return [box];
+  }
+  async function pageAlerts() {
+    document.title = `알림 · ${TITLE}`;
+    drawMini(null);
+    setMain("alerts", loading());
+    let body;
+    try { body = await alertsView(); } catch (e) { if (e.status === 401) return; body = [failed(e)]; }
+    if (route().name === "alerts") setMain("alerts", body);
   }
   const opsHint = (t) => h("p", { class: "muted small", text: t });
   const nospace = (s) => String(s || "").replace(/\s/g, "");
@@ -7550,6 +7663,7 @@
       });
     };
     draw();
+    openRef("contacts", (id) => d.logs.find((x) => x.id === id), edit);
     return [opsHint("수도회·업체·봉사자에게 연락한 것을 적어요. 후속 조치와 기한을 적으면 기한이 된 날 아침에 알림이 가요."), box];
   }
   // ---- F02 택배 (받기·보내기). readOnly 면 조회만 (팀 봉사자 '회수 받기')
@@ -7754,7 +7868,7 @@
     const box = h("div", { class: "vm" });
     const draw = () => {
       const mine = d.groups.filter((g) => g.mine), others = d.groups.filter((g) => !g.mine);
-      const gcard = (g) => h("div", { class: "vm-card ops-group" + (g.mine ? " is-mine" : "") }, [
+      const gcard = (g) => h("div", { class: "vm-card ops-group" + (g.mine ? " is-mine" : ""), "data-ref": `groups:${g.id}` }, [
         opsTop(`${g.name}${g.active ? "" : " (쉼)"}`, g.mine ? "내 조" : ""),
         opsLine([g.leader ? `조장 ${g.leader}` : "", g.members.length ? `조원 ${g.members.map((m) => m.name).join(", ")}` : "조원 없음"].filter(Boolean).join(" · ")),
         g.note ? h("span", { class: "vm-card__note small", text: g.note }) : null,
@@ -7806,6 +7920,7 @@
       });
     };
     draw();
+    openRef("groups", (id) => d.groups.find((g) => g.id === id), (g) => flashRef("groups", g.id));
     return [opsHint("내가 속한 검수 조와 맡은 수도회 물량을 확인하고, 검수를 시작하면 상태를 바꿔요."), box];
   }
   // ---- 불량 처리: 불량이 있는 검수 기록의 처리 방법(반송·현장 재작업) 정하기
@@ -7839,6 +7954,7 @@
       });
     };
     draw();
+    openRef(["defect", "inspect"], (id) => d.inspections.find((x) => x.id === id), edit);
     return [opsHint("불량이 나온 검수 기록마다 처리 방법을 골라요."), box];
   }
   // ---- F03 역할·업무 담당 (관리자가 정하고 모두 봄)
@@ -7847,7 +7963,7 @@
     let d = await api("/ops/duties");
     const box = h("div", { class: "vm" });
     const draw = () => fill(box,
-      opsCards(Object.keys(DUTY).filter((k) => d.duties.some((x) => x.duty === k)), (k) => h("div", { class: "vm-card" }, [opsTop(DUTY[k], ""), h("ul", { class: "ops-assigns" }, d.duties.filter((x) => x.duty === k).map((x) => h("li", { class: "ops-assign" }, [
+      opsCards(Object.keys(DUTY).filter((k) => d.duties.some((x) => x.duty === k)), (k) => h("div", { class: "vm-card" }, [opsTop(DUTY[k], ""), h("ul", { class: "ops-assigns" }, d.duties.filter((x) => x.duty === k).map((x) => h("li", { class: "ops-assign", "data-ref": `duties:${x.id}` }, [
         h("span", {}, [h("strong", { text: x.name }), h("span", { class: "muted small", text: ` ${x.who}${x.startDate || x.endDate ? ` · ${x.startDate || "…"} ~ ${x.endDate || "…"}` : ""}${x.note ? ` · ${x.note}` : ""}` })]),
         x.active ? opsTag("지금 담당", "is-mine") : opsTag("기간 아님"),
         d.canEdit ? h("button", { class: "link-btn small", type: "button", text: "고치기", onclick: () => edit(x) }) : null])))]), "아직 정한 업무 담당자가 없어요."),
@@ -8076,6 +8192,7 @@
       });
     };
     draw();
+    openRef("cutting", (id) => d.jobs.find((j) => j.id === id), (x) => (mineOk(x) ? jobSheet(x) : toast(`${x.date} 실자르기 작업이에요.`)));
     return [opsHint("실자르기 작업과 타래 배분을 적어요. 사용한 실·만든 타래·나눠 준 타래가 입출고에 함께 쌓이고, 누르면 고치거나 지울 수 있어요."), box];
   }
   // ---- 업체 구매 (F12)
@@ -8116,6 +8233,7 @@
       });
     };
     draw();
+    openRef("buy", (id) => d.purchases.find((p) => p.id === id), (p) => (d.canEdit ? edit(p) : toast(`${p.itemName} · ${PUR[p.status]}`)));
     return [opsHint("요청 → 승인(관리자) → 주문 → 입고 순서로 처리해요. 입고하면 고른 대장에 입고 기록이 생겨요."), box];
   }
   // ---- 권한표 (F14): 메뉴 × 역할 (조회·등록), 직원 쓰기 켜기
@@ -8230,6 +8348,7 @@
       });
     };
     draw();
+    openRef(["edu", "made", "req"], (id) => d.rows.find((r) => r.id === id), edit);
     return h("div", { class: "stack" }, [opsHint("묵주 교육마다 진행상태·진행 봉사자·출납을 적어요. 줄을 누르면 고쳐요. 지금은 관리자만 봐요."), box]);
   }
   async function adminRoster() {
@@ -8272,7 +8391,7 @@
     const dday = (s) => { const n = Math.round((parseYmd(s) - parseYmd(today())) / 86400000); return n === 0 ? "D-day" : n > 0 ? `D-${n}` : `D+${-n}`; };
     const draw = () => {
       const t = today(), open = d.deadlines.filter((x) => !x.done && x.date >= t), past = d.deadlines.filter((x) => x.done || x.date < t);
-      const card = (x) => opsCard(d.canEdit ? () => edit(x) : null, [opsTop(`${volDay(x.date)}`, x.done ? "완료" : dday(x.date)), h("strong", { class: "small", text: x.title }), x.note ? h("span", { class: "vm-card__note small", text: x.note }) : null,
+      const card = (x) => opsCard(d.canEdit ? () => edit(x) : null, [h("span", { hidden: true, "data-ref": `deadline:${x.id}` }), opsTop(`${volDay(x.date)}`, x.done ? "완료" : dday(x.date)), h("strong", { class: "small", text: x.title }), x.note ? h("span", { class: "vm-card__note small", text: x.note }) : null,
         d.canEdit ? opsTags(opsTag(DL_AUD[x.audience])) : null], !x.done && x.date >= t && dday(x.date).match(/^D-(day|[0-7])$/) ? "is-warn" : "");
       fill(box,
         h("div", { class: "vm-stats" }, [vmStat("다가오는 마감", open.length), vmStat("7일 안", open.filter((x) => x.date <= shiftYmd(t, 7)).length, open.some((x) => x.date <= shiftYmd(t, 7))), vmStat("지난·완료", past.length)]),
@@ -8290,6 +8409,7 @@
       });
     };
     draw();
+    openRef("deadline", (id) => d.deadlines.find((x) => x.id === id), (x) => (d.canEdit ? edit(x) : flashRef("deadline", x.id)));
     return [opsHint(d.canEdit ? "마감일을 적으면 봉사자 화면 '참고 › 데드라인 일정'에 날짜순으로 보여요. 보는 사람을 골라 부서·팀 봉사자에게 따로 보일 수 있어요." : "다가오는 마감일을 날짜순으로 봐요."), box];
   }
   // ---- 묵주 WBS: 서버에 저장된 공정표를 받아 씀 (없으면 화면에 들어 있는 기본값). 고치기는 관리자만
@@ -8429,7 +8549,7 @@
     const draw = () => {
       const scheduleView = schedules.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
         h("thead", {}, h("tr", {}, ["번호", "날짜", "시간", "제목", "장소", "요청수량", "교육물량", "실 출고", "십자가 출고", "차액", "대상", "입력자"].map((x) => h("th", { text: x })))),
-        h("tbody", {}, schedules.map((s, i) => h("tr", rowAttrs(() => scheduleDialog(s)), [
+        h("tbody", {}, schedules.map((s, i) => h("tr", { ...rowAttrs(() => scheduleDialog(s)), "data-ref": `sched:${s.id}` }, [
           h("td", { class: "num muted", text: String(i + 1) }),
           h("td", { class: "nowrap", text: volDay(s.date) }), h("td", { class: "nowrap", text: volTime(s) || "-" }), h("td", {}, [s.title, s.tableOnly ? h("span", { class: "stock-tag vol-visits__tag", text: "달력 미정" }) : null, s.sumNote ? h("small", { class: "muted", text: ` · 합계 제외: ${s.sumNote}` }) : null]), h("td", { text: s.place || "-" }), h("td", { class: "nowrap num", text: s.qty != null ? fmtN(s.qty) : "-" }), h("td", { class: "nowrap num", text: s.eduQty != null ? fmtN(s.eduQty) : "-" }), h("td", { class: "nowrap num", text: s.threadQty != null ? fmtN(s.threadQty) : "-" }), h("td", { class: "nowrap num", text: s.crossQty != null ? fmtN(s.crossQty) : "-" }), h("td", { class: "nowrap num " + diffCls(qtyDiff(s)), text: diffText(qtyDiff(s)) }),
           h("td", { text: s.audience === "all" ? "전체" : s.userIds.map((id) => vols.find((u) => u.id === id)?.name).filter(Boolean).join(", ") || "지정 없음" }),
@@ -8438,7 +8558,7 @@
       ])) : h("div", { class: "card empty", text: "아직 등록한 일정이 없어요." });
       const trainingView = trainings.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
         h("thead", {}, h("tr", {}, ["제목", "일시", "장소", "이수"].map((x) => h("th", { text: x })))),
-        h("tbody", {}, trainings.map((t) => h("tr", rowAttrs(() => trainingDialog(t)), [
+        h("tbody", {}, trainings.map((t) => h("tr", { ...rowAttrs(() => trainingDialog(t)), "data-ref": `training:${t.id}` }, [
           h("td", { text: t.title }), h("td", { class: "nowrap", text: [t.date ? volDay(t.date) : "", t.startTime].filter(Boolean).join(" ") || "-" }), h("td", { text: t.place || "-" }), h("td", { class: "nowrap", text: `${t.doneBy.length} / ${vols.length}명` })
         ])))
       ])) : h("div", { class: "card empty", text: "아직 등록한 교육이 없어요." });
@@ -8454,7 +8574,7 @@
       // 봉사자가 적은 원자재 보유물량 · 제품 회수물량
       const recView = volRecords.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
         h("thead", {}, h("tr", {}, ["종류", "묶음", "날짜", "입고·출고 장소 (대상)", "수량", "메모", "적은 사람"].map((x) => h("th", { text: x })))),
-        h("tbody", {}, volRecords.map((r) => h("tr", rowAttrs(() => recordDialog(r)), [
+        h("tbody", {}, volRecords.map((r) => h("tr", { ...rowAttrs(() => recordDialog(r)), "data-ref": `fin:${r.id}` }, [
           h("td", { class: "nowrap", text: r.kind === "material" ? "원자재 보유" : `완제품 · ${{ in: "입고", checked: "검수완료", packed: "패키징 완료", out: "출고" }[r.stage] || "입고"}` }), h("td", { class: "nowrap", text: r.group }), h("td", { class: "nowrap", text: r.date }), h("td", { text: r.name || "-" }), h("td", { class: "num nowrap", text: fmtN(r.qty) }), h("td", { class: "muted small", text: r.note }), h("td", { class: "nowrap", text: r.author || "-" })
         ])))
       ])) : h("div", { class: "card empty", text: "아직 봉사자가 적은 완제품 기록이 없어요." });
@@ -8491,7 +8611,7 @@
         st.value = x.status;
         const reply = h("input", { value: x.reply, maxlength: "1000", placeholder: "봉사자에게 보일 답 (선택)" });
         const save = h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "저장", onclick: async () => { teamData.issues = (await act(() => api(`/team/issues/${x.id}`, { method: "PATCH", body: { status: st.value, reply: reply.value } }), "처리 상태를 저장했어요.")).issues; draw(); } });
-        return h("li", { class: "card team-issue" }, [
+        return h("li", { class: "card team-issue", "data-ref": `issue:${x.id}` }, [
           h("div", { class: "team-issue__head" }, [statusTag(ISSUE_STATUS[x.status], `is-${x.status}`), statusTag(ISSUE_KIND[x.kind], x.kind === "thread" ? "is-thread" : ""), h("strong", { text: x.title })]),
           h("div", { class: "muted small", text: [x.org, x.author, x.createdAt?.slice(0, 10)].filter(Boolean).join(" · ") }),
           x.body ? h("p", { class: "vol-pre small", text: x.body }) : null,
@@ -8534,7 +8654,7 @@
       const [u, s, t, m, rc, mn] = await Promise.all([api("/admin/users"), api("/admin/vol-schedules"), api("/admin/vol-trainings"), api("/admin/vol-stock-moves"), api("/admin/vol-records"), api("/admin/vol-menu")]);
       vols = u.users.filter((x) => x.role === "volunteer");
       schedules = s.schedules; trainings = t.trainings; stockMoves = m.moves; volRecords = rc.records; volMenuSet = mn;
-      if (tab === "inspect") await ins.load();
+      if (tab === "inspect") { await ins.load(); openRef(["inspect", "defect"], (id) => ins.data().inspections.find((x) => x.id === id), ins.dialog); }
       if (tab === "deadlines") extraView = h("div", { class: "stack" }, await opsDeadlines());
       if (tab === "wbs") extraView = await adminWbs();
       if (tab === "edu") extraView = await adminRosaryEdu();
@@ -8577,6 +8697,9 @@
     toggleNav(false);
     const { name, id } = route();
     window.scrollTo(0, 0);
+    state.drawVolNav = null;
+    seeMenu(name === "alerts" ? "alarm" : name === "volunteers" && ["training", "stock"].includes(id) ? `volunteers/${id}` : name);
+    if (name === "alerts") return pageAlerts();
     if (name === "today") return pageToday(id && /^\d{4}-\d{2}-\d{2}$/.test(id) ? id : null);
     if (name === "dashboard") return pageDashboard("mine");
     if (name === "alldash") return go("#/dashboard"); // 전체 대시보드는 메뉴에서 뺌 (예전 주소는 나의 대시보드로)
@@ -8739,7 +8862,7 @@
           ])
         ]));
     };
-    openDialog("알림 · 앱 설치", box);
+    openDialog("휴대폰 알림 · 앱 설치", box);
     await draw();
   }
 
