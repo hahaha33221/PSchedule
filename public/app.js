@@ -184,6 +184,15 @@
     if (!res.ok) throw Object.assign(new Error(data.error || "문제가 생겼어요. 잠시 뒤 다시 시도해 주세요."), { status: res.status, field: data.field, as: data.as, confirm: data.confirm });
     return data;
   }
+  // 서버가 확인을 받으라고 하면(409 check) 무엇이 이상한지 보여 주고, 확인하면 다시 보냄. 취소하면 null (저장 안 함)
+  async function apiAsk(path, opts = {}) {
+    try { return await api(path, opts); } catch (ex) {
+      if (ex.confirm?.mode !== "check") throw ex;
+      const del = opts.method === "DELETE";
+      if (!confirm(`${ex.confirm.lines.join("\n")}\n그래도 ${del ? "지울" : "저장할"}까요?`)) return null;
+      return api(del ? `${path}${path.includes("?") ? "&" : "?"}confirmed=1` : path, del ? opts : { ...opts, body: { ...opts.body, confirmed: true } });
+    }
+  }
   // 고치고 나서 화면 새로고침 (실패하면 알림만)
   async function act(fn, done) {
     try { const r = await fn(); if (done) toast(done); return r; } catch (e) { if (e.status !== 401) toast(e.message); throw e; }
@@ -5852,13 +5861,13 @@
       const form = h("form", { class: "stack" }, [h("div", { class: "row2" }, [field("단계", stage), field("날짜", date)]), h("div", { class: "row2" }, [field("수량", qty), field("어디서·어디로 (선택)", name)]), field("메모 (선택)", note), err,
         h("div", { class: "actions" }, [r ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
           if (!confirm("이 기록을 지울까요?")) return;
-          rows = (await act(() => api(`/volunteer/records/${r.id}`, { method: "DELETE" }))).records; closeDialog(); draw();
+          const x = await act(() => apiAsk(`/volunteer/records/${r.id}`, { method: "DELETE" })); if (!x) return; rows = x.records; closeDialog(); draw();
         } }) : null, ok])]);
       form.addEventListener("submit", (e) => {
         e.preventDefault();
         const body = { itemId, kind: "recovery", stage: stage.value, date: date.value, name: name.value, qty: qty.value, note: note.value };
         busy(ok, async () => {
-          try { rows = (await api(r ? `/volunteer/records/${r.id}` : "/volunteer/records", { method: r ? "PATCH" : "POST", body })).records; closeDialog(); toast("저장했어요."); draw(); }
+          try { const x = await apiAsk(r ? `/volunteer/records/${r.id}` : "/volunteer/records", { method: r ? "PATCH" : "POST", body }); if (!x) return; rows = x.records; closeDialog(); toast("저장했어요."); draw(); }
           catch (ex) { showError(err, ex.message); }
         });
       });
@@ -5884,7 +5893,7 @@
           h("tbody", {}, shown.map((r) => h("tr", {}, [
             h("td", { class: "nowrap", text: shortDate(r.date) }), h("td", { class: "nowrap" }, h("span", { class: `vol-fg__tag vol-fg__tag--${r.stage || "in"}`, text: cfg.labels[r.stage || "in"] })), h("td", { class: "num", text: fmtN(r.qty) }),
             h("td", { text: r.name }), h("td", { class: "muted small", text: r.note }), h("td", { class: "muted small", text: r.author }),
-            h("td", {}, r.mine ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => edit(r) }) : null)
+            h("td", {}, r.canEdit ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => edit(r) }) : null)
           ])))
         ])) : h("p", { class: "muted", text: "아직 적은 기록이 없어요. '적기'를 눌러 추가해 주세요." }),
         h("p", { class: "muted small", text: "단계마다 처리한 날에 한 줄씩 적어 주세요(예: 11/20 회수 입고 500, 11/22 검수완료 480). 위 단계 칸을 누르면 그 단계 기록만 보여요. 고치기·지우기는 직접 적은 기록만 할 수 있어요." })
@@ -5922,13 +5931,13 @@
       const form = h("form", { class: "stack" }, [h("div", { class: "row2" }, [field("날짜", date), field(cfg.nameLabel, name)]), h("div", { class: "row2" }, [field("수량", qty), field("메모 (선택)", note)]), err,
         h("div", { class: "actions" }, [r ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
           if (!confirm("이 기록을 지울까요?")) return;
-          rows = (await act(() => api(`/volunteer/records/${r.id}`, { method: "DELETE" }))).records; closeDialog(); draw();
+          const x = await act(() => apiAsk(`/volunteer/records/${r.id}`, { method: "DELETE" })); if (!x) return; rows = x.records; closeDialog(); draw();
         } }) : null, ok])]);
       form.addEventListener("submit", (e) => {
         e.preventDefault();
         const body = { itemId, kind, date: date.value, name: name.value, qty: qty.value, note: note.value };
         busy(ok, async () => {
-          try { rows = (await api(r ? `/volunteer/records/${r.id}` : "/volunteer/records", { method: r ? "PATCH" : "POST", body })).records; closeDialog(); toast("저장했어요."); draw(); }
+          try { const x = await apiAsk(r ? `/volunteer/records/${r.id}` : "/volunteer/records", { method: r ? "PATCH" : "POST", body }); if (!x) return; rows = x.records; closeDialog(); toast("저장했어요."); draw(); }
           catch (ex) { showError(err, ex.message); }
         });
       });
@@ -5942,7 +5951,7 @@
         h("thead", {}, h("tr", {}, [h("th", { text: "날짜" }), h("th", { text: cfg.nameLabel }), h("th", { class: "num", text: "수량" }), h("th", { text: "메모" }), h("th", { text: "적은 사람" }), h("th")])),
         h("tbody", {}, rows.map((r) => h("tr", {}, [
           h("td", { class: "nowrap", text: shortDate(r.date) }), h("td", { text: r.name }), h("td", { class: "num", text: fmtN(r.qty) }), h("td", { class: "muted small", text: r.note }), h("td", { class: "muted small", text: r.author }),
-          h("td", {}, r.mine ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => edit(r) }) : null)
+          h("td", {}, r.canEdit ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => edit(r) }) : null)
         ])))
       ])) : h("p", { class: "muted", text: "아직 적은 기록이 없어요. '적기'를 눌러 추가해 주세요." }),
       h("p", { class: "muted small", text: cfg.hint + " 고치기·지우기는 직접 적은 기록만 할 수 있어요." })
@@ -6584,6 +6593,23 @@
     draw();
     return [...teamHead("캘린더", "교육 일정과 검수 봉사일을 보고, 봉사할 수 있는 날을 표시해요."), box];
   }
+  // 수도회 이름을 고치면 무엇이 바뀌는지 보여 주고 고르게 하는 칸 (팀 '교육 일정', 관리자 '교육 기록')
+  function orgAskPanel() {
+    const orgAsk = h("div", { class: "card stack stack--sm org-ask", role: "alert", hidden: true });
+    const askOrg = (c, go) => {
+      const btn = (t, v, main) => h("button", { class: `btn btn--sm ${main ? "btn--primary" : "btn--ghost"}`, type: "button", text: t, onclick: () => { orgAsk.hidden = true; go(v); } });
+      const lines = c.mode === "similar" ? [`'${c.to}' 이름과 띄어쓰기·괄호만 다른 수도회가 이미 있어요. 같은 곳이면 그 수도회로 옮겨 주세요.`]
+        : c.mode === "move" ? [`'${c.to}'은(는) 이미 있는 수도회예요. 이 교육 하나만 '${c.from}'에서 '${c.to}'(으)로 옮겨요.`]
+          : c.mode === "rename" ? [`수도회 이름을 '${c.from}'에서 '${c.to}'(으)로 바꿔요.`, c.edus > 1 ? `이 수도회의 교육 ${c.edus}건 제목이 모두 바뀌어요. 이 교육만 다른 수도회라면 취소해 주세요.` : "연락처·상태는 그대로예요."]
+            : [`'${c.to}' 수도회를 새로 만들어 이 교육과 이어요.`];
+      fill(orgAsk, h("strong", { text: "수도회 이름이 바뀌어요" }), ...lines.map((t) => h("p", { class: "small", text: t })), h("div", { class: "actions actions--start" }, [
+        ...(c.mode === "similar" ? [...c.similar.map((m, i) => btn(`'${m.name}'(으)로 옮기기`, `similar:${m.id}`, !i)), btn(`그래도 '${c.to}'(으)로`, "force")]
+          : [btn(c.mode === "move" ? "이 교육만 옮기기" : c.mode === "rename" ? "이름 바꾸기" : "새로 만들기", c.mode === "move" ? `move:${c.targetId}` : c.mode, true)]),
+        h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "취소", onclick: () => { orgAsk.hidden = true; } })]));
+      orgAsk.hidden = false; orgAsk.scrollIntoView({ block: "center" });
+    };
+    return { el: orgAsk, ask: askOrg };
+  }
   // 담당 수도회 · 교육 · 문의 · 원자재 배분(조회) · 제작 진행
   async function teamOrgs(opts = {}) {
     const mode = opts.mode || ""; // 단계형 메뉴: schedule 교육 일정 · result 교육 결과 · made 제작 진행
@@ -6678,21 +6704,17 @@
       const due = h("input", { value: o.madeDue, maxlength: "40", placeholder: "예: 12월 말" });
       const contact = isAdmin() ? h("textarea", { rows: "2", maxlength: "300", placeholder: "담당자 이름 · 전화 · 이메일 (관리자만 적어요)" }, o.contact) : null;
       // 수도회 이름을 고치면 무엇이 바뀌는지 먼저 보여 주고 고르게 함 (서버가 409 로 알려 줌)
-      const orgAsk = h("div", { class: "card stack stack--sm org-ask", role: "alert", hidden: true });
-      const askOrg = (c, go) => {
-        const btn = (t, v, main) => h("button", { class: `btn btn--sm ${main ? "btn--primary" : "btn--ghost"}`, type: "button", text: t, onclick: () => { orgAsk.hidden = true; go(v); } });
-        const lines = c.mode === "similar" ? [`'${c.to}' 이름과 띄어쓰기·괄호만 다른 수도회가 이미 있어요. 같은 곳이면 그 수도회로 옮겨 주세요.`]
-          : c.mode === "move" ? [`'${c.to}'은(는) 이미 있는 수도회예요. 이 교육 하나만 '${c.from}'에서 '${c.to}'(으)로 옮겨요.`]
-            : c.mode === "rename" ? [`수도회 이름을 '${c.from}'에서 '${c.to}'(으)로 바꿔요.`, c.edus > 1 ? `이 수도회의 교육 ${c.edus}건 제목이 모두 바뀌어요. 이 교육만 다른 수도회라면 취소해 주세요.` : "연락처·상태는 그대로예요."]
-              : [`'${c.to}' 수도회를 새로 만들어 이 교육과 이어요.`];
-        fill(orgAsk, h("strong", { text: "수도회 이름이 바뀌어요" }), ...lines.map((t) => h("p", { class: "small", text: t })), h("div", { class: "actions actions--start" }, [
-          ...(c.mode === "similar" ? [...c.similar.map((m, i) => btn(`'${m.name}'(으)로 옮기기`, `similar:${m.id}`, !i)), btn(`그래도 '${c.to}'(으)로`, "force")]
-            : [btn(c.mode === "move" ? "이 교육만 옮기기" : c.mode === "rename" ? "이름 바꾸기" : "새로 만들기", c.mode === "move" ? `move:${c.targetId}` : c.mode, true)]),
-          h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "취소", onclick: () => { orgAsk.hidden = true; } })]));
-        orgAsk.hidden = false; orgAsk.scrollIntoView({ block: "center" });
-      };
+      const { el: orgAsk, ask: askOrg } = orgAskPanel();
       orgName.addEventListener("input", () => { orgAsk.hidden = true; }); // 이름을 또 고치면 다시 물어봄
       const inqBox = h("div", { class: "stack stack--sm" });
+      const editInq = (x, li) => {
+        const d1 = h("input", { type: "date", value: x.date }), q1 = h("textarea", { rows: "2", maxlength: "1000" }, x.question), a1 = h("textarea", { rows: "2", maxlength: "1000", placeholder: "답변" }, x.answer), k1 = h("input", { type: "checkbox", checked: x.done });
+        fill(li, h("div", { class: "stack stack--sm" }, [field("날짜", d1), field("문의", q1), field("답변", a1), h("label", { class: "check" }, [k1, h("span", { text: "처리 완료" })]),
+          h("div", { class: "actions actions--start" }, [
+            h("button", { class: "btn btn--primary btn--sm", type: "button", text: "문의 저장", onclick: async () => { await act(() => api(`/team/inquiries/${x.id}`, { method: "PATCH", body: { date: d1.value, question: q1.value, answer: a1.value, done: k1.checked } }), "문의 기록을 저장했어요."); changed = true; drawInq(); } }),
+            h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "취소", onclick: () => drawInq() })])]));
+        a1.focus();
+      };
       const drawInq = async () => {
         const { inquiries } = await api(`/team/orgs/${o.id}/inquiries`);
         const qd = h("input", { type: "date", value: today() }), qq = h("textarea", { rows: "2", maxlength: "1000", placeholder: "문의 내용" }), qa = h("textarea", { rows: "2", maxlength: "1000", placeholder: "답변 (선택)" }), qdone = h("input", { type: "checkbox" });
@@ -6700,7 +6722,9 @@
           inquiries.length ? h("ul", { class: "team-inq" }, inquiries.map((x) => h("li", { class: "team-inq__item" + (x.done ? " is-done" : "") }, [
             h("div", { class: "small muted" }, [`${x.date} · ${x.author || "-"} `, x.done ? statusTag("처리 완료", "is-done") : statusTag("열림", "is-new")]),
             h("p", { class: "vol-pre", text: `문의: ${x.question}` }), x.answer ? h("p", { class: "vol-pre muted", text: `답변: ${x.answer}` }) : null,
-            h("button", { class: "link-btn small", type: "button", text: x.done ? "다시 열기" : "처리 완료로", onclick: async () => { await act(() => api(`/team/inquiries/${x.id}`, { method: "PATCH", body: { done: !x.done } })); changed = true; drawInq(); } })
+            h("button", { class: "link-btn small", type: "button", text: x.done ? "다시 열기" : "처리 완료로", onclick: async () => { await act(() => api(`/team/inquiries/${x.id}`, { method: "PATCH", body: { done: !x.done } })); changed = true; drawInq(); } }),
+            " ", h("button", { class: "link-btn small", type: "button", text: x.answer ? "고치기" : "답 적기", onclick: (e) => editInq(x, e.currentTarget.closest("li")) }),
+            x.canDelete ? " " : null, x.canDelete ? h("button", { class: "link-btn small", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 문의 기록을 지울까요?")) return; await act(() => api(`/team/inquiries/${x.id}`, { method: "DELETE" })); changed = true; drawInq(); } }) : null
           ]))) : h("p", { class: "muted small", text: "아직 문의 기록이 없어요." }),
           h("details", { class: "vstat__more" }, [h("summary", {}, "문의 기록 추가"), h("div", { class: "stack stack--sm" }, [
             field("날짜", qd), qq, qa, h("label", { class: "check" }, [qdone, h("span", { text: "처리 완료" })]),
@@ -6715,7 +6739,7 @@
         h("p", { class: "muted small", text: [`교육 순서 ${o.no}`, o.fromForm ? "네이버폼 신청" : "신청서 없음", o.updatedBy ? `마지막 수정 ${o.updatedBy}` : ""].filter(Boolean).join(" · ") }),
         h("h3", { class: "team-sec", text: "교육 일정" }),
         h("div", { class: "row2" }, [field("수도회", orgName), field("장소", place)]), orgAsk,
-        h("div", { class: "row2" }, [field(o.tableOnly ? "교육 날짜 (정하면 달력에 보여요)" : "교육 날짜", date, o.tableOnly && o.fromForm ? `신청서의 희망일 ${o.date}` : null), field("시작 시간", time)]),
+        h("div", { class: "row2" }, [field(o.tableOnly ? "교육 날짜 (정하면 달력에 보여요)" : "교육 날짜", date, o.tableOnly ? (o.fromForm ? `신청서의 희망일 ${o.date}` : null) : "비우고 저장하면 '미정'이 돼서 달력에 안 보여요"), field("시작 시간", time)]),
         h("div", { class: "row2" }, [field("상태", status), field("담당 봉사자", helper)]),
         h("h3", { class: "team-sec", text: "교육 결과" }),
         h("div", { class: "row2" }, [field("참석 인원", attend), field("특이사항", result)]),
@@ -6740,10 +6764,11 @@
           try {
             if (!orgName.value.trim()) return showError(err, "수도회 이름을 적어 주세요.");
             const body = { ...(orgName.value.trim() !== o.org.trim() ? { org: orgName.value, ...(orgConfirm ? { orgConfirm } : {}) } : {}), place: place.value, helper: helper.value, attend: attend.value, resultNote: result.value, madeQty: made.value, madeDue: due.value };
-            if (date.value && (o.tableOnly || date.value !== o.date || time.value !== (o.startTime || ""))) Object.assign(body, { date: date.value, startTime: time.value });
+            if (date.value ? o.tableOnly || date.value !== o.date || time.value !== (o.startTime || "") : !o.tableOnly) Object.assign(body, { date: date.value, startTime: date.value ? time.value : "" }); // 날짜를 비우면 '미정'으로
             if (status.value !== o.status) Object.assign(body, { status: status.value, statusFrom: o.status }); // 바꿨을 때만 (관리자 '교육 기록'과 같은 값)
             if (contact) body.contact = contact.value;
-            const r = await api(`/team/orgs/${o.id}`, { method: "PATCH", body });
+            const r = await apiAsk(`/team/orgs/${o.id}`, { method: "PATCH", body });
+            if (!r) return;
             orgs = body.org ? (await api("/team/orgs")).orgs : orgs.map((x) => (x.id === o.id ? r.org : x)); // 이름을 바꾸면 다른 교육 제목도 바뀔 수 있어 다시 받음
             closeDialog(); toast("저장했어요."); draw();
           } catch (ex) { if (ex.confirm) { showError(err, ""); return askOrg(ex.confirm, submit); } showError(err, ex.message); }
@@ -6795,7 +6820,7 @@
           h("div", { class: "actions actions--start" }, [h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => dailyDialog(null) }, [icon("plus"), "기록 추가"]), h("span", { class: "muted small", text: `총 ${fmtN(total)}개 · ${byDate.size}일` })]),
           daily.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
             h("thead", {}, h("tr", {}, ["날짜", "검수 수량", "그날 합계", "함께한 봉사자", "메모", "입력"].map((t) => h("th", { text: t })))),
-            h("tbody", {}, daily.map((x) => h("tr", { class: "stock-row", tabindex: "0", onclick: () => dailyDialog(x) }, [h("td", { class: "nowrap", text: x.date }), h("td", { class: "num", text: fmtN(x.qty) }), h("td", { class: "num muted", text: fmtN(byDate.get(x.date)) }), h("td", { text: x.workers || "-" }), h("td", { class: "muted small", text: x.note || "" }), h("td", { class: "muted small", text: x.author || "-" })]))),
+            h("tbody", {}, daily.map((x) => h("tr", x.canEdit ? { class: "stock-row", tabindex: "0", onclick: () => dailyDialog(x) } : { title: "적은 사람과 리더 봉사자·관리자만 고쳐요" }, [h("td", { class: "nowrap", text: x.date }), h("td", { class: "num", text: fmtN(x.qty) }), h("td", { class: "num muted", text: fmtN(byDate.get(x.date)) }), h("td", { text: x.workers || "-" }), h("td", { class: "muted small", text: x.note || "" }), h("td", { class: "muted small", text: x.author || "-" })]))),
             h("tfoot", {}, h("tr", { class: "vol-more__sum" }, [h("th", { text: "합계" }), h("td", { class: "num", text: fmtN(total) }), h("td", { colspan: "4" })]))
           ])) : h("div", { class: "card empty", text: "아직 하루 검수 기록이 없어요." }));
       };
@@ -6805,8 +6830,8 @@
         const workers = h("input", { value: x?.workers || "", maxlength: "300", placeholder: "예: 김OO, 이OO" }), note = h("textarea", { rows: "2", maxlength: "500" }, x?.note || "");
         const ok = h("button", { class: "btn btn--primary", type: "submit", text: x ? "저장" : "추가" });
         const form = h("form", { class: "stack", novalidate: true }, [h("div", { class: "row2" }, [field("날짜", date), field("검수 수량", qty)]), field("함께한 봉사자", workers), field("메모 (선택)", note), err,
-          h("div", { class: "actions" }, [x && (x.mine || isAdmin()) ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 하루 검수 기록을 지울까요?")) return; daily = (await act(() => api(`/team/daily/${x.id}`, { method: "DELETE" }))).daily; closeDialog(); draw(); } }) : null, h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])]);
-        form.addEventListener("submit", (e) => { e.preventDefault(); busy(ok, async () => { try { daily = (await api(x ? `/team/daily/${x.id}` : "/team/daily", { method: x ? "PATCH" : "POST", body: { date: date.value, qty: qty.value, workers: workers.value, note: note.value } })).daily; closeDialog(); draw(); } catch (ex) { showError(err, ex.message); } }); });
+          h("div", { class: "actions" }, [x?.canEdit ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 하루 검수 기록을 지울까요?")) return; daily = (await act(() => api(`/team/daily/${x.id}`, { method: "DELETE" }))).daily; closeDialog(); draw(); } }) : null, h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])]);
+        form.addEventListener("submit", (e) => { e.preventDefault(); busy(ok, async () => { try { if (qty.value === "") return showError(err, "검수 수량을 적어 주세요."); daily = (await api(x ? `/team/daily/${x.id}` : "/team/daily", { method: x ? "PATCH" : "POST", body: { date: date.value, qty: qty.value, workers: workers.value, note: note.value } })).daily; closeDialog(); draw(); } catch (ex) { showError(err, ex.message); } }); });
         openDialog(x ? "하루 검수 기록 고치기" : "하루 검수 기록 추가", form);
       };
       draw();
@@ -6818,17 +6843,20 @@
           h("div", { class: "team-day__when" }, [h("strong", { text: volDay(s.date) }), s.startTime ? h("span", { class: "muted small", text: ` ${s.startTime}` }) : null]),
           h("div", { class: "team-day__what" }, [h("div", { text: `필요 ${s.need}명 · 신청 ${s.people.length}명${s.people.length >= s.need ? " (다 찼어요)" : ""}` }), s.people.length ? h("small", { class: "muted", text: s.people.join(", ") }) : null, s.note ? h("small", { class: "muted vol-pre", text: s.note }) : null]),
           h("span", { class: "actions" }, [
-            isAdmin() && !state.user.volKind ? null : h("button", { class: "btn btn--sm " + (s.mine ? "btn--primary" : "btn--ghost"), type: "button", text: s.mine ? "신청함 ✓" : "신청", onclick: async () => { shifts = (await act(() => api(`/team/shifts/${s.id}/signup`, { method: "POST", body: { on: !s.mine } }))).shifts; draw(); } }),
+            isAdmin() && !state.user.volKind ? null : h("button", { class: "btn btn--sm " + (s.mine ? "btn--primary" : "btn--ghost"), type: "button", disabled: s.full && !s.mine, text: s.mine ? "신청함 ✓" : s.full ? "다 찼어요" : "신청", onclick: async () => { shifts = (await act(() => api(`/team/shifts/${s.id}/signup`, { method: "POST", body: { on: !s.mine } }))).shifts; draw(); } }),
+            s.canEdit ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "고치기", onclick: () => shiftDialog(s) }) : null,
             s.canDelete ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 봉사일을 지울까요? 신청도 함께 지워져요.")) return; shifts = (await act(() => api(`/team/shifts/${s.id}`, { method: "DELETE" }))).shifts; draw(); } }) : null
           ])
         ]))) : h("div", { class: "card empty", text: "앞으로 잡힌 검수 봉사일이 없어요." }));
-      const shiftDialog = () => {
+      const shiftDialog = (s) => {
         const err = errorLine();
-        const date = h("input", { type: "date", value: today() }), time = h("input", { type: "time" }), need = h("input", { type: "number", min: "1", inputmode: "numeric", value: "3" }), note = h("textarea", { rows: "2", maxlength: "300", placeholder: "장소·준비물 등 (선택)" });
-        const ok = h("button", { class: "btn btn--primary", type: "submit", text: "만들기" });
+        const date = h("input", { type: "date", min: today(), value: s?.date || today() }), time = h("input", { type: "time", value: s?.startTime || "" }), need = h("input", { type: "number", min: "1", inputmode: "numeric", value: s ? String(s.need) : "3" }), note = h("textarea", { rows: "2", maxlength: "300", placeholder: "장소·준비물 등 (선택)" }, s?.note || "");
+        const ok = h("button", { class: "btn btn--primary", type: "submit", text: s ? "저장" : "만들기" });
         const form = h("form", { class: "stack", novalidate: true }, [h("div", { class: "row2" }, [field("날짜", date), field("시작 시간", time)]), field("필요 인원", need), field("메모", note), err, h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])]);
-        form.addEventListener("submit", (e) => { e.preventDefault(); busy(ok, async () => { try { shifts = (await api("/team/shifts", { method: "POST", body: { date: date.value, startTime: time.value, need: need.value, note: note.value } })).shifts; closeDialog(); draw(); } catch (ex) { showError(err, ex.message); } }); });
-        openDialog("검수 봉사일 만들기", form);
+        form.addEventListener("submit", (e) => { e.preventDefault(); busy(ok, async () => { try {
+          if (date.value && date.value < today() && date.value !== s?.date) return showError(err, "지난 날짜로는 봉사일을 잡을 수 없어요.");
+          shifts = (await api(s ? `/team/shifts/${s.id}` : "/team/shifts", { method: s ? "PATCH" : "POST", body: { date: date.value, startTime: time.value, need: need.value, note: note.value } })).shifts; closeDialog(); draw(); } catch (ex) { showError(err, ex.message); } }); });
+        openDialog(s ? "검수 봉사일 고치기" : "검수 봉사일 만들기", form);
       };
       draw();
     } else {
@@ -6924,7 +6952,10 @@
       const pending = [];
       const photoBox = h("div", { class: "move-photos" });
       const fileIn = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp", multiple: true, hidden: true });
-      const drawPhotos = () => photoBox.replaceChildren(...(x?.photos || []).map((pid) => h("span", { class: "move-photos__item" }, teamPhotoImg(pid))), ...pending.map((b, i) => h("span", { class: "move-photos__item is-new" }, [h("img", { class: "move-photo", alt: "올릴 사진", src: URL.createObjectURL(b) }), h("button", { class: "move-photos__x", type: "button", "aria-label": "빼기", html: ICON.close, onclick: () => { pending.splice(i, 1); drawPhotos(); } })])));
+      const drawPhotos = () => photoBox.replaceChildren(...(x?.photos || []).map((pid) => h("span", { class: "move-photos__item" }, [teamPhotoImg(pid), canEdit ? h("button", { class: "move-photos__x", type: "button", "aria-label": "사진 지우기", html: ICON.close, onclick: async () => {
+        if (!confirm("이 사진을 지울까요?")) return;
+        issues = (await act(() => api(`/team/issue-photos/${pid}`, { method: "DELETE" }))).issues; x = issues.find((y) => y.id === x.id) || x; drawPhotos(); draw();
+      } }) : null])), ...pending.map((b, i) => h("span", { class: "move-photos__item is-new" }, [h("img", { class: "move-photo", alt: "올릴 사진", src: URL.createObjectURL(b) }), h("button", { class: "move-photos__x", type: "button", "aria-label": "빼기", html: ICON.close, onclick: () => { pending.splice(i, 1); drawPhotos(); } })])));
       fileIn.addEventListener("change", async () => { for (const f of [...fileIn.files]) { if ((x?.photos.length || 0) + pending.length >= 4) break; try { pending.push(await shrinkImage(f)); showError(err, ""); } catch (ex) { showError(err, ex.message); } } fileIn.value = ""; drawPhotos(); });
       drawPhotos();
       let savedId = x?.id || null;
@@ -6935,6 +6966,7 @@
         field("제목", title), field("내용", body),
         h("div", { class: "field" }, [h("span", { class: "field__label", text: "사진 (선택, 4장까지)" }), photoBox, canEdit ? h("div", {}, [h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => fileIn.click() }, [icon("plus"), "사진 추가"]), fileIn]) : null]),
         x?.reply ? h("p", { class: "vol-pre team-issue__reply", text: `조직위 답: ${x.reply}` }) : null,
+        x?.mine && x.status !== "new" && !isAdmin() ? h("p", { class: "muted small", text: "처리를 시작한 이슈는 관리자만 지울 수 있어요. 지워야 하면 관리자에게 알려 주세요." }) : null,
         err,
         h("div", { class: "actions" }, [
           x && ((x.mine && x.status === "new") || isAdmin()) ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 이슈를 지울까요?")) return; issues = (await act(() => api(`/team/issues/${x.id}`, { method: "DELETE" }))).issues; closeDialog(); draw(); } }) : null,
@@ -7012,6 +7044,13 @@
     const p = r.post;
     const box = h("div", { class: "stack" });
     const reload = async () => fill(box, ...(await boardPostView(base, id)).childNodes);
+    const editComment = (c, li) => {
+      const t = h("textarea", { rows: "2", maxlength: "1000", "aria-label": "댓글 고치기" }, c.body);
+      fill(li, t, h("div", { class: "actions actions--start" }, [
+        h("button", { class: "btn btn--primary btn--sm", type: "button", text: "저장", onclick: async () => { if (!t.value.trim()) return; await act(() => api(`/board-comments/${c.id}`, { method: "PATCH", body: { body: t.value } }), "댓글을 고쳤어요."); await reload(); } }),
+        h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "취소", onclick: () => quiet(reload()) })]));
+      t.focus();
+    };
     const cIn = h("textarea", { rows: "2", maxlength: "1000", placeholder: "댓글 달기" });
     const cOk = h("button", { class: "btn btn--primary btn--sm", type: "button", text: "댓글 달기", onclick: () => busy(cOk, async () => { if (!cIn.value.trim()) return; await act(() => api(`/board/${id}/comments`, { method: "POST", body: { body: cIn.value } })); await reload(); }) });
     fill(box,
@@ -7030,6 +7069,7 @@
         h("h2", { class: "card__title", text: `댓글 ${r.comments.length}` }),
         r.comments.length ? h("ul", { class: "comments" }, r.comments.map((c) => h("li", { class: "comment" }, [
           h("div", { class: "comment__head muted small" }, [h("strong", { text: c.author || "-" }), c.admin ? h("span", { class: "stock-tag", text: "관리자" }) : null, h("span", { text: dayOf(c.createdAt) }),
+            c.mine ? h("button", { class: "link-btn", type: "button", text: "고치기", onclick: (e) => editComment(c, e.currentTarget.closest("li")) }) : null,
             c.canDelete ? h("button", { class: "link-btn", type: "button", text: "지우기", onclick: async () => { if (!confirm("댓글을 지울까요?")) return; await act(() => api(`/board-comments/${c.id}`, { method: "DELETE" })); await reload(); } }) : null]),
           h("p", { class: "comment__body", text: c.body })
         ]))) : h("p", { class: "muted small", text: "아직 댓글이 없어요." }),
@@ -7062,6 +7102,13 @@
     const rate = (bad, n) => (n ? `${((bad / n) * 100).toFixed(1)}%` : "-");
     let links = null; // { groups, waiting } 검수 조·회수 건 고르기 (F05)
     const dname = (t) => insp?.criteria?.items?.find((i) => i.defectKey === t)?.defectName || t;
+    // 저장 전에: 샘플 수·불량 합계가 검수 수량보다 많은지 (샘플 검수면 불량의 기준은 샘플 수). 고칠 때는 이 값들이 바뀌었을 때만
+    const inspCheck = (b, x) => {
+      const total = Object.values(b.defects).reduce((a, n) => a + (Number(n) || 0), 0), checked = Number(b.checkedQty) || 0, bySample = b.sampled && b.sampleQty !== "", sample = Number(b.sampleQty) || 0;
+      if (x && checked === x.checkedQty && !!b.sampled === x.sampled && (bySample ? sample : null) === (x.sampleQty ?? null) && total === x.defectTotal) return "";
+      if (bySample && sample > checked) return `샘플 수(${sample})가 검수 수량(${checked})보다 많아요.`;
+      return total > (bySample ? sample : checked) ? `불량 합계(${total})가 ${bySample ? "샘플 수" : "검수 수량"}(${bySample ? sample : checked})보다 많아요.` : "";
+    };
     function inspDialog(x, preset = {}) {
       const err = errorLine();
       const group = h("select", {}, insp.groups.map((g) => h("option", { value: String(g.id), text: g.name })));
@@ -7112,7 +7159,10 @@
         busy(ok, async () => {
           try {
             const body = { ...(links ? { groupId: grpSel.value || null, recoveryId: recSel.value || null } : {}), itemId: Number(group.value), stage: Number(stage.value), date: date.value, source: source.value, checkedQty: checked.value, sampled: sampled.checked, sampleQty: sampleQty.value, defects: Object.fromEntries(defIn.map((d) => [d.t, d.el.value])), note: note.value, rework: rework.value };
-            let r = await api(x ? `${base}/inspections/${x.id}` : `${base}/inspections`, { method: x ? "PATCH" : "POST", body });
+            const bad = inspCheck(body, x);
+            if (bad) return showError(err, bad);
+            let r = await apiAsk(x ? `${base}/inspections/${x.id}` : `${base}/inspections`, { method: x ? "PATCH" : "POST", body });
+            if (!r) return;
             const id = x ? x.id : r.id;
             for (const b of pending) r = await api(`${base}/inspections/${id}/photos`, { method: "POST", body: { data: await blobToBase64(b) } });
             insp.inspections = r.inspections; closeDialog(); toast("검수 기록을 저장했어요."); if (links) links.waiting = (await api("/ops/inspect-waiting").catch(() => links)).waiting; redraw(true);
@@ -7364,7 +7414,7 @@
         opsAddBtn("연락 기록 적기", () => edit(null)));
     };
     const edit = (x) => {
-      const canAll = !x || x.mine || isAdmin();
+      const canAll = !x || x.canEdit;
       if (!canAll) {
         const done = h("input", { type: "checkbox", checked: x.done });
         return opsSheet("연락 기록", [h("p", { class: "small", text: `${x.date} · ${x.target} · ${CT_METHOD[x.method]}` }), x.content ? h("p", { class: "vol-pre small", text: x.content }) : null, x.followUp ? h("p", { class: "small", text: `후속 조치: ${x.followUp}` }) : null,
@@ -7467,7 +7517,7 @@
           d = { ...d, ...r };
           toast(r.notice || (status.value === "arrived" && inbound ? "도착 처리했어요. 수도회 물량은 검수 대기로 넘어가요." : "저장했어요.")); draw();
         },
-        del: s ? async () => {
+        del: s?.canDelete ? async () => {
           if (!confirm(s.recoveryId ? "이 택배 기록을 지울까요? 이어진 회수 기록과 검수 대기도 함께 지워져요." : "이 택배 기록을 지울까요?")) return false;
           const r = await askSync((sync) => api(`/ops/shipments/${s.id}${sync ? `?syncRecovery=${sync}` : ""}`, { method: "DELETE" }), false);
           if (!r) return false;
@@ -7530,7 +7580,8 @@
           s.disabled = !(g.mine || d.canEdit);
           s.setAttribute("aria-label", `${a.org} 검수 상태`);
           s.addEventListener("change", async () => { try { d = { ...d, ...(await api(`/ops/assigns/${a.id}`, { method: "PATCH", body: { status: s.value } })) }; toast("상태를 바꿨어요."); draw(); if (state.opsRefresh) quiet(state.opsRefresh()); } catch (ex) { toast(ex.message); s.value = a.status; } });
-          return h("li", { class: "ops-assign" }, [h("span", {}, [h("strong", { text: a.org }), h("span", { class: "muted small", text: ` ${a.qty != null ? `${fmtN(a.qty)}개` : ""}${a.dueDate ? ` · ${shortDate(a.dueDate)}까지` : ""} · 검수 ${fmtN(a.checked)}` })]), s,
+          return h("li", { class: "ops-assign" }, [h("span", {}, [h("strong", { text: a.org }), h("span", { class: "muted small", text: ` ${a.qty != null ? `${fmtN(a.qty)}개` : ""}${a.dueDate ? ` · ${shortDate(a.dueDate)}까지` : ""} · 검수 ${fmtN(a.checked)}${a.note ? ` · ${a.note}` : ""}` })]), s,
+            d.canEdit ? h("button", { class: "link-btn small", type: "button", text: "고치기", onclick: () => editAssign(g, a) }) : null,
             d.canEdit ? h("button", { class: "link-btn small", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 배정을 지울까요?")) return; d = { ...d, ...(await act(() => api(`/ops/assigns/${a.id}`, { method: "DELETE" }))) }; draw(); } }) : null]);
         })) : opsLine("배정된 물량이 없어요."),
         d.canEdit ? h("span", { class: "actions actions--start" }, [h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "조 고치기", onclick: () => edit(g) }), h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "물량 배정", onclick: () => assign(g) })]) : null
@@ -7539,7 +7590,7 @@
         h("div", { class: "vm-stats" }, [vmStat("내 조", mine.length), vmStat("배정 물량", mine.reduce((n, g) => n + g.assigns.filter((a) => a.status !== "done").reduce((k, a) => k + (a.qty || 0), 0), 0)), vmStat("남은 배정", mine.reduce((n, g) => n + g.assigns.filter((a) => a.status !== "done").length, 0))]),
         d.canEdit && d.waiting?.length ? h("section", { class: "card vm-sum" }, [h("h2", { class: "vm-sum__name", text: `배정 대기 물량 ${d.waiting.length}건` }), opsHint("택배 수신·회수로 들어온 물량이에요. 조를 고르면 남은 수량이 그 조에 배정돼요."),
           h("ul", { class: "ops-assigns" }, d.waiting.map((w) => { const s = opsSel(d.groups.filter((g) => g.active).map((g) => [g.id, g.name]), "", "조 배정"); s.setAttribute("aria-label", `${w.org} 조 배정`);
-            s.addEventListener("change", async () => { if (!s.value) return; try { d = { ...d, ...(await api(`/ops/groups/${s.value}/assigns`, { method: "POST", body: { scheduleId: w.scheduleId, qty: Math.max(0, w.qty - w.checked) } })) }; d.waiting = d.waiting.filter((x) => x.id !== w.id); toast(`${w.org} 물량을 배정했어요.`); draw(); if (state.opsRefresh) quiet(state.opsRefresh()); } catch (ex) { toast(ex.message); s.value = ""; } });
+            s.addEventListener("change", async () => { if (!s.value) return; try { const r = await apiAsk(`/ops/groups/${s.value}/assigns`, { method: "POST", body: { scheduleId: w.scheduleId, qty: Math.max(0, w.qty - w.checked) } }); if (!r) { s.value = ""; return; } d = { ...d, ...r }; d.waiting = d.waiting.filter((x) => x.id !== w.id); toast(`${w.org} 물량을 배정했어요.`); draw(); if (state.opsRefresh) quiet(state.opsRefresh()); } catch (ex) { toast(ex.message); s.value = ""; } });
             return h("li", { class: "ops-assign" }, [h("span", {}, [h("strong", { text: w.org }), h("span", { class: "muted small", text: ` ${shortDate(w.date)} · ${fmtN(w.qty - w.checked)}개` })]), s]); }))]) : null,
         mine.length ? h("div", { class: "stack stack--sm" }, mine.map(gcard)) : h("div", { class: "card empty", text: "아직 속한 검수 조가 없어요. 리더에게 알려 주세요." }),
         others.length ? h("details", { class: "vm-opts" }, [h("summary", {}, `다른 조 ${others.length}개`), h("div", { class: "stack stack--sm" }, others.map(gcard))]) : null,
@@ -7557,12 +7608,18 @@
         del: g ? async () => { if (!confirm(`'${g.name}' 조를 지울까요? 배정도 함께 지워져요.`)) return false; d = { ...d, ...(await api(`/ops/groups/${g.id}`, { method: "DELETE" })) }; draw(); } : null
       });
     };
+    const editAssign = (g, a) => {
+      const qty = h("input", { type: "number", min: "0", inputmode: "numeric", value: a.qty ?? "" }), due = h("input", { type: "date", value: a.dueDate }), note = h("input", { maxlength: "300", value: a.note });
+      opsSheet(`${g.name} · ${a.org} 배정 고치기`, [opsHint(`지금까지 검수 ${fmtN(a.checked)}개. 수량을 바꾸면 진행 상태도 검수한 만큼으로 맞춰요.`), h("div", { class: "row2" }, [field("배정 수량", qty), field("완료 예정일", due)]), field("메모", note)], {
+        save: async () => { d = { ...d, ...(await api(`/ops/assigns/${a.id}`, { method: "PATCH", body: { qty: qty.value, dueDate: due.value, note: note.value } })) }; toast("저장했어요."); draw(); }
+      });
+    };
     const assign = (g) => {
       const sch = opsSel((d.schedules || []).map((o) => [o.id, `${o.org}${o.date ? ` (${shortDate(o.date)})` : ""}`]), "", "수도회 물량 고르기");
       const qty = h("input", { type: "number", min: "0", inputmode: "numeric" }), due = h("input", { type: "date" }), note = h("input", { maxlength: "300" });
       opsSheet(`${g.name} 물량 배정`, [field("수도회 물량", sch), h("div", { class: "row2" }, [field("배정 수량", qty), field("완료 예정일", due)]), field("메모", note)], {
         saveText: "배정하기",
-        save: async () => { if (!sch.value) throw new Error("수도회 물량을 골라 주세요."); d = { ...d, ...(await api(`/ops/groups/${g.id}/assigns`, { method: "POST", body: { scheduleId: sch.value, qty: qty.value, dueDate: due.value, note: note.value } })) }; toast("배정했어요."); draw(); }
+        save: async () => { if (!sch.value) throw new Error("수도회 물량을 골라 주세요."); const r = await apiAsk(`/ops/groups/${g.id}/assigns`, { method: "POST", body: { scheduleId: sch.value, qty: qty.value, dueDate: due.value, note: note.value } }); if (!r) return false; d = { ...d, ...r }; toast("배정했어요."); draw(); }
       });
     };
     draw();
@@ -7743,6 +7800,10 @@
         save: async () => {
           if (!what.value) throw new Error("품목을 골라 주세요.");
           const [ledgerId, optionId] = what.value.split(":").map(Number);
+          if (mode.value === "move") {
+            const o = d.ledgers.find((l) => l.id === ledgerId).options.find((x) => x.id === optionId), have = o.byLoc.find((x) => String(x.locationId ?? "") === from.value)?.qty || 0;
+            if (Number(qty.value) > have) throw new Error(`${from.value ? "보낸 위치" : "위치 미정"}에는 ${fmtN(have)}개만 있어요. 그보다 많이 옮길 수 없어요.`);
+          }
           if (mode.value === "safety") d = { ...d, ...(await api(`/ops/stock-options/${optionId}`, { method: "PATCH", body: { safetyQty: safety.value } })) };
           else if (mode.value === "move") d = { ...d, ...(await api("/ops/stock/move", { method: "POST", body: { ledgerId, optionId, qty: qty.value, fromLocationId: from.value, toLocationId: to.value, note: note.value } })) };
           else d = { ...d, ...(await api("/ops/stock/adjust", { method: "POST", body: { ledgerId, optionId, actualQty: qty.value, locationId: loc.value, note: note.value } })) };
@@ -7914,7 +7975,7 @@
       const total = (k) => rows.reduce((n, r) => n + (r[k] || 0), 0);
       fill(box,
         h("div", { class: "vm-stats" }, [vmStat("교육", d.rows.length), vmStat("진행완료", d.rows.filter((r) => r.progress === "done").length), vmStat("진행예정", d.rows.filter((r) => r.progress !== "done").length), vmStat("출납 불일치", d.rows.filter((r) => r.mismatch.length).length, d.rows.some((r) => r.mismatch.length))]),
-        h("div", { class: "filters" }, [st, search, h("label", { class: "check" }, [bad, h("span", { text: "불일치만" })]), h("span", { class: "muted small", text: `${rows.length}건` })]),
+        h("div", { class: "filters" }, [st, search, h("label", { class: "check" }, [bad, h("span", { text: "불일치만" })]), h("span", { class: "muted small", text: `${rows.length}건` }), h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => addEdu() }, [icon("plus"), "교육 추가"])]),
         rows.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table edu-table" }, [
           h("thead", {}, h("tr", {}, ["회차", "날짜", "수도회", "진행", "진행 봉사자", "요청", "배당", "자른실 지급", "십자가 지급", "미지급 실·십자가", "보낼 실·십자가", "샘플", "완성", "로스", "담당", "확인"].map((t) => h("th", { text: t })))),
           h("tbody", {}, rows.map((r) => h("tr", { class: "stock-row" + (r.mismatch.length ? " is-warn" : ""), tabindex: "0", onclick: () => edit(r), onkeydown: (e) => { if (e.key === "Enter") edit(r); } }, [
@@ -7940,8 +8001,14 @@
       }).filter(Boolean));
       const f = { alloc: num(r.alloc), thread: num(r.thread), cross: num(r.cross), sendThread: num(r.sendThread), sendCross: num(r.sendCross), sample: num(r.sample), done: num(r.done), loss: num(r.loss) };
       const handler = h("input", { maxlength: "100", value: r.handler }), note = h("textarea", { rows: "2", maxlength: "500" }, r.matNote);
+      const orgIn = h("input", { maxlength: "80", value: r.org }), dateIn = h("input", { type: "date", value: r.tableOnly ? "" : r.date }), timeIn = h("input", { type: "time", value: r.tableOnly ? "" : r.startTime });
+      const { el: orgAsk, ask: askOrg } = orgAskPanel();
+      let orgConfirm = "";
+      orgIn.addEventListener("input", () => { orgAsk.hidden = true; orgConfirm = ""; });
       opsSheet(`${r.code ? `${r.code} · ` : ""}${r.org}`, [
-        opsHint(`${volDay(r.date)}${r.startTime ? ` ${r.startTime}` : ""} · 요청 ${qtyText(r.qty)}. 미지급은 배당 − 지급으로 계산하고, 보낼 수량과 다르면 '확인'에 표시해요.${r.delay ? " 팀 봉사자가 '연기'로 둔 교육이에요. 진행완료로 바꾸면 연기가 풀려요." : ""}`),
+        opsHint(`${r.tableOnly ? "날짜 미정" : `${volDay(r.date)}${r.startTime ? ` ${r.startTime}` : ""}`} · 요청 ${qtyText(r.qty)}. 미지급은 배당 − 지급으로 계산하고, 보낼 수량과 다르면 '확인'에 표시해요.${r.delay ? " 팀 봉사자가 '연기'로 둔 교육이에요. 진행완료로 바꾸면 연기가 풀려요." : ""}`),
+        field("수도회", orgIn), orgAsk,
+        h("div", { class: "row2" }, [field("교육 날짜", dateIn, "비우고 저장하면 '미정'이 돼서 달력에 안 보여요"), field("시작 시간", timeIn)]),
         h("div", { class: "row2" }, [field("교육 회차", code), field("진행상태", pr)]),
         h("div", { class: "field" }, [h("span", { class: "field__label", text: `진행 봉사자 (${on.size}명)` }), d.roster.length ? pick : h("p", { class: "muted small", text: "먼저 '봉사자 명단'에 봉사자를 넣어 주세요." })]),
         h("div", { class: "row2" }, [field("배당물량", f.alloc), field("담당 봉사자", handler)]),
@@ -7953,9 +8020,25 @@
         save: async () => {
           const body = { code: code.value, ...(pr.value !== r.progress ? { progress: pr.value } : {}), handler: handler.value, matNote: note.value, helpers: [...on].map(([id, role]) => ({ id, role })) };
           for (const [k, el] of Object.entries(f)) body[k] = el.value;
-          const x = await api(`/admin/vol-edu/${r.id}`, { method: "PATCH", body });
-          d.rows = d.rows.map((y) => (y.id === r.id ? x.row : y)); d.roster = x.roster; toast("저장했어요."); draw();
+          if (orgIn.value.trim() !== r.org.trim()) Object.assign(body, { org: orgIn.value, ...(orgConfirm ? { orgConfirm } : {}) });
+          if (dateIn.value ? r.tableOnly || dateIn.value !== r.date || timeIn.value !== (r.startTime || "") : !r.tableOnly) Object.assign(body, { date: dateIn.value, startTime: dateIn.value ? timeIn.value : "" });
+          let x;
+          try { x = await apiAsk(`/admin/vol-edu/${r.id}`, { method: "PATCH", body }); }
+          catch (ex) { if (!ex.confirm) throw ex; askOrg(ex.confirm, (v) => { orgConfirm = v; orgIn.closest("form").requestSubmit(); }); return false; }
+          if (!x) return false;
+          d.rows = x.rows || d.rows.map((y) => (y.id === r.id ? x.row : y)); d.roster = x.roster; toast("저장했어요."); draw();
+        },
+        del: async () => {
+          if (!confirm(`'${r.org}' 교육을 지울까요? 출납(배당·지급)과 교육 결과·문의 기록도 함께 지워져요.`)) return false;
+          const x = await api(`/admin/vol-edu/${r.id}`, { method: "DELETE" }); d.rows = x.rows; d.roster = x.roster; toast("지웠어요."); draw();
         }
+      });
+    };
+    const addEdu = () => {
+      const org = h("input", { maxlength: "80", placeholder: "예: ○○수녀회" }), date = h("input", { type: "date" }), time = h("input", { type: "time" }), qty = h("input", { type: "number", min: "0", inputmode: "numeric" }), place = h("input", { maxlength: "120" });
+      opsSheet("교육 추가", [field("수도회", org), h("div", { class: "row2" }, [field("교육 날짜", date, "비우면 '미정'으로 표에만 보여요"), field("시작 시간", time)]), h("div", { class: "row2" }, [field("요청수량", qty), field("장소", place)])], {
+        saveText: "추가하기",
+        save: async () => { const x = await api("/admin/vol-edu", { method: "POST", body: { org: org.value, date: date.value, startTime: time.value, qty: qty.value, place: place.value } }); d.rows = x.rows; d.roster = x.roster; toast("교육을 추가했어요."); draw(); }
       });
     };
     draw();
@@ -8143,6 +8226,17 @@
       saveForm(form, ok, err, () => api(t ? `/admin/vol-trainings/${t.id}` : "/admin/vol-trainings", { method: t ? "PATCH" : "POST", body: { title: title.value, body: body.value, date: date.value, startTime: start.value, place: place.value, link: link.value } }));
       openDialog(t ? "기본 교육 고치기" : "기본 교육 등록", form, { admin: true });
     }
+    // 봉사자가 적은 완제품 기록: 관리자가 고치거나 지움
+    function recordDialog(r) {
+      const err = errorLine(), STG = { in: "입고", checked: "검수완료", packed: "패키징 완료", out: "출고" };
+      const stage = opsSel(Object.entries(STG), r.stage), date = h("input", { type: "date", value: r.date }), qty = h("input", { type: "number", min: "0", inputmode: "numeric", value: String(r.qty) }), name = h("input", { value: r.name, maxlength: "80" }), note = h("input", { value: r.note, maxlength: "300" });
+      const ok = h("button", { class: "btn btn--primary", type: "submit", text: "저장" });
+      const form = h("form", { class: "stack", novalidate: true }, [h("p", { class: "muted small", text: `${r.group} · 적은 사람 ${r.author || "-"}` }), h("div", { class: "row2" }, [r.kind === "recovery" ? field("단계", stage) : null, field("날짜", date)]), h("div", { class: "row2" }, [field("수량", qty), field("어디서·어디로", name)]), field("메모", note), err,
+        h("div", { class: "actions" }, [h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 기록을 지울까요?")) return; if (!(await act(() => apiAsk(`/volunteer/records/${r.id}`, { method: "DELETE" })))) return; closeDialog(); await page.reload(); } }),
+          h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])]);
+      form.addEventListener("submit", (e) => { e.preventDefault(); busy(ok, async () => { try { if (!(await apiAsk(`/volunteer/records/${r.id}`, { method: "PATCH", body: { stage: stage.value, date: date.value, qty: qty.value, name: name.value, note: note.value } }))) return; closeDialog(); toast("저장했어요."); await page.reload(); } catch (ex) { showError(err, ex.message); } }); });
+      openDialog("완제품 기록 고치기", form, { admin: true });
+    }
     const rowAttrs = (fn) => ({ class: "stock-row", tabindex: "0", onclick: fn, onkeydown: (e) => { if (e.key === "Enter") fn(); } });
     const draw = () => {
       const scheduleView = schedules.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
@@ -8172,7 +8266,7 @@
       // 봉사자가 적은 원자재 보유물량 · 제품 회수물량
       const recView = volRecords.length ? h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [
         h("thead", {}, h("tr", {}, ["종류", "묶음", "날짜", "어디서·어디로", "수량", "메모", "적은 사람"].map((x) => h("th", { text: x })))),
-        h("tbody", {}, volRecords.map((r) => h("tr", {}, [
+        h("tbody", {}, volRecords.map((r) => h("tr", rowAttrs(() => recordDialog(r)), [
           h("td", { class: "nowrap", text: r.kind === "material" ? "원자재 보유" : `완제품 · ${{ in: "입고", checked: "검수완료", packed: "패키징 완료", out: "출고" }[r.stage] || "입고"}` }), h("td", { class: "nowrap", text: r.group }), h("td", { class: "nowrap", text: r.date }), h("td", { text: r.name || "-" }), h("td", { class: "num nowrap", text: fmtN(r.qty) }), h("td", { class: "muted small", text: r.note }), h("td", { class: "nowrap", text: r.author || "-" })
         ])))
       ])) : h("div", { class: "card empty", text: "아직 봉사자가 적은 완제품 기록이 없어요." });

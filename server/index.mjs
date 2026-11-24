@@ -1354,6 +1354,13 @@ async function boardRoute(req, res, user, path, method) {
     send(res, 200, { post: boardPostOut(fresh, user), comments: see ? q.boardComments.all(b.id).map((c) => ({ id: c.id, body: c.body, author: c.author || "", admin: c.author_role === "admin", mine: c.created_by === user.id, canDelete: c.created_by === user.id || user.role === "admin", createdAt: c.created_at })) : [] });
     return true;
   }
+  if (cm && method === "PATCH") {
+    const c = q.boardComment.get(Number(cm[1]));
+    if (!c) throw notFound("댓글");
+    if (c.created_by !== user.id) { send(res, 403, { error: "쓴 사람만 고칠 수 있어요." }); return true; }
+    db.prepare("UPDATE board_comments SET body = ? WHERE id = ?").run(text((await readJson(req)).body, 1000, "댓글", true), c.id);
+    send(res, 200, { ok: true }); return true;
+  }
   if (cm && method === "DELETE") {
     const c = q.boardComment.get(Number(cm[1]));
     if (!c) throw notFound("댓글");
@@ -1398,6 +1405,20 @@ function inspectionLinks(b, old) {
 }
 const setInspLinks = (links, version, id) => { db.prepare("UPDATE inspections SET group_id = ?, schedule_id = ?, recovery_id = ?, criteria_version = coalesce(?, criteria_version) WHERE id = ?").run(...links, version, id); syncAfterInspection(links[1], links[0]); };
 const reworkInput = (v) => { const r = v == null ? "" : String(v); if (!REWORK.includes(r)) throw bad("불합격품 처리를 확인해 주세요."); return r; };
+// 잘못 적은 검수 막기: 샘플 수 ≤ 검수 수량, 불량 합계 ≤ 샘플 수(샘플 검수면) 또는 검수 수량. 고칠 때는 이 값들이 바뀌었을 때만 봄
+//   회수보다 많은 검수는 나눠 적거나 실제 수가 다를 수 있어 확인만 받음
+const sortKeys = (json) => JSON.stringify(Object.entries(JSON.parse(json || "{}")).sort());
+function checkInspection(v, links, old, confirmed) {
+  const [, , , , checked, sampled, sampleQty, defects] = v, changed = !old || checked !== old.checked_qty || sampled !== old.sampled || sampleQty !== (old.sample_qty ?? null) || sortKeys(defects) !== sortKeys(old.defects);
+  if (changed) {
+    const total = Object.values(JSON.parse(defects)).reduce((a, n) => a + n, 0), bySample = sampled && sampleQty != null, base = bySample ? sampleQty : checked;
+    if (bySample && sampleQty > checked) throw bad(`샘플 수(${sampleQty})가 검수 수량(${checked})보다 많아요.`);
+    if (total > base) throw bad(`불량 합계(${total})가 ${bySample ? "샘플 수" : "검수 수량"}(${base})보다 많아요.`);
+  }
+  if (confirmed || !links[2] || (old && links[2] === old.recovery_id && checked <= old.checked_qty)) return;
+  const rec = q.teamRecovery.get(links[2]), sum = checked + db.prepare("SELECT coalesce(sum(checked_qty), 0) AS n FROM inspections WHERE recovery_id = ? AND id <> ?").get(links[2], old?.id || 0).n;
+  if (rec?.qty && sum > rec.qty) throw needCheck([`이 회수는 ${rec.qty}개인데 검수 합계가 ${sum}개가 돼요.`]);
+}
 async function inspectionRoute(req, res, user, path, method, base) {
   // 지우기(기록·사진)는 적은 사람·리더 봉사자·관리자만. 사진은 올린 사람도. 남의 기록을 고치는 것은 모두 할 수 있음
   const boss = user.role === "admin" || !!user.vol_leader, canDel = (x) => boss || x.created_by === user.id;
@@ -1409,8 +1430,9 @@ async function inspectionRoute(req, res, user, path, method, base) {
   if (path === `${base}/inspections` && method === "GET") { const c = crit(); send(res, 200, { groups: inspGroups(), types: c.items.length ? c.items.map((x) => x.defectKey) : DEFECT_TYPES, criteria: c, inspections: list() }); return true; }
   if (path === `${base}/inspections` && method === "POST") {
     const b = await readJson(req), rw = reworkInput(b.rework);
-    const links = inspectionLinks(b, null);
-    const id = inTx(() => { const id = Number(q.addInspection.run(...inspectionInput(b), user.id).lastInsertRowid); q.setInspRework.run(rw, id); setInspLinks(links, crit().current, id); return id; });
+    const links = inspectionLinks(b, null), v = inspectionInput(b);
+    checkInspection(v, links, null, b.confirmed);
+    const id = inTx(() => { const id = Number(q.addInspection.run(...v, user.id).lastInsertRowid); q.setInspRework.run(rw, id); setInspLinks(links, crit().current, id); return id; });
     send(res, 201, { id, inspections: list() }); return true;
   }
   const m = path.startsWith(`${base}/inspections/`) && path.slice(base.length).match(/^\/inspections\/(\d+)(\/photos)?$/);
@@ -1427,7 +1449,7 @@ async function inspectionRoute(req, res, user, path, method, base) {
       q.addInspPhoto.run(x.id, mime, buf, user.id);
       send(res, 201, { inspections: list() }); return true;
     }
-    if (method === "PATCH") { const b = await readJson(req), v = inspectionInput(b), rw = has(b, "rework") ? reworkInput(b.rework) : x.rework || "", links = inspectionLinks(b, x); inTx(() => {
+    if (method === "PATCH") { const b = await readJson(req), v = inspectionInput(b), rw = has(b, "rework") ? reworkInput(b.rework) : x.rework || "", links = inspectionLinks(b, x); checkInspection(v, links, x, b.confirmed); inTx(() => {
       q.setInspection.run(...v, x.id); q.setInspRework.run(rw, x.id); setInspLinks(links, null, x.id);
       // 수량·조·교육이 바뀌면 예전에 이어졌던 쪽과 지금 쪽을 남은 기록으로 다시 맞춤
       if (v[4] !== x.checked_qty || links[0] !== x.group_id || links[1] !== x.schedule_id) { refitInspection(x.schedule_id, x.group_id); refitInspection(links[1], links[0]); }
@@ -1599,7 +1621,7 @@ async function teamRoute(req, res, user, path, method) {
   if (om) {
     const s = teamOrgOf(om[1]);
     if (om[2]) {
-      if (method === "GET") return ok(200, { inquiries: q.teamInqs.all(s.id).map((x) => ({ id: x.id, date: x.date, question: x.question, answer: x.answer, done: !!x.done, author: x.author || "", updatedAt: x.updated_at })) });
+      if (method === "GET") return ok(200, { inquiries: q.teamInqs.all(s.id).map((x) => ({ id: x.id, date: x.date, question: x.question, answer: x.answer, done: !!x.done, author: x.author || "", canDelete: admin || x.created_by === user.id, updatedAt: x.updated_at })) });
       if (method === "POST") {
         const b = await readJson(req);
         if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
@@ -1662,35 +1684,44 @@ async function teamRoute(req, res, user, path, method) {
     return ok(200, { records: gid ? q.volRecords.all(gid, "recovery").map((r) => ({ id: r.id, date: r.date, name: r.name, qty: r.qty, note: r.note, stage: r.stage || "in" })) : [] });
   }
   // 하루 검수 기록
-  const dailyIn = async () => { const b = await readJson(req); if (!isDate(b.date)) throw bad("날짜를 확인해 주세요."); return [b.date, teamQty(b.qty, "검수 수량") ?? 0, text(b.workers, 300, "함께한 봉사자") || "", text(b.note, 500, "메모") || ""]; };
-  const dailyList = () => q.teamDaily.all().map((x) => ({ id: x.id, date: x.date, qty: x.qty, workers: x.workers, note: x.note, author: x.author || "", mine: x.created_by === user.id }));
+  const dailyIn = async () => { const b = await readJson(req); if (!isDate(b.date)) throw bad("날짜를 확인해 주세요."); const n = teamQty(b.qty, "검수 수량"); if (n == null) throw bad("검수 수량을 적어 주세요."); return [b.date, n, text(b.workers, 300, "함께한 봉사자") || "", text(b.note, 500, "메모") || ""]; };
+  const dailyList = () => q.teamDaily.all().map((x) => ({ id: x.id, date: x.date, qty: x.qty, workers: x.workers, note: x.note, author: x.author || "", mine: x.created_by === user.id, canEdit: leader || x.created_by === user.id }));
   if (path === "/api/team/daily" && method === "GET") return ok(200, { daily: dailyList() });
   if (path === "/api/team/daily" && method === "POST") { q.addTeamDaily.run(...(await dailyIn()), user.id); return ok(201, { daily: dailyList() }); }
   const dm = path.match(/^\/api\/team\/daily\/(\d+)$/);
   if (dm) {
     const x = q.teamDailyOne.get(Number(dm[1]));
     if (!x) throw notFound("작업 기록");
+    if ((method === "PATCH" || method === "DELETE") && x.created_by !== user.id && !leader) return ok(403, { error: "적은 사람과 리더 봉사자·관리자만 고치거나 지울 수 있어요." });
     if (method === "PATCH") { q.setTeamDaily.run(...(await dailyIn()), x.id); return ok(200, { daily: dailyList() }); }
-    if (method === "DELETE") { if (x.created_by !== user.id && !admin) return ok(403, { error: "적은 사람과 관리자만 지울 수 있어요." }); q.delTeamDaily.run(x.id); return ok(200, { daily: dailyList() }); }
+    if (method === "DELETE") { q.delTeamDaily.run(x.id); return ok(200, { daily: dailyList() }); }
     return ok(405, { error: "Method not allowed" });
   }
   // 검수 봉사일(필요 인원)과 신청
-  const shiftList = () => { const su = q.teamShiftUsers.all(); return q.teamShifts.all(today()).map((s) => { const us = su.filter((x) => x.shift_id === s.id); return { id: s.id, date: s.date, startTime: s.start_time, need: s.need, note: s.note, people: us.map((x) => x.name), mine: us.some((x) => x.id === user.id), canDelete: admin || s.created_by === user.id }; }); };
-  if (path === "/api/team/shifts" && method === "GET") return ok(200, { shifts: shiftList() });
-  if (path === "/api/team/shifts" && method === "POST") {
-    const b = await readJson(req);
+  const shiftList = () => { const su = q.teamShiftUsers.all(); return q.teamShifts.all(today()).map((s) => { const us = su.filter((x) => x.shift_id === s.id); return { id: s.id, date: s.date, startTime: s.start_time, need: s.need, note: s.note, people: us.map((x) => x.name), mine: us.some((x) => x.id === user.id), full: us.length >= s.need, canEdit: leader || s.created_by === user.id, canDelete: leader || s.created_by === user.id }; }); };
+  const shiftIn = (b, old) => {
     if (!isDate(b.date)) throw bad("날짜를 확인해 주세요.");
+    if (b.date < today() && b.date !== old?.date) throw bad("지난 날짜로는 봉사일을 잡을 수 없어요.");
     const need = teamQty(b.need, "필요 인원");
     if (!need || need > 200) throw bad("필요 인원은 1~200명으로 적어 주세요.");
-    q.addTeamShift.run(b.date, optTime(b.startTime), need, text(b.note, 300, "메모") || "", user.id);
+    return [b.date, optTime(b.startTime), need, text(b.note, 300, "메모") || ""];
+  };
+  if (path === "/api/team/shifts" && method === "GET") return ok(200, { shifts: shiftList() });
+  if (path === "/api/team/shifts" && method === "POST") {
+    q.addTeamShift.run(...shiftIn(await readJson(req)), user.id);
     return ok(201, { shifts: shiftList() });
   }
   const sm = path.match(/^\/api\/team\/shifts\/(\d+)(\/signup)?$/);
   if (sm) {
     const s = q.teamShift.get(Number(sm[1]));
     if (!s) throw notFound("봉사일");
-    if (sm[2] && method === "POST") { if (admin && !user.volunteer) return ok(403, { error: "봉사 신청은 봉사자가 해요." }); const b = await readJson(req); if (b.on) q.teamShiftJoin.run(s.id, user.id); else q.teamShiftLeave.run(s.id, user.id); return ok(200, { shifts: shiftList() }); }
-    if (!sm[2] && method === "DELETE") { if (!admin && s.created_by !== user.id) return ok(403, { error: "만든 사람과 관리자만 지울 수 있어요." }); q.delTeamShift.run(s.id); return ok(200, { shifts: shiftList() }); }
+    if (sm[2] && method === "POST") { if (admin && !user.volunteer) return ok(403, { error: "봉사 신청은 봉사자가 해요." }); const b = await readJson(req);
+      const us = q.teamShiftUsers.all().filter((x) => x.shift_id === s.id);
+      if (b.on && us.length >= s.need && !us.some((x) => x.id === user.id)) throw bad("필요 인원이 다 찼어요.");
+      if (b.on) q.teamShiftJoin.run(s.id, user.id); else q.teamShiftLeave.run(s.id, user.id); return ok(200, { shifts: shiftList() }); }
+    if (!sm[2] && ["PATCH", "DELETE"].includes(method) && !leader && s.created_by !== user.id) return ok(403, { error: "만든 사람과 리더 봉사자·관리자만 고치거나 지울 수 있어요." });
+    if (!sm[2] && method === "PATCH") { db.prepare("UPDATE team_shifts SET date = ?, start_time = ?, need = ?, note = ? WHERE id = ?").run(...shiftIn(await readJson(req), s), s.id); return ok(200, { shifts: shiftList() }); }
+    if (!sm[2] && method === "DELETE") { q.delTeamShift.run(s.id); return ok(200, { shifts: shiftList() }); }
     return ok(405, { error: "Method not allowed" });
   }
   // 봉사 가능한 날 (내 것만 고침, 다른 사람은 날짜별 인원 수만)
@@ -1858,7 +1889,23 @@ function volRecordInput(b) {
 }
 // 완제품(묵주 회수 · 손십자가) 단계: 입고 → 검수완료 → 패키징완료 → 출고
 const VOL_STAGES = ["in", "checked", "packed", "out"];
-const volRecordOut = (r, user) => ({ id: r.id, date: r.date, name: r.name, qty: r.qty, note: r.note, stage: r.stage || "in", author: r.author || "", mine: r.created_by === user.id, updatedAt: r.updated_at });
+const volRecordOut = (r, user) => ({ id: r.id, date: r.date, name: r.name, qty: r.qty, note: r.note, stage: r.stage || "in", author: r.author || "", mine: r.created_by === user.id, canEdit: user.role === "admin" || r.created_by === user.id, updatedAt: r.updated_at });
+// 완제품 단계 합: 이 저장으로 뒤 단계가 앞 단계보다 (더) 많아지면 확인받음. 현장 기록 순서가 다를 수 있어 막지는 않음
+//   before·after: 이 기록의 예전 값과 새 값 { stage, qty } (없으면 null)
+const VOL_STAGE_NAME = { in: "입고", checked: "검수완료", packed: "패키징완료", out: "출고" };
+function checkVolStages(itemId, before, after, confirmed) {
+  if (confirmed || (before && after && before.stage === after.stage && before.qty === after.qty)) return;
+  const sum = Object.fromEntries(VOL_STAGES.map((k) => [k, 0]));
+  for (const r of db.prepare("SELECT stage, sum(qty) AS n FROM vol_records WHERE item_id = ? AND kind = 'recovery' GROUP BY stage").all(itemId)) sum[r.stage || "in"] += r.n;
+  const next = { ...sum };
+  if (before) next[before.stage] -= before.qty;
+  if (after) next[after.stage] += after.qty;
+  const lines = VOL_STAGES.slice(1).flatMap((k, i) => {
+    const p = VOL_STAGES[i], over = next[k] - next[p];
+    return over > Math.max(0, sum[k] - sum[p]) ? [`${VOL_STAGE_NAME[k]} 합계(${next[k]})가 ${VOL_STAGE_NAME[p]} 합계(${next[p]})보다 ${over}개 많아져요.`] : [];
+  });
+  if (lines.length) throw needCheck(lines);
+}
 const volQtyInput = (v) => {
   if (v === "" || v === null || v === undefined) return null;
   const n = Number(v);
@@ -2072,6 +2119,7 @@ async function volunteerRoute(req, res, user, path, method, url) {
   if (path === "/api/volunteer/records" && method === "POST") {
     const b = await readJson(req);
     const g = volGroupItem(Number(b.itemId)), kind = volRecordKind(b.kind), v = volRecordInput(b);
+    if (kind === "recovery") checkVolStages(g.id, null, v, b.confirmed);
     q.addVolRecord.run(g.id, kind, v.date, v.name, v.qty, v.note, user.id, kind === "recovery" ? v.stage : "in");
     return sendT(res, 201, { records: q.volRecords.all(g.id, kind).map((r) => volRecordOut(r, user)) });
   }
@@ -2080,8 +2128,10 @@ async function volunteerRoute(req, res, user, path, method, url) {
     const r = q.volRecord.get(Number(vrm[1]));
     if (!r) throw notFound("기록");
     volGroupItem(r.item_id);
-    if (r.created_by !== user.id) return sendT(res, 403, { error: "직접 적은 기록만 고칠 수 있어요." });
-    if (method === "PATCH") { const v = volRecordInput(await readJson(req)); q.setVolRecord.run(v.date, v.name, v.qty, v.note, r.kind === "recovery" ? v.stage : "in", r.id); }
+    if (r.created_by !== user.id && user.role !== "admin") return sendT(res, 403, { error: "직접 적은 기록만 고칠 수 있어요." });
+    const was = { stage: r.stage || "in", qty: r.qty };
+    if (method === "DELETE" && r.kind === "recovery") checkVolStages(r.item_id, was, null, confirmedQuery(req));
+    if (method === "PATCH") { const b = await readJson(req), v = volRecordInput(b); if (r.kind === "recovery") checkVolStages(r.item_id, was, v, b.confirmed); q.setVolRecord.run(v.date, v.name, v.qty, v.note, r.kind === "recovery" ? v.stage : "in", r.id); }
     else if (method === "DELETE") q.delVolRecord.run(r.id);
     else return sendT(res, 405, { error: "Method not allowed" });
     return sendT(res, 200, { records: q.volRecords.all(r.item_id, r.kind).map((x) => volRecordOut(x, user)) });
@@ -2188,7 +2238,7 @@ function monasteriesOut(r) {
     visits: m.visits, deletable: !m.visits && !m.other_links, eduDone: m.edu_done_n, reqQty: m.req_qty, recoveredQty: m.recovered_qty, checkedQty: m.checked_qty, updatedAt: m.updated_at }));
 }
 const nameOfUser = (id) => (id ? db.prepare("SELECT name FROM users WHERE id = ?").get(id)?.name || "" : "");
-function shipmentsOut() {
+function shipmentsOut(user) {
   return db.prepare(`SELECT x.*, m.name AS monastery, u.name AS party_user, e.name AS vendor, h.name AS handler, s.title AS schedule_title, c.name AS author,
       (SELECT id FROM team_recovery r WHERE r.shipment_id = x.id LIMIT 1) AS recovery_id
     FROM shipments x LEFT JOIN monasteries m ON m.id = x.monastery_id LEFT JOIN users u ON u.id = x.user_id LEFT JOIN external_contacts e ON e.id = x.external_contact_id
@@ -2197,7 +2247,7 @@ function shipmentsOut() {
     .map((x) => ({ id: x.id, direction: x.direction, partyType: x.party_type, monasteryId: x.monastery_id, userId: x.user_id, externalContactId: x.external_contact_id,
       party: x.monastery || x.party_user || x.vendor || x.party_name || "", partyName: x.party_name, address: x.address, carrier: x.carrier, trackingNo: x.tracking_no, contents: x.contents, qty: x.qty,
       status: x.status, sentDate: x.sent_date || "", arrivedDate: x.arrived_date || "", handlerId: x.handler_id, handler: x.handler || "", scheduleId: x.schedule_id,
-      schedule: x.schedule_title ? x.schedule_title.split(" · ").pop() : "", note: x.note, author: x.author || "", createdBy: x.created_by, recoveryId: x.recovery_id || null, updatedAt: x.updated_at }));
+      schedule: x.schedule_title ? x.schedule_title.split(" · ").pop() : "", note: x.note, author: x.author || "", createdBy: x.created_by, recoveryId: x.recovery_id || null, canDelete: !!user && (user.role === "admin" || (x.created_by === user.id && !x.recovery_id)), updatedAt: x.updated_at }));
 }
 // 택배를 받을 교육(방문 일정): 택배에 적힌 일정이 그 수도회 것이면 그것, 아니면 그 수도회의 가장 최근 교육
 function shipmentSchedule(sh) {
@@ -2304,14 +2354,16 @@ function groupsOut(userId) {
     members: mem.filter((m) => m.group_id === g.id).map((m) => ({ id: m.id, name: m.name })), mine: g.leader_id === userId || mem.some((m) => m.group_id === g.id && m.id === userId),
     assigns: asg.filter((a) => a.group_id === g.id).map((a) => ({ id: a.id, scheduleId: a.schedule_id, org: a.monastery || a.title.split(" · ").pop(), qty: a.qty, dueDate: a.due_date || "", status: a.status, note: a.note, checked: a.checked })) }));
 }
-function contactLogsOut(userId) {
+// 연락 기록 고치기·지우기: 적은 사람·관리자, 그리고 리더 봉사자는 팀 봉사자(부서·팀을 둘 다 하는 봉사자 포함)가 적은 것
+const canEditContact = (c, user) => user.role === "admin" || c.created_by === user.id || (!!user.vol_leader && user.vol_kind === "team" && (() => { const a = c.created_by && q.userById.get(c.created_by); return !!a?.volunteer && volKindsOf(a).includes("team"); })());
+function contactLogsOut(userId, user) {
   return db.prepare(`SELECT c.*, m.name AS monastery, e.name AS vendor, u.name AS person, a.name AS author, s.title AS schedule_title FROM contact_logs c
       LEFT JOIN monasteries m ON m.id = c.monastery_id LEFT JOIN external_contacts e ON e.id = c.external_contact_id LEFT JOIN users u ON u.id = c.user_id
       LEFT JOIN users a ON a.id = c.created_by LEFT JOIN vol_schedules s ON s.id = c.schedule_id
     ORDER BY c.done, c.due_date IS NULL, c.due_date, c.date DESC, c.id DESC`).all()
     .map((c) => ({ id: c.id, targetType: c.target_type, monasteryId: c.monastery_id, externalContactId: c.external_contact_id, userId: c.user_id, target: c.monastery || c.vendor || c.person || c.target_name || "",
       targetName: c.target_name, scheduleId: c.schedule_id, date: c.date, method: c.method, purpose: c.purpose, content: c.content, followUp: c.follow_up, dueDate: c.due_date || "", done: !!c.done,
-      author: c.author || "", mine: c.created_by === userId, overdue: !c.done && !!c.follow_up && !!c.due_date && c.due_date <= today() }));
+      author: c.author || "", mine: c.created_by === userId, canEdit: user ? canEditContact(c, user) : false, overdue: !c.done && !!c.follow_up && !!c.due_date && c.due_date <= today() }));
 }
 // 검수 대기: 회수(택배 수신 포함)했는데 아직 검수 기록이 이어지지 않은 건
 const inspectWaiting = () => db.prepare(`SELECT r.*, s.title, s.monastery_id, m.name AS monastery, x.tracking_no, x.carrier,
@@ -2398,7 +2450,7 @@ async function opsRoute(req, res, user, path, method) {
     return ok(200, { monasteries: monasteriesOut(r) });
   }
   // F02 택배 (부서 봉사자·관리자가 입력, 팀 봉사자는 조회)
-  if (path === "/api/ops/shipments" && method === "GET") { if (!r.can("shipments", "v")) return deny("볼 수 없는 메뉴예요."); return ok(200, { shipments: shipmentsOut(), canEdit: r.can("shipments", "e") }); }
+  if (path === "/api/ops/shipments" && method === "GET") { if (!r.can("shipments", "v")) return deny("볼 수 없는 메뉴예요."); return ok(200, { shipments: shipmentsOut(user), canEdit: r.can("shipments", "e") }); }
   if (path === "/api/ops/shipments" && method === "POST") {
     if (!r.can("shipments", "e")) return deny("택배 기록은 부서 봉사자·직원과 관리자가 적어요.");
     const v = shipmentInput(await readJson(req));
@@ -2409,7 +2461,7 @@ async function opsRoute(req, res, user, path, method) {
       notice = recoveryFromShipment(db.prepare("SELECT * FROM shipments WHERE id = ?").get(id), user);
       return id;
     });
-    return ok(201, { id, notice, shipments: shipmentsOut() });
+    return ok(201, { id, notice, shipments: shipmentsOut(user) });
   }
   const shm = path.match(/^\/api\/ops\/shipments\/(\d+)$/);
   if (shm) {
@@ -2424,14 +2476,14 @@ async function opsRoute(req, res, user, path, method) {
           .run(v.party_type, v.monastery_id, v.user_id, v.external_contact_id, v.party_name, v.address, v.carrier, v.tracking_no, v.contents, v.qty, v.status, v.sent_date, v.arrived_date, v.handler_id, v.schedule_id, v.note, x.id);
         notice = syncShipmentRecovery(x, db.prepare("SELECT * FROM shipments WHERE id = ?").get(x.id), user, b.syncRecovery);
       });
-      return ok(200, { notice, shipments: shipmentsOut() });
+      return ok(200, { notice, shipments: shipmentsOut(user) });
     }
     if (method === "DELETE") {
       if (!r.admin && x.created_by !== user.id) return deny("적은 사람과 관리자만 지울 수 있어요.");
       if (db.prepare("SELECT 1 FROM team_recovery WHERE shipment_id = ?").get(x.id) && !r.admin) return deny("회수 기록과 이어진 택배는 관리자만 지울 수 있어요.");
       const sync = new URL(req.url, "http://x").searchParams.get("syncRecovery");
       const notice = inTx(() => { const n = syncShipmentRecovery(x, null, user, sync === "overwrite" ? sync : undefined); db.prepare("DELETE FROM shipments WHERE id = ?").run(x.id); return n; });
-      return ok(200, { notice, shipments: shipmentsOut() });
+      return ok(200, { notice, shipments: shipmentsOut(user) });
     }
     return ok(405, { error: "Method not allowed" });
   }
@@ -2532,6 +2584,8 @@ async function opsRoute(req, res, user, path, method) {
     if (gm[2] && method === "POST") {
       const b = await readJson(req), s = teamOrgOf(b.scheduleId);
       if (b.dueDate && !isDate(b.dueDate)) throw bad("완료 예정일을 확인해 주세요.");
+      const dup = db.prepare("SELECT count(*) AS n, coalesce(sum(qty), 0) AS q FROM inspection_group_assigns WHERE group_id = ? AND schedule_id = ?").get(g.id, s.id);
+      if (dup.n && !b.confirmed) throw needCheck([`${g.name}에 이 수도회 물량이 이미 ${dup.n}건(${dup.q}개) 배정되어 있어요.`]);
       db.prepare("INSERT INTO inspection_group_assigns (group_id, schedule_id, qty, due_date, status, note, created_by) VALUES (?, ?, ?, ?, ?, ?, ?)")
         .run(g.id, s.id, teamQty(b.qty, "배정 수량"), b.dueDate || null, pick(b.status, ASSIGN_STATUS, "상태", "wait"), text(b.note, 300, "메모") || "", user.id);
       return ok(201, { groups: groupsOut(user.id) });
@@ -2556,6 +2610,7 @@ async function opsRoute(req, res, user, path, method) {
       if (has(b, "dueDate") && b.dueDate && !isDate(b.dueDate)) throw bad("완료 예정일을 확인해 주세요.");
       db.prepare("UPDATE inspection_group_assigns SET qty = ?, due_date = ?, status = ?, note = ?, updated_at = datetime('now') WHERE id = ?")
         .run(has(b, "qty") ? teamQty(b.qty, "배정 수량") : a.qty, has(b, "dueDate") ? b.dueDate || null : a.due_date, has(b, "status") ? pick(b.status, ASSIGN_STATUS, "상태") : a.status, has(b, "note") ? text(b.note, 300, "메모") || "" : a.note, a.id);
+      if (has(b, "qty") && !has(b, "status") && teamQty(b.qty, "배정 수량") !== a.qty) syncAfterInspection(a.schedule_id, a.group_id); // 수량이 바뀌면 검수한 만큼으로 진행을 다시 맞춤
       return ok(200, { groups: groupsOut(user.id) });
     }
     if (method === "DELETE") { if (!r.leader) return deny("배정은 리더 봉사자와 관리자가 지워요."); db.prepare("DELETE FROM inspection_group_assigns WHERE id = ?").run(a.id); return ok(200, { groups: groupsOut(user.id) }); }
@@ -2563,7 +2618,7 @@ async function opsRoute(req, res, user, path, method) {
   }
   if (path === "/api/ops/inspect-waiting" && method === "GET") { if (!r.can("inspect", "v")) return deny("볼 수 없는 메뉴예요."); return ok(200, { waiting: inspectWaiting() }); }
   // F06 연락 기록 (모두 적고 봄, 고치기·지우기는 적은 사람과 관리자)
-  if (path === "/api/ops/contacts" && method === "GET") return !r.can("contacts", "v") ? deny("볼 수 없는 메뉴예요.") : ok(200, { logs: contactLogsOut(user.id), monasteries: monasteriesOut(r).map((m) => ({ id: m.id, name: m.name })) });
+  if (path === "/api/ops/contacts" && method === "GET") return !r.can("contacts", "v") ? deny("볼 수 없는 메뉴예요.") : ok(200, { logs: contactLogsOut(user.id, user), monasteries: monasteriesOut(r).map((m) => ({ id: m.id, name: m.name })) });
   const contactIn = (b, old = {}) => {
     const g = (k, ok2) => (has(b, k) ? ok2(b[k]) : old[k]);
     const target_type = has(b, "targetType") ? pick(b.targetType, CONTACT_TARGETS, "연락 대상") : old.target_type || "monastery";
@@ -2588,7 +2643,7 @@ async function opsRoute(req, res, user, path, method) {
   if (path === "/api/ops/contacts" && method === "POST") {
     if (!r.can("contacts", "e")) return deny("연락 기록을 적을 수 없는 계정이에요.");
     db.prepare(`INSERT INTO contact_logs (${cols}, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(...vals(contactIn(await readJson(req))), user.id);
-    return ok(201, { logs: contactLogsOut(user.id) });
+    return ok(201, { logs: contactLogsOut(user.id, user) });
   }
   const cm2 = path.match(/^\/api\/ops\/contacts\/(\d+)$/);
   if (cm2) {
@@ -2597,11 +2652,11 @@ async function opsRoute(req, res, user, path, method) {
     if (method === "PATCH") {
       const b = await readJson(req);
       // 후속 조치 완료 표시는 누구나, 나머지 고치기는 적은 사람·관리자
-      if (x.created_by !== user.id && !r.admin && !Object.keys(b).every((k) => k === "done")) return deny("적은 사람과 관리자만 고칠 수 있어요.");
+      if (!canEditContact(x, user) && !Object.keys(b).every((k) => k === "done")) return deny("적은 사람과 리더 봉사자(팀 봉사자가 적은 것)·관리자만 고칠 수 있어요.");
       db.prepare(`UPDATE contact_logs SET ${cols.split(", ").map((c) => `${c} = ?`).join(", ")}, updated_at = datetime('now') WHERE id = ?`).run(...vals(contactIn(b, x)), x.id);
-      return ok(200, { logs: contactLogsOut(user.id) });
+      return ok(200, { logs: contactLogsOut(user.id, user) });
     }
-    if (method === "DELETE") { if (x.created_by !== user.id && !r.admin) return deny("적은 사람과 관리자만 지울 수 있어요."); db.prepare("DELETE FROM contact_logs WHERE id = ?").run(x.id); return ok(200, { logs: contactLogsOut(user.id) }); }
+    if (method === "DELETE") { if (!canEditContact(x, user)) return deny("적은 사람과 리더 봉사자(팀 봉사자가 적은 것)·관리자만 지울 수 있어요."); db.prepare("DELETE FROM contact_logs WHERE id = ?").run(x.id); return ok(200, { logs: contactLogsOut(user.id, user) }); }
     return ok(405, { error: "Method not allowed" });
   }
   // ---- 데드라인 일정: 관리자만 적고 고치고 지움, 봉사자는 자기 쪽(모두·부서·팀) 것만 봄
@@ -2658,7 +2713,7 @@ async function opsRoute(req, res, user, path, method) {
     const checked = insp.reduce((a, x) => a + x.checked_qty, 0), bad = insp.reduce((a, x) => a + defectOf(x), 0);
     const assignsLeft = db.prepare(`SELECT a.qty, (SELECT coalesce(sum(i.checked_qty), 0) FROM inspections i WHERE i.group_id = a.group_id AND i.schedule_id = a.schedule_id) AS done FROM inspection_group_assigns a WHERE a.status <> 'done'`).all().reduce((n, a) => n + Math.max(0, (a.qty || 0) - a.done), 0);
     const waiting = inspectWaiting();
-    const late = contactLogsOut(user.id).filter((c) => c.overdue);
+    const late = contactLogsOut(user.id, user).filter((c) => c.overdue);
     const low = stockOut().ledgers.flatMap((l) => l.options.filter((o) => o.safety != null && o.qty < o.safety).map((o) => ({ ledger: l.name, name: o.name, qty: o.qty, safety: o.safety, unit: l.unit })));
     const stages = Object.fromEntries(["new", "edu_done", "making", "recovered", "checked", "issue"].map((k) => [k, mons.filter((m) => m.status === k).length]));
     return ok(200, {
@@ -2715,6 +2770,7 @@ async function opsRoute(req, res, user, path, method) {
       const qty = teamQty(b.qty, "옮길 수량"), from = optLoc(b.fromLocationId), to = optLoc(b.toLocationId);
       if (!qty) throw bad("옮길 수량을 적어 주세요.");
       if (!to || from === to) throw bad("옮길 위치를 골라 주세요.");
+      checkLocQty(o, from, qty);
       inTx(() => {
         const out = refMove(l, o, "out", qty, date, `위치 이동${note ? ` · ${note}` : ""}`, user, { location: from, to, refType: "move" });
         refMove(l, o, "in", qty, date, `위치 이동${note ? ` · ${note}` : ""}`, user, { location: to, refType: "move", refId: out });
@@ -2801,6 +2857,7 @@ async function opsRoute(req, res, user, path, method) {
           const qty = teamQty(b.qty, "옮길 수량"), from = has(b, "fromLocationId") ? optLoc(b.fromLocationId) : out.location_id, to = has(b, "toLocationId") ? optLoc(b.toLocationId) : inn?.location_id;
           if (!qty) throw bad("옮길 수량을 적어 주세요.");
           if (!to || from === to) throw bad("옮길 위치를 골라 주세요.");
+          if (qty > (opt?.qty || 0) || from !== out.location_id) checkLocQty(o, from, qty); // 예전 이동을 되돌린 재고 기준. 수량을 늘리거나 보낸 위치를 바꿀 때만
           const o1 = refMove(l, o, "out", qty, date, `위치 이동${note ? ` · ${note}` : ""}`, user, { location: from, to, refType: "move" });
           refMove(l, o, "in", qty, date, `위치 이동${note ? ` · ${note}` : ""}`, user, { location: to, refType: "move", refId: o1 });
           db.prepare("UPDATE stock_moves SET ref_id = ? WHERE id = ?").run(o1, o1);
@@ -2972,6 +3029,11 @@ function ledgerOption(ledgerId, optionId) {
 }
 // 품목 한 열의 재고 (위치를 주면 그 위치만: 위치가 붙은 입고 − 출고)
 const optionQty = (optionId, locationId) => db.prepare(`SELECT coalesce(sum(CASE m.type WHEN 'in' THEN q.qty ELSE -q.qty END), 0) AS n FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE q.option_id = ?${locationId ? " AND m.location_id = ?" : ""}`).get(...(locationId ? [optionId, locationId] : [optionId])).n;
+// 그 위치에 있는 것보다 많이 옮기지 못함 (위치를 안 고르면 '위치 미정' 재고)
+function checkLocQty(o, locationId, qty) {
+  const n = locationId ? optionQty(o.id, locationId) : db.prepare("SELECT coalesce(sum(CASE m.type WHEN 'in' THEN q.qty ELSE -q.qty END), 0) AS n FROM stock_qty q JOIN stock_moves m ON m.id = q.move_id WHERE q.option_id = ? AND m.location_id IS NULL").get(o.id).n;
+  if (qty > n) throw bad(`${locationId ? "그 위치" : "위치 미정"}에는 ${o.name} ${n}개만 있어서 ${qty}개를 옮길 수 없어요.`);
+}
 // 원천(ref)이 붙은 입출고 한 줄: 기존 입출고 기록·수정 기록 방식 그대로 쌓음
 function refMove(l, o, type, qty, date, note, user, { location = null, to = null, refType = "", refId = null } = {}) {
   const id = addStockMoveFrom(l, { type, date, note, qty: { [o.id]: qty } }, user);
@@ -4737,12 +4799,26 @@ async function rosaryAdminRoute(req, res, path, method, user) {
     }
     return send(res, 405, { error: "Method not allowed" });
   }
+  if (path === "/api/admin/vol-edu" && method === "POST") {
+    const id = createEdu(await readJson(req), user);
+    console.log(`[admin] ${user.login} → 교육 기록 #${id} 추가`);
+    return send(res, 201, { id, rows: eduRows(), roster: rosterOut() });
+  }
   if (path === "/api/admin/vol-edu" && method === "GET") return send(res, 200, { rows: eduRows(), roster: rosterOut() });
   const em = path.match(/^\/api\/admin\/vol-edu\/(\d+)$/);
+  if (em && method === "DELETE") {
+    const s = db.prepare("SELECT * FROM vol_schedules WHERE id = ? AND project_item_id IS NOT NULL").get(Number(em[1]));
+    if (!s) throw notFound("교육 일정");
+    delSchedule(s);
+    console.log(`[admin] ${user.login} → 교육 기록 #${s.id} 삭제`);
+    return send(res, 200, { rows: eduRows(), roster: rosterOut() });
+  }
   if (em && method === "PATCH") {
     const s = db.prepare("SELECT * FROM vol_schedules WHERE id = ? AND project_item_id IS NOT NULL").get(Number(em[1]));
     if (!s) throw notFound("교육 일정");
     const b = await readJson(req);
+    const plan = orgPlanOf(s, b, user);
+    if (has(b, "date")) { if (b.date && !isDate(b.date)) throw bad("교육 날짜를 확인해 주세요."); checkDayLeft(s, b.date || "", b.confirmed); }
     const q2 = (k) => (has(b, k) ? volQtyInput(b[k]) : undefined);
     const set = {};
     if (has(b, "progress")) { if (!["planned", "done"].includes(b.progress)) throw bad("진행상태를 확인해 주세요."); }
@@ -4757,6 +4833,8 @@ async function rosaryAdminRoute(req, res, path, method, user) {
       for (const h of helpers) if (!db.prepare("SELECT 1 FROM vol_roster WHERE id = ?").get(h.id)) throw bad("명단에 없는 봉사자가 있어요.");
     }
     inTx(() => {
+      applyOrgPlan(s, plan);
+      if (has(b, "date")) setEduDate(s, b, user);
       const keys = Object.keys(set);
       if (keys.length) db.prepare(`UPDATE vol_schedules SET ${keys.map((k) => `${k} = ?`).join(", ")} WHERE id = ?`).run(...keys.map((k) => set[k]), s.id);
       if (has(b, "thread") || has(b, "cross")) {
@@ -4771,7 +4849,7 @@ async function rosaryAdminRoute(req, res, path, method, user) {
       // 진행상태가 바뀔 때만 팀 봉사자 쪽 상태도 같이 (그대로 저장하면 '연기'를 덮어쓰지 않음)
       if (has(b, "progress") && b.progress !== (eduStatus(s.progress, q.teamOrgInfo.get(s.id)?.status) === "done" ? "done" : "planned")) setEduStatus(db, s.id, b.progress === "done" ? "done" : "plan");
     });
-    return send(res, 200, { row: eduRows(s.id)[0], roster: rosterOut() });
+    return send(res, 200, { row: eduRows(s.id)[0], ...(plan.mode !== "none" ? { rows: eduRows() } : {}), roster: rosterOut() });
   }
   return send(res, 404, { error: "Not found" });
 }
