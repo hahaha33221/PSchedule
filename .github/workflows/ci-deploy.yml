@@ -34,6 +34,12 @@ jobs:
       - name: 문법 검사
         run: |
           for f in public/app.js public/sw.js server/*.mjs tools/*.mjs; do node --check "$f"; done
+          # 알림 종류(서버 PUSH_KINDS)와 화면 이름표(PUSH_KIND_LABEL)가 어긋나면 막음
+          node -e '
+            const fs = require("fs"), a = fs.readFileSync("public/app.js", "utf8"), s = fs.readFileSync("server/index.mjs", "utf8");
+            const kinds = JSON.parse(s.match(/const PUSH_KINDS = (\[[^\]]*\]);/)[1]).sort().join();
+            const label = a.match(/const PUSH_KIND_LABEL = (\{[\s\S]*?\n  \});/)[1], names = Object.entries(new Function("return " + label)());
+            if (names.map((x) => x[0]).sort().join() !== kinds || names.some(([, v]) => !v[0] || !v[1])) { console.error("알림 종류가 어긋나요. 서버: " + kinds + " / 화면: " + names.map((x) => x[0])); process.exit(1); }'
           node -e 'JSON.parse(require("fs").readFileSync("public/manifest.webmanifest","utf8"));JSON.parse(require("fs").readFileSync("public/.well-known/assetlinks.json","utf8"))'
           bash -n tools/pull-backups.sh
 
@@ -968,6 +974,13 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPUT -d '{"off":"edu"}' $B/push/prefs)" = 400
           curl -fs -H "$TH" -XPUT -d '{"off":[]}' $B/push/prefs | grep -q '"off":\[\]'
           curl -fs -H "$H" $B/push/prefs | grep -q '"issue_new"'
+          for X in "$H" "$TH" "$VH"; do curl -fs -H "$X" $B/push/prefs | JQ 'if(!d.kinds.includes("followup"))process.exit(1)'; done
+          curl -fs -H "$VH" -XPUT -d '{"off":["followup"]}' $B/push/prefs | JQ 'if(d.off.join()!=="followup")process.exit(1)'
+          curl -fs -H "$VH" -XPUT -d '{"off":[]}' $B/push/prefs | JQ 'if(d.off.length)process.exit(1)'
+          curl -fs -H "$(bearer "$A1")" $B/push/prefs | JQ 'if(d.kinds.join()!=="notice")process.exit(1)'
+          curl -fs -H "$H" -XPUT -d '{"staffOn":true}' $B/ops/perms >/dev/null
+          curl -fs -H "$(bearer "$A1")" $B/push/prefs | JQ 'if(d.kinds.join()!=="notice,followup")process.exit(1)'
+          curl -fs -H "$H" -XPUT -d '{"staffOn":false}' $B/ops/perms >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/users/$(USR teamv) >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$TV >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$RV >/dev/null; curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$NV >/dev/null

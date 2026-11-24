@@ -2913,7 +2913,8 @@ const pushOffOf = (u) => { try { const v = JSON.parse(u.push_off || "[]"); retur
 // 계정마다 받을 수 있는 알림 종류 (화면에 보여 줄 것)
 const pushKindsFor = (u) => {
   if (u.role === "admin" && !u.volunteer) return ["notice", "board", "comment", "issue_new", "followup"];
-  if (!u.volunteer) return ["notice"];
+  // 직원: 연락 기록을 쓸 수 있을 때만 (권한표에서 직원을 켜야 함)
+  if (!u.volunteer) return ["notice", ...(opsRole(u).can("contacts", "v") ? ["followup"] : [])];
   const team = volKindsOf(u).includes("team");
   return ["notice", "board", "comment", ...(team ? ["edu", "need", "issue_reply"] : []), "followup"];
 };

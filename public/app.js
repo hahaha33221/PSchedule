@@ -8339,8 +8339,10 @@
     edu: ["교육 일정", "팀 봉사자 교육이 새로 잡히거나 날짜가 바뀌면"],
     need: ["봉사자 필요 인원", "리더가 날짜별 필요 인원을 정하면"],
     issue_new: ["새 이슈", "팀 봉사자가 이슈를 올리면"],
-    issue_reply: ["이슈 처리·답", "내가 올린 이슈의 상태나 답이 바뀌면"]
+    issue_reply: ["이슈 처리·답", "내가 올린 이슈의 상태나 답이 바뀌면"],
+    followup: ["연락 후속 조치", "내가 적은 후속 조치의 기한이 되면"]
   };
+  const pushKindLabel = (k) => PUSH_KIND_LABEL[k] || ["기타 알림", ""]; // 화면이 모르는 종류가 와도 창이 비지 않게
   function pushPrefsBox(p) {
     const box = h("section", { class: "stack stack--sm push-prefs" });
     const draw = () => {
@@ -8358,7 +8360,7 @@
           const on = !p.off.includes(k);
           const c = h("input", { type: "checkbox", checked: on, "aria-describedby": `pp-${k}` });
           c.addEventListener("change", () => save(c.checked ? p.off.filter((x) => x !== k) : [...p.off, k]));
-          return h("li", {}, h("label", { class: "push-prefs__item" }, [c, h("span", {}, [h("strong", { text: PUSH_KIND_LABEL[k][0] }), h("small", { class: "muted", id: `pp-${k}`, text: PUSH_KIND_LABEL[k][1] })])]));
+          return h("li", {}, h("label", { class: "push-prefs__item" }, [c, h("span", {}, [h("strong", { text: pushKindLabel(k)[0] }), h("small", { class: "muted", id: `pp-${k}`, text: pushKindLabel(k)[1] })])]));
         })),
         h("p", { class: "muted small", text: "이 계정으로 알림을 켠 모든 기기에 똑같이 적용돼요." })
       );
@@ -8383,7 +8385,7 @@
         h("section", { class: "stack stack--sm" }, [
           h("h3", { class: "team-sec", text: "알림" }),
           h("p", { class: "small", text: state1 }),
-          h("p", { class: "muted small", text: "새 공지, 게시판 새 글·내 글 댓글, 팀 봉사자 교육 일정·필요 인원, 이슈 처리·답이 오면 알려 줘요. 기기마다 따로 켜요." }),
+          h("p", { class: "muted small", text: "새 공지, 게시판 새 글·내 글 댓글, 팀 봉사자 교육 일정·필요 인원, 이슈 처리·답, 연락 후속 조치가 오면 알려 줘요. 기기마다 따로 켜요." }),
           h("div", { class: "actions actions--start" }, [
             pushSupported() && perm !== "denied" && !sub ? h("button", { class: "btn btn--primary btn--sm", type: "button", text: "알림 켜기", onclick: async () => { try { await pushOn(); toast("알림을 켰어요."); } catch (e) { toast(e.message); } draw(); } }) : null,
             sub ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "시험 알림 보내기", onclick: () => act(() => api("/push/test", { method: "POST" }), "시험 알림을 보냈어요. 잠시 뒤 알림이 와요.") }) : null,
