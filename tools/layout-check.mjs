@@ -156,12 +156,15 @@ for (const [role, steps, list] of RUNS) {
       const key = `${role}${steps ? "" : "(예전)"} ${path}`;
       if (ONLY && !key.includes(ONLY)) continue;
       await ev(`location.hash = "#/${path}"; document.querySelector(".push-ask")?.remove(); 1`); await settle();
+      await ev(`for (const d of document.querySelectorAll("main details")) d.open = true; 1`); await sleep(120); // 접힌 칸도 펼쳐서
       views++;
       note(key, w, await ev(FIND));
       await shot(`${role}${steps ? "" : "0"}-${path}-${w}`);
       // 입력 판: 이 화면의 적기·추가 단추와 첫 줄·첫 카드를 눌러 봄 (저장하지 않고 닫음)
-      const n = await ev(`(() => { const m = document.querySelector("main"); if (!m) return 0; const b = [...m.querySelectorAll("button")].filter((x) => x.getClientRects().length && !x.disabled && /적기|추가|등록|만들기|기록$|배분$|요청$|올리기|고치기|입력$|알려|물량 배정/.test(x.textContent.trim()) && !/지우기|모두 읽음/.test(x.textContent)).slice(0, 4); const r = [...m.querySelectorAll("tr.stock-row, button.vm-card, li.stock-row")].filter((x) => x.getClientRects().length).slice(0, 2); window.__t = [...new Set([...b, ...r])]; return window.__t.length; })()`);
+      const pick = `(() => { const m = document.querySelector("main"); if (!m) return 0; const b = [...m.querySelectorAll("button")].filter((x) => x.getClientRects().length && !x.disabled && !x.matches(".pick-tile, .vm-card, .alert, [role=tab]") && /적기|추가|등록|만들기|기록$|배분$|요청$|올리기|고치기|입력$|알려|물량 배정/.test(x.textContent.trim()) && !/지우기|모두 읽음/.test(x.textContent)).slice(0, 4); const r = [...m.querySelectorAll("tr.stock-row, button.vm-card, li.stock-row")].filter((x) => x.getClientRects().length).slice(0, 2); window.__t = [...new Set([...b, ...r])]; return window.__t.length; })()`; // 다시 그려지면 단추가 바뀌므로 누를 때마다 다시 찾음
+      const n = await ev(pick);
       for (let i = 0; i < n; i++) {
+        await ev(pick);
         const label = await ev(`(() => { const t = window.__t[${i}]; if (!t?.isConnected) return ""; const s = t.textContent.trim().slice(0, 14); t.click(); return s || "-"; })()`);
         if (!label) continue;
         await sleep(160);
