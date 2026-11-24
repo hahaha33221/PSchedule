@@ -16,7 +16,7 @@ import { createReadStream, statSync, watch } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import crypto from "node:crypto";
 import { parseOutline, importOutline, cleanContact, openDb, ensureAdmin, verifyPassword, hashPassword, tempPassword } from "./db.mjs";
-import { eduStatus, EDU_STATUS_SQL, setEduStatus } from "./edu-status.mjs";
+import { dropEduDone, eduStatus, EDU_STATUS_SQL, setEduStatus } from "./edu-status.mjs";
 import { createCalendarSync, checkUrl, maskUrl } from "./calendars.mjs";
 import { startAutoBackup, listBackups, backupNow, pruneBackups } from "./backup.mjs";
 import { vapidKeys, sendPush, pushEndpointOk } from "./push.mjs";
@@ -1056,6 +1056,9 @@ function viewer(user, mine) {
 const viewUnitsOut = (userId) => q.viewUnits.all(userId).map((g) => ({ unitId: g.unit_id, sub: !!g.sub }));
 // 저장하기 전에 사람이 확인해야 하는 것 (409): 화면이 confirm 을 보여 주고, 확인 값을 붙여 다시 보냄
 const needConfirm = (message, confirm) => Object.assign(new Error(message), { status: 409, expose: true, confirm });
+// 막지는 않고 확인만 받는 것: 화면이 줄마다 보여 주고, 확인하면 confirmed 를 붙여 다시 보냄
+const needCheck = (lines) => needConfirm(`${lines.join(" ")} 맞으면 확인하고 다시 저장해 주세요.`, { mode: "check", lines });
+const confirmedQuery = (req) => new URL(req.url, "http://x").searchParams.get("confirmed") === "1";
 const notFound = (what) => Object.assign(new Error(`${what}을(를) 찾을 수 없어요. 지워졌거나 볼 수 없는 팀의 항목이에요.`), { status: 404, expose: true });
 // 항목의 팀: 보내면 그 팀 (이미 있는 항목은 만든 사람·관리자만), 안 보내면 새로 만들 땐 연결한 회의의 팀 → 만든 사람의 소속
 function itemUnit(b, user, cur, meetingId) {
@@ -1473,7 +1476,7 @@ const eduLinksAll = () => { // 일정 id → [[이름, 건수], …]
 function delSchedule(s) {
   const links = eduLinksAll().get(s.id);
   if (links) throw bad(`${linksText(links)}이 이어져 있어 지울 수 없어요. 그 기록을 다른 교육으로 옮기거나 지운 뒤 다시 해 주세요.`);
-  q.delVolSchedule.run(s.id);
+  inTx(() => { q.delVolSchedule.run(s.id); dropEduDone(db, s.monastery_id); });
 }
 // 교육 하나만 다른 수도회로 옮김. 택배로 받은 회수가 있으면 택배의 수도회와 어긋나므로 막음. 회수·완료 상태는 두 수도회 모두 남은 기록에 맞춤
 function moveEduTo(s, target, name) {
@@ -1486,6 +1489,62 @@ function moveEduTo(s, target, name) {
     fitMonasteryStatus(target.id);
     if (s.monastery_id) fitMonasteryStatus(s.monastery_id, true);
   }
+  dropEduDone(db, s.monastery_id);
+}
+// 교육 날짜를 비우거나 옮겨 그날 교육이 없어지면, 그날의 필요 인원·봉사 신청이 안 보이게 되므로 먼저 알려 줌 (확인하면 그대로)
+function checkDayLeft(s, newDate, confirmed) {
+  if (confirmed || s.table_only || s.date < today() || s.date === newDate) return;
+  if (db.prepare("SELECT 1 FROM vol_schedules WHERE project_item_id = ? AND date = ? AND table_only = 0 AND id <> ?").get(s.project_item_id, s.date, s.id)) return;
+  const need = db.prepare("SELECT need FROM team_day_need WHERE date = ?").get(s.date)?.need, n = db.prepare("SELECT count(*) AS n FROM team_avail WHERE date = ?").get(s.date).n;
+  if (need || n) throw needCheck([`${Number(s.date.slice(5, 7))}월 ${Number(s.date.slice(8))}일에 ${[need ? `필요 인원 ${need}명` : "", n ? `봉사 신청 ${n}명` : ""].filter(Boolean).join(", ")}이 있어요. 그날 다른 교육이 없어서 이 신청은 화면에 보이지 않게 돼요.`]);
+}
+// 교육 날짜 고치기: 빈 값이면 '미정'(달력에 안 보임), 날짜를 정하면 달력에 보임. 바뀌었으면 팀 봉사자에게 알림
+function setEduDate(s, b, user) {
+  const org = s.title.split(" · ").pop();
+  if (!b.date) {
+    db.prepare("UPDATE vol_schedules SET table_only = 1, start_time = '' WHERE id = ?").run(s.id);
+    if (!s.table_only) notify(teamVolunteerIds().filter((x) => x !== user.id), "교육 일정 변경", `${org} 날짜 미정`, "/#/tcal", "edu");
+    return;
+  }
+  db.prepare("UPDATE vol_schedules SET date = ?, start_time = ?, table_only = 0 WHERE id = ?").run(b.date, has(b, "startTime") ? optTime(b.startTime) : s.start_time, s.id);
+  if (b.date !== s.date || s.table_only) notify(teamVolunteerIds().filter((x) => x !== user.id), "교육 일정 변경", `${b.date.slice(5).replace("-", "/")} ${org}`, "/#/tcal", "edu");
+}
+// 수도회 이름 고치기: 무엇이 바뀌는지 먼저 알려 주고(409), 화면이 확인(orgConfirm)을 붙여 다시 보내면 저장. 팀 '교육 일정'과 관리자 '교육 기록'이 같이 씀
+function orgPlanOf(s, b, user) {
+  const from = s.title.split(" · ").pop().trim();
+  const orgName = has(b, "org") && text(b.org, 80, "수도회 이름", true).replace(/·/g, " ").trim() !== from ? monName(b.org) : from;
+  let plan = { ...orgChangePlan(s, orgName), orgName };
+  if (["rename", "create"].includes(plan.mode) && plan.similar.length) {
+    const near = plan.similar.find((m) => String(b.orgConfirm) === `similar:${m.id}`);
+    if (near) plan = { mode: "move", from: plan.from, to: near.name, target: near };
+    else if (b.orgConfirm !== "force") throw needConfirm("띄어쓰기나 괄호만 다른 수도회가 이미 있어요.", { mode: "similar", from: plan.from, to: plan.to, edus: plan.edus, similar: plan.similar.map((m) => ({ id: m.id, name: m.name })) });
+  } else if (plan.mode !== "none" && b.orgConfirm !== (plan.mode === "move" ? `move:${plan.target.id}` : plan.mode)) {
+    throw needConfirm("수도회 이름을 바꾸면 무엇이 달라지는지 확인해 주세요.", { mode: plan.mode, from: plan.from, to: plan.to, edus: plan.edus, targetId: plan.target?.id });
+  }
+  if (plan.mode === "rename" && !opsRole(user).can("monasteries", "e")) throw Object.assign(new Error("수도회 이름을 고칠 수 없는 계정이에요."), { status: 403, expose: true });
+  return plan;
+}
+function applyOrgPlan(s, plan) {
+  if (plan.mode === "move") moveEduTo(s, plan.target, plan.to);
+  else if (plan.mode === "rename") { renameMonastery(plan.cur, plan.to); db.prepare("UPDATE vol_schedules SET title = ? WHERE id = ?").run(`묵주 교육 · ${plan.to}`, s.id); }
+  else if (plan.mode === "create") db.prepare("UPDATE vol_schedules SET title = ?, monastery_id = ? WHERE id = ?").run(`묵주 교육 · ${plan.to}`, monasteryIdOf(plan.to), s.id);
+  else if (plan.retitle) db.prepare("UPDATE vol_schedules SET title = ? WHERE id = ?").run(`묵주 교육 · ${plan.orgName}`, s.id);
+}
+// 교육 한 줄 만들기 (리더·관리자). 날짜가 없으면 달력 미정으로 표에만
+function createEdu(b, user) {
+  const gid = rosaryGroupId();
+  if (!gid) throw notFound("묵주 프로젝트");
+  const org = text(b.org, 80, "수도회 이름", true).replace(/·/g, " ").trim(), date = optDate(b.date, "교육 날짜");
+  const id = inTx(() => {
+    const id = Number(db.prepare("INSERT INTO vol_schedules (title, date, start_time, place, audience, qty, project_item_id, created_by, table_only) VALUES (?, ?, ?, ?, 'all', ?, ?, ?, ?)")
+      .run(`묵주 교육 · ${org}`, date || today(), optTime(b.startTime), text(b.place, 120, "장소") || "", teamQty(b.qty, "요청수량"), gid, user.id, date ? 0 : 1).lastInsertRowid);
+    if (b.qty !== "" && b.qty != null) q.markVolQty.run(user.name, id);
+    q.teamOrgUpsert.run(id, "", text(b.helper, 80, "담당 봉사자") || "", "plan", null, "", null, "", user.name);
+    db.prepare("UPDATE vol_schedules SET monastery_id = ? WHERE id = ?").run(monasteryIdOf(org), id);
+    return id;
+  });
+  if (date) notify(teamVolunteerIds().filter((x) => x !== user.id), "새 교육 일정", `${date.slice(5).replace("-", "/")} ${org}`, "/#/tcal", "edu");
+  return id;
 }
 // 담당 수도회 = 묵주에 이어진 방문 일정(추가 전달 물량의 줄). 교육 순서는 날짜순 번호
 function teamOrgRows(admin) {
@@ -1533,20 +1592,7 @@ async function teamRoute(req, res, user, path, method) {
   // 교육 추가 (리더·관리자): 묵주 방문 일정 한 줄. 날짜가 없으면 달력 미정으로 표에만
   if (path === "/api/team/orgs" && method === "POST") {
     if (!leader) return ok(403, { error: "교육 추가는 리더 봉사자와 관리자만 해요." });
-    const gid = rosaryGroupId();
-    if (!gid) throw notFound("묵주 프로젝트");
-    const b = await readJson(req);
-    const org = text(b.org, 80, "수도회 이름", true).replace(/·/g, " ").trim();
-    const date = optDate(b.date, "교육 날짜");
-    const id = inTx(() => {
-      const id = Number(db.prepare("INSERT INTO vol_schedules (title, date, start_time, place, audience, qty, project_item_id, created_by, table_only) VALUES (?, ?, ?, ?, 'all', ?, ?, ?, ?)")
-        .run(`묵주 교육 · ${org}`, date || today(), optTime(b.startTime), text(b.place, 120, "장소") || "", teamQty(b.qty, "요청수량"), gid, user.id, date ? 0 : 1).lastInsertRowid);
-      if (b.qty !== "" && b.qty != null) q.markVolQty.run(user.name, id);
-      q.teamOrgUpsert.run(id, "", text(b.helper, 80, "담당 봉사자") || "", "plan", null, "", null, "", user.name);
-      db.prepare("UPDATE vol_schedules SET monastery_id = ? WHERE id = ?").run(monasteryIdOf(org), id);
-      return id;
-    });
-    if (date) notify(teamVolunteerIds().filter((x) => x !== user.id), "새 교육 일정", `${date.slice(5).replace("-", "/")} ${org}`, "/#/tcal", "edu");
+    const id = createEdu(await readJson(req), user);
     return ok(201, { id, orgs: teamOrgRows(admin) });
   }
   const om = path.match(/^\/api\/team\/orgs\/(\d+)(\/inquiries)?$/);
@@ -1572,17 +1618,8 @@ async function teamRoute(req, res, user, path, method) {
     if (method === "PATCH") {
       const b = await readJson(req), f = q.teamOrgInfo.get(s.id) || {};
       if (has(b, "contact") && !admin) return ok(403, { error: "연락처는 관리자만 적어요." });
-      // 수도회 이름 고치기: 무엇이 바뀌는지 먼저 알려 주고(409), 화면이 확인(orgConfirm)을 붙여 다시 보내면 저장
-      const orgName = has(b, "org") && text(b.org, 80, "수도회 이름", true).replace(/·/g, " ").trim() !== s.title.split(" · ").pop().trim() ? monName(b.org) : s.title.split(" · ").pop().trim();
-      let plan = orgChangePlan(s, orgName);
-      if (["rename", "create"].includes(plan.mode) && plan.similar.length) {
-        const near = plan.similar.find((m) => String(b.orgConfirm) === `similar:${m.id}`);
-        if (near) plan = { mode: "move", from: plan.from, to: near.name, target: near };
-        else if (b.orgConfirm !== "force") throw needConfirm("띄어쓰기나 괄호만 다른 수도회가 이미 있어요.", { mode: "similar", from: plan.from, to: plan.to, edus: plan.edus, similar: plan.similar.map((m) => ({ id: m.id, name: m.name })) });
-      } else if (plan.mode !== "none" && b.orgConfirm !== (plan.mode === "move" ? `move:${plan.target.id}` : plan.mode)) {
-        throw needConfirm("수도회 이름을 바꾸면 무엇이 달라지는지 확인해 주세요.", { mode: plan.mode, from: plan.from, to: plan.to, edus: plan.edus, targetId: plan.target?.id });
-      }
-      if (plan.mode === "rename" && !opsRole(user).can("monasteries", "e")) return ok(403, { error: "수도회 이름을 고칠 수 없는 계정이에요." });
+      const plan = orgPlanOf(s, b, user);
+      if (has(b, "date")) { if (b.date && !isDate(b.date)) throw bad("교육 날짜를 확인해 주세요."); checkDayLeft(s, b.date || "", b.confirmed); }
       const now = eduStatus(s.progress, f.status);
       let status = has(b, "status") ? String(b.status) : now;
       if (!TEAM_STATUS.includes(status)) throw bad("교육 상태를 확인해 주세요.");
@@ -1593,15 +1630,8 @@ async function teamRoute(req, res, user, path, method) {
         // 교육 날짜를 정하면 달력에도 보이게 (달력 미정 → 일정)
         // 수도회 이름·장소 (팀 봉사자 모두)
         if (has(b, "place")) db.prepare("UPDATE vol_schedules SET place = ? WHERE id = ?").run(text(b.place, 120, "장소") || "", s.id);
-        if (plan.mode === "move") moveEduTo(s, plan.target, plan.to);
-        else if (plan.mode === "rename") { renameMonastery(plan.cur, plan.to); db.prepare("UPDATE vol_schedules SET title = ? WHERE id = ?").run(`묵주 교육 · ${plan.to}`, s.id); }
-        else if (plan.mode === "create") db.prepare("UPDATE vol_schedules SET title = ?, monastery_id = ? WHERE id = ?").run(`묵주 교육 · ${plan.to}`, monasteryIdOf(plan.to), s.id);
-        else if (plan.retitle) db.prepare("UPDATE vol_schedules SET title = ? WHERE id = ?").run(`묵주 교육 · ${orgName}`, s.id);
-        if (has(b, "date")) {
-          if (!isDate(b.date)) throw bad("교육 날짜를 확인해 주세요.");
-          db.prepare("UPDATE vol_schedules SET date = ?, start_time = ?, table_only = 0 WHERE id = ?").run(b.date, has(b, "startTime") ? optTime(b.startTime) : s.start_time, s.id);
-          if (b.date !== s.date || s.table_only) notify(teamVolunteerIds().filter((x) => x !== user.id), "교육 일정 변경", `${b.date.slice(5).replace("-", "/")} ${s.title.split(" · ").pop()}`, "/#/tcal", "edu");
-        }
+        applyOrgPlan(s, plan);
+        if (has(b, "date")) setEduDate(s, b, user);
         // 연락처는 수도회(monasteries.phone)에 둠. team_org_info.contact 는 예전 값만 남김
         if (has(b, "contact")) { const mid = db.prepare("SELECT monastery_id FROM vol_schedules WHERE id = ?").get(s.id).monastery_id || monasteryIdOf(s.title.split(" · ").pop()); db.prepare("UPDATE vol_schedules SET monastery_id = ? WHERE id = ?").run(mid, s.id); db.prepare("UPDATE monasteries SET phone = ?, updated_at = datetime('now') WHERE id = ?").run(text(b.contact, 300, "연락처") || "", mid); }
         q.teamOrgUpsert.run(s.id, f.contact || "", has(b, "helper") ? text(b.helper, 80, "담당 봉사자") || "" : f.helper || "", status,
@@ -1715,13 +1745,24 @@ async function teamRoute(req, res, user, path, method) {
     return [s.id, b.date, qty, m, text(b.note, 500, "메모") || ""];
   };
   if (path === "/api/team/recovery" && method === "GET") return ok(200, recoveryOut());
-  if (path === "/api/team/recovery" && method === "POST") { q.addTeamRecovery.run(...(await recoveryIn()), user.id); return ok(201, recoveryOut()); }
+  const midOf = (sid) => db.prepare("SELECT monastery_id AS m FROM vol_schedules WHERE id = ?").get(sid)?.m;
+  // 직접 적은 회수도 수도회 상태에 반영: 등록·교육 완료면 회수완료로 (사람이 정한 '제작 중'·'문제 있음'은 그대로)
+  const raiseDirect = (mid) => { if (mid) db.prepare("UPDATE monasteries SET status = 'recovered', updated_at = datetime('now') WHERE id = ? AND status IN ('new', 'edu_done')").run(mid); };
+  if (path === "/api/team/recovery" && method === "POST") { const v = await recoveryIn(); inTx(() => { q.addTeamRecovery.run(...v, user.id); raiseDirect(midOf(v[0])); }); return ok(201, recoveryOut()); }
   const rcm = path.match(/^\/api\/team\/recovery\/(\d+)$/);
   if (rcm) {
     const x = q.teamRecovery.get(Number(rcm[1]));
     if (!x) throw notFound("회수 기록");
-    if (method === "PATCH") { q.setTeamRecovery.run(...(await recoveryIn()), x.id); return ok(200, recoveryOut()); }
-    if (method === "DELETE") { if (x.created_by !== user.id && !leader) return ok(403, { error: "적은 사람과 리더·관리자만 지울 수 있어요." }); q.delTeamRecovery.run(x.id); return ok(200, recoveryOut()); }
+    if (method === "PATCH") {
+      const v = await recoveryIn(), from = midOf(x.schedule_id), to = midOf(v[0]);
+      inTx(() => {
+        q.setTeamRecovery.run(...v, x.id);
+        if (from !== to) { if (from) fitMonasteryStatus(from, true); raiseDirect(to); }
+        if (to && (from !== to || v[2] !== x.qty)) fitMonasteryStatus(to);
+      });
+      return ok(200, recoveryOut());
+    }
+    if (method === "DELETE") { if (x.created_by !== user.id && !leader) return ok(403, { error: "적은 사람과 리더·관리자만 지울 수 있어요." }); inTx(() => { q.delTeamRecovery.run(x.id); const mid = midOf(x.schedule_id); if (mid) fitMonasteryStatus(mid, true); }); return ok(200, recoveryOut()); }
     return ok(405, { error: "Method not allowed" });
   }
   // 이슈: 봉사자가 등록(사진 4장), 관리자가 처리 상태·답

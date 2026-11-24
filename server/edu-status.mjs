@@ -10,4 +10,10 @@ export function setEduStatus(db, scheduleId, status) {
   if (status === "delay") db.prepare("INSERT INTO team_org_info (schedule_id, status) VALUES (?, 'delay') ON CONFLICT(schedule_id) DO UPDATE SET status = 'delay'").run(scheduleId);
   else db.prepare("UPDATE team_org_info SET status = ? WHERE schedule_id = ?").run(status, scheduleId);
   if (status === "done") db.prepare("UPDATE monasteries SET status = 'edu_done', updated_at = datetime('now') WHERE status = 'new' AND id = (SELECT monastery_id FROM vol_schedules WHERE id = ?)").run(scheduleId);
+  else dropEduDone(db, db.prepare("SELECT monastery_id AS id FROM vol_schedules WHERE id = ?").get(scheduleId)?.id);
+}
+// 끝난 교육이 하나도 안 남으면 '교육 완료' → '등록'. 그 밖의 상태(제작 중·문제 있음·회수·검수 완료)는 그대로
+export function dropEduDone(db, mid) {
+  if (mid) db.prepare(`UPDATE monasteries SET status = 'new', updated_at = datetime('now') WHERE id = ? AND status = 'edu_done'
+    AND NOT EXISTS (SELECT 1 FROM vol_schedules s LEFT JOIN team_org_info t ON t.schedule_id = s.id WHERE s.monastery_id = monasteries.id AND ${EDU_STATUS_SQL} = 'done')`).run(mid);
 }
