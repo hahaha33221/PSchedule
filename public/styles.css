@@ -2213,3 +2213,27 @@ th.num .sort-th__btn { justify-content: flex-end; }
   .vol-visits .table td.num { text-align: left; }
   .vol-visits .table th[colspan] { grid-column: 1 / -1; }
 }
+
+/* 검수 기준 사진 (기능확인 이미지C) */
+.crit-sample { padding: 16px; margin-bottom: 14px; }
+.crit-sample h2 { margin: 0 0 10px; font-size: 18px; text-align: center; }
+.crit-tabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 14px; padding: 4px; border-radius: 14px; background: var(--primary); }
+.crit-tabs button { flex: 1 1 auto; min-height: 38px; padding: 4px 12px; border: 0; border-radius: 11px; background: none; color: var(--primary-ink); font: inherit; font-weight: 600; cursor: pointer; overflow-wrap: anywhere; }
+.crit-tabs button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.crit-photos { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: 10px; align-items: start; margin-top: 6px; }
+.crit-photos > p, .crit-photos > .btn { grid-column: 1 / -1; justify-self: start; margin: 0; }
+.crit-photo { position: relative; min-width: 0; }
+.crit-photo__btn { display: block; width: 100%; padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); overflow: hidden; cursor: zoom-in; }
+.crit-photo__btn img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }
+.crit-list { display: grid; gap: 10px; margin-bottom: 14px; }
+.crit-item { border-radius: 14px; background: var(--surface); border: 1px solid var(--line); overflow: hidden; }
+.crit-item summary { display: flex; justify-content: space-between; gap: 10px; padding: 14px 16px; font-weight: 700; cursor: pointer; list-style: none; }
+.crit-item summary::-webkit-details-marker { display: none; }
+.crit-item summary::after { content: "펼치기"; color: var(--ink-2); font-weight: 600; }
+.crit-item[open] summary { background: var(--primary); color: var(--primary-ink); }
+.crit-item[open] summary::after { content: "접기"; color: inherit; }
+.crit-item__body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 16px; }
+.crit-item__text p { margin: 8px 0; overflow-wrap: anywhere; }
+.crit-item__body .crit-photos { grid-template-columns: repeat(auto-fill, minmax(min(100%, 150px), 1fr)); }
+.pick-tiles--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 640px) { .crit-item__body { grid-template-columns: minmax(0, 1fr); } .pick-tiles--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } .pick-tiles--3 .pick-tile { padding: 10px; } .pick-tiles--3 .pick-tile strong { font-size: 19px; } }

@@ -1578,20 +1578,22 @@ function createEdu(b, user) {
   return id;
 }
 // 담당 수도회 = 묵주에 이어진 방문 일정(추가 전달 물량의 줄). 교육 순서는 날짜순 번호
-function teamOrgRows(admin) {
+function teamOrgRows(admin, user) {
   const gid = rosaryGroupId();
   if (!gid) return [];
   const infos = new Map(q.teamOrgInfos.all().map((x) => [x.schedule_id, x]));
   const inq = new Map(q.teamInqCounts.all().map((x) => [x.schedule_id, x]));
   const mons = new Map(db.prepare("SELECT id, name, phone, status FROM monasteries").all().map((m) => [m.id, m]));
   const links = eduLinksAll();
+  // 내 교육: 봉사자 명단에서 내 계정이 이어진 사람이 진행 봉사자로 적힌 교육
+  const mine = new Set(user ? db.prepare("SELECT h.schedule_id AS id FROM vol_edu_helpers h JOIN vol_roster r ON r.id = h.roster_id WHERE r.user_id = ?").all(user.id).map((x) => x.id) : []);
   return q.volSchedulesOfItems.all().filter((s) => s.project_item_id === gid).map((s, i) => {
     const f = infos.get(s.id) || {}, c = inq.get(s.id), mon = mons.get(s.monastery_id);
     return {
       id: s.id, no: i + 1, org: s.title.split(" · ").pop(), date: s.date, startTime: s.start_time, place: s.place, tableOnly: !!s.table_only, fromForm: s.request_id != null,
       reqQty: s.qty, sumNote: s.sum_note || "", eduQty: s.edu_qty ?? null, threadQty: s.thread_qty ?? null, crossQty: s.cross_qty ?? null,
       monasteryId: s.monastery_id ?? null, monasteryStatus: mon?.status || "", contact: mon?.phone || f.contact || "", helper: f.helper || "", status: eduStatus(s.progress, f.status), attend: f.attend ?? null, resultNote: f.result_note || "", madeQty: f.made_qty ?? null, madeDue: f.made_due || "",
-      updatedBy: f.updated_by || "", updatedAt: f.updated_at || null, inquiries: c?.n || 0, openInquiries: c?.open || 0, canContact: !!admin,
+      updatedBy: f.updated_by || "", updatedAt: f.updated_at || null, inquiries: c?.n || 0, openInquiries: c?.open || 0, canContact: !!admin, mine: mine.has(s.id),
       deletable: s.request_id == null && s.thread_qty == null && s.cross_qty == null && s.edu_qty == null && !links.has(s.id), linked: links.has(s.id) ? linksText(links.get(s.id)) : ""
     };
   });
@@ -1605,7 +1607,7 @@ async function teamRoute(req, res, user, path, method) {
   const issues = () => q.teamIssues.all().map((x) => ({ ...teamIssueOut(x), mine: x.created_by === user.id }));
   if (await inspectionRoute(req, res, user, path, method, "/api/team")) return true;
   if (path === "/api/team/home" && method === "GET") {
-    const orgs = teamOrgRows(admin), t = today();
+    const orgs = teamOrgRows(admin, user), t = today();
     const ins = q.inspections.all().map(inspectionOut);
     const shifts = q.teamShifts.all(t), su = q.teamShiftUsers.all();
     return ok(200, {
@@ -1619,12 +1621,12 @@ async function teamRoute(req, res, user, path, method) {
     });
   }
   // 담당 수도회
-  if (path === "/api/team/orgs" && method === "GET") return ok(200, { orgs: teamOrgRows(admin), canAdd: leader });
+  if (path === "/api/team/orgs" && method === "GET") return ok(200, { orgs: teamOrgRows(admin, user), canAdd: leader });
   // 교육 추가 (리더·관리자): 묵주 방문 일정 한 줄. 날짜가 없으면 달력 미정으로 표에만
   if (path === "/api/team/orgs" && method === "POST") {
     if (!leader) return ok(403, { error: "교육 추가는 리더 봉사자와 관리자만 해요." });
     const id = createEdu(await readJson(req), user);
-    return ok(201, { id, orgs: teamOrgRows(admin) });
+    return ok(201, { id, orgs: teamOrgRows(admin, user) });
   }
   const om = path.match(/^\/api\/team\/orgs\/(\d+)(\/inquiries)?$/);
   if (om) {
@@ -1644,7 +1646,7 @@ async function teamRoute(req, res, user, path, method) {
       if (!leader) return ok(403, { error: "교육 지우기는 리더 봉사자와 관리자만 해요." });
       if (s.request_id != null || s.thread_qty != null || s.cross_qty != null || s.edu_qty != null) return ok(400, { error: "네이버폼 신청이나 출고·교육물량 기록이 있는 교육은 지울 수 없어요. 관리자에게 알려 주세요." });
       delSchedule(s);
-      return ok(200, { orgs: teamOrgRows(admin) });
+      return ok(200, { orgs: teamOrgRows(admin, user) });
     }
     if (method === "PATCH") {
       const b = await readJson(req), f = q.teamOrgInfo.get(s.id) || {};
@@ -1670,7 +1672,7 @@ async function teamRoute(req, res, user, path, method) {
           has(b, "madeQty") ? teamQty(b.madeQty, "예상 완성 수량") : f.made_qty ?? null, has(b, "madeDue") ? text(b.madeDue, 40, "완성 예정 시기") || "" : f.made_due || "", user.name);
         if (status !== now) setEduStatus(db, s.id, status); // 관리자 '교육 기록'의 진행상태도 같이
       });
-      return ok(200, { org: teamOrgRows(admin).find((o) => o.id === s.id) });
+      return ok(200, { org: teamOrgRows(admin, user).find((o) => o.id === s.id) });
     }
     return ok(405, { error: "Method not allowed" });
   }
@@ -1735,7 +1737,7 @@ async function teamRoute(req, res, user, path, method) {
   }
   // 봉사 가능한 날 (내 것만 고침, 다른 사람은 날짜별 인원 수만)
   // 교육 일정이 있는 날 (달력에 보이는 묵주 교육): 봉사 가능 신청·필요 인원은 이 날만
-  const eduDays = () => new Set(teamOrgRows(admin).filter((o) => !o.tableOnly).map((o) => o.date));
+  const eduDays = () => new Set(teamOrgRows(admin, user).filter((o) => !o.tableOnly).map((o) => o.date));
   // 봉사 가능한 날: 날짜별로 성을 뺀 이름만 (팀 봉사자와 관리자에게만)
   // 교육이 지워지거나 옮겨져 교육이 없어진 날의 필요 인원·신청은 보이지 않음 (기록은 남아 있어 그날 교육이 다시 생기면 보임)
   const availOut = () => {
@@ -1774,8 +1776,10 @@ async function teamRoute(req, res, user, path, method) {
     for (const x of list) byOrg[x.scheduleId] = (byOrg[x.scheduleId] || 0) + x.qty;
     return { records: list, byOrg, total: list.reduce((n, x) => n + x.qty, 0) };
   };
+  let confirmedBody = false;
   const recoveryIn = async () => {
     const b = await readJson(req);
+    confirmedBody = !!b.confirmed;
     const s = teamOrgOf(b.scheduleId);
     if (!isDate(b.date)) throw bad("회수 날짜를 확인해 주세요.");
     const qty = teamQty(b.qty, "회수 수량");
@@ -1788,7 +1792,13 @@ async function teamRoute(req, res, user, path, method) {
   const midOf = (sid) => db.prepare("SELECT monastery_id AS m FROM vol_schedules WHERE id = ?").get(sid)?.m;
   // 직접 적은 회수도 수도회 상태에 반영: 등록·교육 완료면 회수완료로 (사람이 정한 '제작 중'·'문제 있음'은 그대로)
   const raiseDirect = (mid) => { setMonStatus(db, mid, "recovered", ["new", "edu_done"], "회수 기록"); };
-  if (path === "/api/team/recovery" && method === "POST") { const v = await recoveryIn(); inTx(() => { q.addTeamRecovery.run(...v, user.id); raiseDirect(midOf(v[0])); }); return ok(201, recoveryOut()); }
+  if (path === "/api/team/recovery" && method === "POST") {
+    const v = await recoveryIn(), mid0 = midOf(v[0]);
+    if (v[3] === "parcel" && !confirmedBody && mid0) {
+      const n = db.prepare("SELECT count(*) AS n FROM shipments WHERE direction = 'in' AND monastery_id = ? AND kind IN ('', 'inspect') AND status IN ('ready', 'sent', 'arrived')").get(mid0).n;
+      if (n) throw needCheck([`이 수도회에는 부서 봉사자가 적은 받는 택배가 ${n}건 있어요. 택배로 온 것은 도착 처리하면 회수 결과에 저절로 생겨서, 여기에 또 적으면 두 번 세요.`]);
+    }
+    inTx(() => { q.addTeamRecovery.run(...v, user.id); raiseDirect(midOf(v[0])); }); return ok(201, recoveryOut()); }
   const rcm = path.match(/^\/api\/team\/recovery\/(\d+)$/);
   if (rcm) {
     const x = q.teamRecovery.get(Number(rcm[1]));
@@ -2360,8 +2370,9 @@ function criteriaOut() {
   const versions = [...new Set(rows.map((r) => r.version))];
   const t = today();
   const current = [...versions].reverse().find((v) => rows.find((r) => r.version === v).valid_from <= t) ?? versions[0] ?? null;
+  const photos = db.prepare("SELECT id, kind, item_key AS key FROM criteria_photos ORDER BY id").all();
   const used = new Map(db.prepare("SELECT criteria_version AS v, count(*) AS n FROM inspections WHERE criteria_version IS NOT NULL GROUP BY criteria_version").all().map((x) => [x.v, x.n]));
-  return { current, versions: versions.map((v) => { const it = rows.filter((r) => r.version === v); return { version: v, validFrom: it[0].valid_from, approvedBy: it[0].approved_by, used: used.get(v) || 0,
+  return { current, photos, versions: versions.map((v) => { const it = rows.filter((r) => r.version === v); return { version: v, validFrom: it[0].valid_from, approvedBy: it[0].approved_by, used: used.get(v) || 0,
     items: it.map((r) => ({ id: r.id, sort: r.sort, item: r.item, method: r.method, passRule: r.pass_rule, defectKey: r.defect_key, defectName: r.defect_name })) }; }) };
 }
 // 검수 입력에서 고를 수 있는 불량 코드: 지금 기준 판 (예전 기록을 고칠 때를 위해 모든 판의 코드와 예전 유형도 받음)
@@ -2400,12 +2411,9 @@ function opsCounts(user) {
   if (r.team) {
     const orgs = teamOrgRows(r.admin);
     c.tedu1 = one("SELECT count(*) AS n FROM monasteries WHERE status = 'issue'");
-    c.tedu2 = orgs.filter((o) => o.tableOnly && o.status !== "done").length;
-    c.tedu3 = orgs.filter((o) => !o.tableOnly && o.date < t && o.status === "plan").length;
-    c.tedu4 = orgs.reduce((n, o) => n + o.openInquiries, 0) + one("SELECT count(*) AS n FROM contact_logs WHERE done = 0 AND follow_up <> '' AND due_date IS NOT NULL AND due_date <= ?", t);
+    c.tedu2 = orgs.filter((o) => (o.tableOnly && o.status !== "done") || (!o.tableOnly && o.date < t && o.status === "plan")).length + orgs.reduce((n, o) => n + o.openInquiries, 0); // 날짜 미정·결과 안 적은 교육 + 열린 문의
     c.tmake1 = orgs.filter((o) => o.status === "done" && o.madeQty == null).length;
     c.tmake2 = one("SELECT count(*) AS n FROM monasteries m WHERE m.status IN ('edu_done', 'making') AND NOT EXISTS (SELECT 1 FROM team_recovery r JOIN vol_schedules s ON s.id = r.schedule_id WHERE s.monastery_id = m.id)");
-    c.tmake3 = one("SELECT count(*) AS n FROM shipments WHERE direction = 'in' AND status = 'sent'");
     c.tins3 = inspectWaiting().length;
     c.tins4 = q.inspections.all().filter((x) => x.defects && x.defects !== "{}" && !x.rework).length;
     c.tins2 = one("SELECT count(*) AS n FROM inspection_group_assigns a WHERE a.status <> 'done' AND a.group_id IN (SELECT group_id FROM inspection_group_members WHERE user_id = ? UNION SELECT id FROM inspection_groups WHERE leader_id = ?)", user.id, user.id);
@@ -2551,6 +2559,27 @@ async function opsRoute(req, res, user, path, method) {
     if (method === "PATCH") { db.prepare("UPDATE duty_assignments SET duty = ?, user_id = ?, start_date = ?, end_date = ?, note = ? WHERE id = ?").run(...dutyIn(await readJson(req)), x.id); return ok(200, { duties: dutiesOut() }); }
     if (method === "DELETE") { db.prepare("DELETE FROM duty_assignments WHERE id = ?").run(x.id); return ok(200, { duties: dutiesOut() }); }
     return ok(405, { error: "Method not allowed" });
+  }
+  // 검수 기준 사진: 정상 예시(ok)·불량 예시(bad). 올리고 지우기는 리더·관리자, 칸(항목)마다 4장까지. 불량 코드에 이어져 판을 새로 만들어도 남음
+  if (path === "/api/ops/criteria-photos" && method === "POST") {
+    if (!r.lead("criteria")) return deny("검수 기준 사진은 리더 봉사자와 관리자가 올려요.");
+    const b = await readJson(req), kind = pick(b.kind, ["ok", "bad"], "사진 종류"), key = text(b.key, 40, "검수 항목") || "";
+    if ((kind === "bad" && !key) || (key && !db.prepare("SELECT 1 FROM inspection_criteria WHERE defect_key = ?").get(key))) throw bad("검수 항목을 확인해 주세요.");
+    const buf = Buffer.from(String(b.data || ""), "base64"), mime = buf.length && buf.length <= ITEM_IMAGE_MAX ? imageMime(buf) : null;
+    if (!mime) throw bad("JPG, PNG, WEBP 사진만 올릴 수 있어요.");
+    if (db.prepare("SELECT count(*) AS n FROM criteria_photos WHERE kind = ? AND item_key = ?").get(kind, key).n >= 4) throw bad("사진은 칸마다 4장까지 올릴 수 있어요.");
+    db.prepare("INSERT INTO criteria_photos (kind, item_key, mime, data, created_by) VALUES (?, ?, ?, ?, ?)").run(kind, key, mime, buf, user.id);
+    return ok(201, { ...criteriaOut(), canEdit: true });
+  }
+  const cpm = path.match(/^\/api\/ops\/criteria-photos\/(\d+)$/);
+  if (cpm) {
+    const ph = db.prepare("SELECT * FROM criteria_photos WHERE id = ?").get(Number(cpm[1]));
+    if (!ph) throw notFound("사진");
+    if (method === "GET") { if (!r.can("criteria", "v")) return deny("볼 수 없는 메뉴예요."); sendPhoto(res, ph); return true; }
+    if (method !== "DELETE") return ok(405, { error: "Method not allowed" });
+    if (!r.lead("criteria")) return deny("검수 기준 사진은 리더 봉사자와 관리자가 지워요.");
+    db.prepare("DELETE FROM criteria_photos WHERE id = ?").run(ph.id);
+    return ok(200, { ...criteriaOut(), canEdit: true });
   }
   // F04 검수 기준: 바꾸면 새 판으로 쌓음 (예전 판은 그대로 남아 예전 결과를 그 기준으로 봄)
   if (path === "/api/ops/criteria" && method === "GET") { if (!r.can("criteria", "v")) return deny("볼 수 없는 메뉴예요."); return ok(200, { ...criteriaOut(), canEdit: r.lead("criteria") }); }
@@ -3180,7 +3209,7 @@ function followupReminders() {
   if (q.setting.get("followup_push_date")?.value === t) return;
   q.setSetting.run("followup_push_date", t);
   const rows = db.prepare("SELECT created_by AS uid, count(*) AS n FROM contact_logs WHERE done = 0 AND follow_up <> '' AND due_date IS NOT NULL AND due_date <= ? AND created_by IS NOT NULL GROUP BY created_by").all(t);
-  for (const x of rows) notify([x.uid], "연락 후속 조치", `오늘까지 할 후속 조치 ${x.n}건이 있어요.`, (s) => (s.volunteer ? (s.vol_kind === "team" ? "/#/tedu4" : "/#/vcontacts") : "/"), "followup");
+  for (const x of rows) notify([x.uid], "연락 후속 조치", `오늘까지 할 후속 조치 ${x.n}건이 있어요.`, (s) => (s.volunteer ? "/#/vcontacts" : "/"), "followup");
 }
 
 const NOTICE_AUDIENCES = ["all", "staff", "lead", "admin"];
@@ -3460,6 +3489,8 @@ async function api(req, res, path) {
     }
     if (path.startsWith("/api/ops/")) { if (await opsRoute(req, res, user, path, method)) return; return send(res, 404, { error: "찾을 수 없어요." }); }
     if (user.vol_kind === "team") {
+      // 일정(보기·내 일정 적기)은 팀 봉사자도 (단계형 메뉴 '소통 › 일정')
+      if (/^\/api\/volunteer\/(home|schedules(\/\d+)?)$/.test(path) && await volunteerRoute(req, res, user, path, method, url)) return;
       if (path.startsWith("/api/team/")) { if (await teamRoute(req, res, user, path, method)) return; return send(res, 404, { error: "찾을 수 없어요." }); }
       if (path.startsWith("/api/volunteer/")) return send(res, 403, { error: "팀 봉사자 계정으로는 볼 수 없어요." });
     } else if (path.startsWith("/api/team/issue")) { if (await teamRoute(req, res, user, path, method)) return; return send(res, 404, { error: "찾을 수 없어요." }); } // 이슈는 부서 봉사자도 (단계형 메뉴 '소통')

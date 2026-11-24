@@ -640,7 +640,7 @@ jobs:
           TT=$(curl -fs -XPOST -H 'content-type: application/json' -d "{\"login\":\"teamv\",\"password\":\"$TPW\",\"as\":\"team\"}" $B/login | node -pe 'const d=JSON.parse(require("fs").readFileSync(0));if(d.user.volKind!=="team")process.exit(1);d.token')
           TH="$(bearer "$TT")"
           curl -fs -H "$TH" $B/team/home >/dev/null
-          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" $B/volunteer/home)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" $B/volunteer/home)" = 200; test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" $B/volunteer/stock)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" $B/team/home)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" $B/team/home)" = 403
           TO=$(curl -fs -H "$TH" $B/team/orgs | node -pe 'const o=JSON.parse(require("fs").readFileSync(0)).orgs;if(!o.length)process.exit(1);o[0].id')
@@ -726,7 +726,7 @@ jobs:
           # 연락 기록: 모두 적고 봄, 고치기는 적은 사람·관리자(완료 표시는 누구나), 기한 지난 후속 조치는 건수로
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d '{"targetType":"monastery","date":"2030-06-01"}' $B/ops/contacts)" = 400
           CL=$(curl -fs -H "$TH" -XPOST -d '{"targetType":"monastery","monasteryId":'$MID',"date":"2026-11-01","method":"phone","purpose":"recovery","content":"묵주 보내 달라고 안내","followUp":"도착 확인","dueDate":"2026-11-02"}' $B/ops/contacts | JQ 'const x=d.logs[0];if(!x.mine||!x.overdue||x.target==="")process.exit(1);console.log(x.id)')
-          curl -fs -H "$TH" $B/ops/counts | JQ 'if(d.counts.followups!==1||d.counts.tedu4<1)process.exit(1)'
+          curl -fs -H "$TH" $B/ops/counts | JQ 'if(d.counts.followups!==1||d.counts.tedu4!==undefined)process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPATCH -d '{"content":"x"}' $B/ops/contacts/$CL)" = 403
           curl -fs -H "$VH" -XPATCH -d '{"done":true}' $B/ops/contacts/$CL | JQ 'if(!d.logs.find(x=>x.id==='$CL').done)process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XDELETE $B/ops/contacts/$CL)" = 403
@@ -1131,6 +1131,18 @@ jobs:
           test "$(CODE -H "$VH" -XPATCH -d '{"color":"#123456"}' $B/ops/stock-options/$SOPT)" = 403; test "$(CODE -H "$H" -XPATCH -d '{"color":"red;x"}' $B/ops/stock-options/$SOPT)" = 400
           curl -fs -H "$H" -XPATCH -d '{"color":"#123456"}' $B/ops/stock-options/$SOPT >/dev/null; curl -fs -H "$H" $B/stock/$SLI | JQ 'if(d.options.find(o=>o.id=='$SOPT').color!=="#123456")process.exit(1)'
           curl -fs -H "$H" -XPATCH -d '{"color":"none"}' $B/ops/stock-options/$SOPT >/dev/null; curl -fs -H "$H" $B/ops/stock | JQ 'if(d.ledgers.find(l=>l.id=='$SLI').options[0].color!=="")process.exit(1)'
+          # 내 교육: 명단에 내 계정이 이어진 진행 봉사자 기준 · 팀의 일정 보기 · 택배로 온 회수를 또 적으면 확인 · 검수 기준 사진
+          W1=$(EDU "내교육 하나" 2030-11-10)
+          RO=$(curl -fs -H "$H" -XPOST -d '{"call":"이음","kind":"making","userId":'$(USR volb)'}' $B/admin/vol-roster | JQ 'console.log(d.roster.find(r=>r.call==="이음").id)')
+          curl -fs -H "$H" -XPATCH -d '{"helpers":[{"id":'$RO'}]}' $B/admin/vol-edu/$W1 >/dev/null
+          curl -fs -H "$T2" $B/team/orgs | JQ 'if(!d.orgs.find(o=>o.id==='$W1').mine||d.orgs.filter(o=>o.mine).length!==1)process.exit(1)'; curl -fs -H "$TH" $B/team/orgs | JQ 'if(d.orgs.some(o=>o.mine))process.exit(1)'
+          WM=$(ORG $W1 monasteryId); curl -fs -H "$VH" -XPOST -d '{"direction":"in","kind":"inspect","partyType":"monastery","monasteryId":'$WM',"status":"sent","qty":3}' $B/ops/shipments >/dev/null
+          test "$(CODE -H "$T2" -XPOST -d '{"scheduleId":'$W1',"date":"2030-11-11","qty":3,"method":"parcel"}' $B/team/recovery)" = 409; test "$(CODE -H "$T2" -XPOST -d '{"scheduleId":'$W1',"date":"2030-11-11","qty":3,"method":"visit"}' $B/team/recovery)" = 201
+          curl -fs -H "$T2" $B/volunteer/home >/dev/null; test "$(CODE -H "$T2" -XPATCH -d '{"qty":1}' $B/volunteer/schedules/$W1/qty)" = 403; test "$(CODE -H "$T2" $B/volunteer/projects)" = 403
+          CPOST() { printf '{"kind":"%s","key":"%s","data":"%s"}' "$2" "$3" "$PNG" > /tmp/ps/cp.json; CODE -H "$1" -XPOST -d @/tmp/ps/cp.json $B/ops/criteria-photos; }
+          test "$(CPOST "$T2" ok "")" = 403; test "$(CPOST "$TH" bad "")" = 400; test "$(CPOST "$TH" bad 없음)" = 400
+          for i in 1 2 3 4; do test "$(CPOST "$TH" bad knot)" = 201; done; CP=$(BODY 'if(d.photos.length!==4)process.exit(1);console.log(d.photos[0].id)')
+          test "$(CPOST "$TH" bad knot)" = 400; test "$(CODE -H "$T2" $B/ops/criteria-photos/$CP)" = 200; test "$(CODE -H "$T2" -XDELETE $B/ops/criteria-photos/$CP)" = 403; test "$(CODE -H "$TH" -XDELETE $B/ops/criteria-photos/$CP)" = 200
           curl -fs -H "$H" -XPATCH -d '{"role":"volunteer","volKinds":["dept"],"volLeader":false}' $B/admin/users/$(USR volb) >/dev/null
           curl -fs -H "$H" -XPATCH -d '{"volLeader":false}' $B/admin/users/$(USR teamv) >/dev/null
           curl -fs -H "$H" -XPUT -d '{"staffOn":false}' $B/ops/perms >/dev/null
@@ -1160,11 +1172,11 @@ jobs:
           J="{\"login\":\"bothv\",\"password\":\"$BPW\",\"as\":\"staff\"}"; test "$(curl -s -o /dev/null -w '%{http_code}' -XPOST -H 'content-type: application/json' -d "$J" $B/login)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$BD")" $B/team/home)" = 403
           curl -fs -H "$(bearer "$BD")" $B/volunteer/home >/dev/null
-          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$BT")" $B/volunteer/home)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$BT")" $B/volunteer/stock)" = 403
           curl -fs -H "$(bearer "$BT")" $B/team/orgs | grep -q '연락처 칸'
           curl -fs -H "$(bearer "$BD")" -XPOST -d '{"mode":"team"}' $B/vol-mode | node -e 'if(JSON.parse(require("fs").readFileSync(0)).user.volKind!=="team")process.exit(1)'
           curl -fs -H "$(bearer "$BD")" $B/team/home >/dev/null
-          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$BD")" $B/volunteer/home)" = 403
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$BD")" $B/volunteer/stock)" = 403
           curl -fs -H "$(bearer "$BD")" $B/me | node -e 'const u=JSON.parse(require("fs").readFileSync(0)).user;if(u.volKind!=="team"||u.role!=="volunteer")process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XPOST -d '{"mode":"dept"}' $B/vol-mode)" = 403
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d '{"mode":"team"}' $B/vol-mode)" = 403
