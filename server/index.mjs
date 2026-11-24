@@ -2144,15 +2144,51 @@ function shipmentsOut() {
       status: x.status, sentDate: x.sent_date || "", arrivedDate: x.arrived_date || "", handlerId: x.handler_id, handler: x.handler || "", scheduleId: x.schedule_id,
       schedule: x.schedule_title ? x.schedule_title.split(" · ").pop() : "", note: x.note, author: x.author || "", createdBy: x.created_by, recoveryId: x.recovery_id || null, updatedAt: x.updated_at }));
 }
-// 택배 수신(도착)이 수도회 물량이면 회수 기록을 하나 만들어 검수 대기 목록에 보이게 (이미 이어진 회수가 있으면 그대로)
+// 택배를 받을 교육(방문 일정): 택배에 적힌 일정이 그 수도회 것이면 그것, 아니면 그 수도회의 가장 최근 교육
+function shipmentSchedule(sh) {
+  if (sh.schedule_id && db.prepare("SELECT 1 FROM vol_schedules WHERE id = ? AND monastery_id = ?").get(sh.schedule_id, sh.monastery_id)) return sh.schedule_id;
+  return db.prepare("SELECT id FROM vol_schedules WHERE monastery_id = ? AND project_item_id = ? ORDER BY date DESC LIMIT 1").get(sh.monastery_id, rosaryGroupId())?.id || null;
+}
+const shipmentArrived = (sh) => sh.direction === "in" && sh.status === "arrived" && !!sh.monastery_id;
+const NO_EDU_NOTICE = "이 수도회에 교육이 없어서 회수 기록과 검수 대기는 만들지 않았어요. 교육을 등록한 뒤 이 택배를 다시 저장하면 넘어가요.";
+const raiseRecovered = (mid) => db.prepare("UPDATE monasteries SET status = 'recovered', updated_at = datetime('now') WHERE id = ? AND status IN ('new', 'edu_done', 'making')").run(mid); // 문제 있음·검수완료는 그대로
+// 택배 수신(도착)이 수도회 물량이면 회수 기록을 하나 만들어 검수 대기 목록에 보이게. 교육이 없으면 아무것도 바꾸지 않고 안내만
 function recoveryFromShipment(sh, user) {
-  if (sh.direction !== "in" || sh.status !== "arrived" || !sh.monastery_id) return null;
-  if (db.prepare("SELECT 1 FROM team_recovery WHERE shipment_id = ?").get(sh.id)) return null;
-  // 수도회 상태: 아직 회수 전 단계면 '회수완료'로 (문제 있음·검수완료는 그대로)
-  db.prepare("UPDATE monasteries SET status = 'recovered', updated_at = datetime('now') WHERE id = ? AND status IN ('new', 'edu_done', 'making')").run(sh.monastery_id);
-  const gid = rosaryGroupId();
-  const sid = sh.schedule_id || db.prepare("SELECT id FROM vol_schedules WHERE monastery_id = ? AND project_item_id = ? ORDER BY date DESC LIMIT 1").get(sh.monastery_id, gid)?.id;
-  if (!sid) return null;
+  if (!shipmentArrived(sh) || db.prepare("SELECT 1 FROM team_recovery WHERE shipment_id = ?").get(sh.id)) return "";
+  const sid = shipmentSchedule(sh);
+  if (!sid) return NO_EDU_NOTICE;
+  addShipmentRecovery(sid, sh, user);
+  raiseRecovered(sh.monastery_id);
+  return "";
+}
+// 택배를 고친 뒤(next) 또는 지울 때(next = null) 이어진 회수 기록을 맞춤. 돌려주는 값은 화면 안내
+//   검수가 이어져 있으면 수량·도착일·수도회·도착 상태를 못 바꿈. 팀 봉사자가 회수 기록을 직접 고쳤으면 물어보고(409): sync = overwrite 맞춤 · keep 택배만 저장
+function syncShipmentRecovery(old, next, user, sync) {
+  const rec = db.prepare("SELECT r.*, s.monastery_id AS mid FROM team_recovery r JOIN vol_schedules s ON s.id = r.schedule_id WHERE r.shipment_id = ?").get(old.id);
+  if (!rec) return next ? recoveryFromShipment(next, user) : "";
+  if (next && !shipmentArrived(next) && !shipmentArrived(old)) return ""; // 도착이 아니었고 지금도 아니면 손대지 않음
+  const on = !!next && shipmentArrived(next), moved = on && next.monastery_id !== old.monastery_id, sid = moved ? shipmentSchedule(next) : rec.schedule_id;
+  const qtyChanged = on && (next.qty || 0) !== (old.qty || 0), dateChanged = on && next.arrived_date !== old.arrived_date;
+  if (on && !moved && !qtyChanged && !dateChanged) return "";
+  const n = db.prepare("SELECT count(*) AS n FROM inspections WHERE recovery_id = ?").get(rec.id).n;
+  if (n) throw bad(`이 택배로 생긴 회수 기록에 검수 ${n}건이 이어져 있어 ${next ? "수량·도착일·수도회·도착 상태를 바꿀" : "지울"} 수 없어요. 검수 기록을 먼저 고치거나 관리자에게 알려 주세요.`);
+  const drop = !on || !sid, edited = { qty: rec.qty !== (old.qty || 0), date: rec.date !== (old.arrived_date || rec.date), org: rec.mid !== old.monastery_id };
+  // 회수를 지우거나 옮길 때는 어느 칸이든, 아니면 바꾸려는 칸을 팀에서 직접 고쳤을 때 (이미 같은 값이면 묻지 않음)
+  const clash = [edited.qty && (drop || moved || (qtyChanged && rec.qty !== (next.qty || 0))) && `수량 ${rec.qty}개`, edited.date && (drop || moved || (dateChanged && rec.date !== next.arrived_date)) && `날짜 ${rec.date}`, edited.org && (drop || moved) && "수도회"].filter(Boolean);
+  if (clash.length && !["overwrite", "keep"].includes(sync)) throw needConfirm("팀 봉사자가 회수 기록을 직접 고쳤어요.", { mode: "recovery", drop, edited: clash });
+  if (clash.length && sync === "keep" && next) return "회수 기록은 팀 봉사자가 고친 값 그대로 뒀어요.";
+  if (drop) {
+    db.prepare("DELETE FROM team_recovery WHERE id = ?").run(rec.id);
+    if (rec.mid) fitMonasteryStatus(rec.mid, true);
+    return on ? NO_EDU_NOTICE : "이어진 회수 기록과 검수 대기도 함께 정리했어요.";
+  }
+  db.prepare("UPDATE team_recovery SET schedule_id = ?, qty = ?, date = ?, updated_at = datetime('now') WHERE id = ?")
+    .run(sid, qtyChanged || moved ? next.qty || 0 : rec.qty, dateChanged || moved ? next.arrived_date : rec.date, rec.id);
+  if (moved) { if (rec.mid) fitMonasteryStatus(rec.mid, true); raiseRecovered(next.monastery_id); }
+  fitMonasteryStatus(next.monastery_id);
+  return "이어진 회수 기록도 함께 맞췄어요.";
+}
+function addShipmentRecovery(sid, sh, user) {
   return Number(db.prepare("INSERT INTO team_recovery (schedule_id, date, qty, method, note, created_by, shipment_id) VALUES (?, ?, ?, 'parcel', ?, ?, ?)")
     .run(sid, sh.arrived_date || today(), sh.qty || 0, sh.contents ? `택배: ${sh.contents}`.slice(0, 500) : "택배 수신", user.id, sh.id).lastInsertRowid);
 }
@@ -2311,13 +2347,14 @@ async function opsRoute(req, res, user, path, method) {
   if (path === "/api/ops/shipments" && method === "POST") {
     if (!r.can("shipments", "e")) return deny("택배 기록은 부서 봉사자·직원과 관리자가 적어요.");
     const v = shipmentInput(await readJson(req));
+    let notice = "";
     const id = inTx(() => {
       const id = Number(db.prepare(`INSERT INTO shipments (direction, party_type, monastery_id, user_id, external_contact_id, party_name, address, carrier, tracking_no, contents, qty, status, sent_date, arrived_date, handler_id, schedule_id, note, created_by)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.direction, v.party_type, v.monastery_id, v.user_id, v.external_contact_id, v.party_name, v.address, v.carrier, v.tracking_no, v.contents, v.qty, v.status, v.sent_date, v.arrived_date, v.handler_id, v.schedule_id, v.note, user.id).lastInsertRowid);
-      recoveryFromShipment(db.prepare("SELECT * FROM shipments WHERE id = ?").get(id), user);
+      notice = recoveryFromShipment(db.prepare("SELECT * FROM shipments WHERE id = ?").get(id), user);
       return id;
     });
-    return ok(201, { id, shipments: shipmentsOut() });
+    return ok(201, { id, notice, shipments: shipmentsOut() });
   }
   const shm = path.match(/^\/api\/ops\/shipments\/(\d+)$/);
   if (shm) {
@@ -2325,19 +2362,21 @@ async function opsRoute(req, res, user, path, method) {
     if (!x) throw notFound("택배 기록");
     if (!r.can("shipments", "e")) return deny("택배 기록은 부서 봉사자·직원과 관리자가 고쳐요.");
     if (method === "PATCH") {
-      const v = shipmentInput(await readJson(req), x);
+      const b = await readJson(req), v = shipmentInput(b, x);
+      let notice = "";
       inTx(() => {
         db.prepare(`UPDATE shipments SET party_type = ?, monastery_id = ?, user_id = ?, external_contact_id = ?, party_name = ?, address = ?, carrier = ?, tracking_no = ?, contents = ?, qty = ?, status = ?, sent_date = ?, arrived_date = ?, handler_id = ?, schedule_id = ?, note = ?, updated_at = datetime('now') WHERE id = ?`)
           .run(v.party_type, v.monastery_id, v.user_id, v.external_contact_id, v.party_name, v.address, v.carrier, v.tracking_no, v.contents, v.qty, v.status, v.sent_date, v.arrived_date, v.handler_id, v.schedule_id, v.note, x.id);
-        recoveryFromShipment(db.prepare("SELECT * FROM shipments WHERE id = ?").get(x.id), user);
+        notice = syncShipmentRecovery(x, db.prepare("SELECT * FROM shipments WHERE id = ?").get(x.id), user, b.syncRecovery);
       });
-      return ok(200, { shipments: shipmentsOut() });
+      return ok(200, { notice, shipments: shipmentsOut() });
     }
     if (method === "DELETE") {
       if (!r.admin && x.created_by !== user.id) return deny("적은 사람과 관리자만 지울 수 있어요.");
       if (db.prepare("SELECT 1 FROM team_recovery WHERE shipment_id = ?").get(x.id) && !r.admin) return deny("회수 기록과 이어진 택배는 관리자만 지울 수 있어요.");
-      db.prepare("DELETE FROM shipments WHERE id = ?").run(x.id);
-      return ok(200, { shipments: shipmentsOut() });
+      const sync = new URL(req.url, "http://x").searchParams.get("syncRecovery");
+      const notice = inTx(() => { const n = syncShipmentRecovery(x, null, user, sync === "overwrite" ? sync : undefined); db.prepare("DELETE FROM shipments WHERE id = ?").run(x.id); return n; });
+      return ok(200, { notice, shipments: shipmentsOut() });
     }
     return ok(405, { error: "Method not allowed" });
   }

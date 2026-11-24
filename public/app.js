@@ -7406,6 +7406,16 @@
         ], s.status === "sent" && inbound ? "is-new-ish" : ""), view === "open" ? (inbound ? "오는 중인 택배가 없어요." : "보낼 준비 중인 택배가 없어요.") : "아직 택배 기록이 없어요."),
         can ? opsAddBtn(inbound ? "받을 택배 적기" : "보낼 택배 적기", () => edit(null)) : opsHint(readOnly ? "택배는 부서 봉사자가 적어요. 도착하면 회수 기록이 생겨 검수 대기로 넘어와요." : ""));
     };
+    // 팀 봉사자가 회수 기록을 직접 고쳤으면(409) 맞출지, 택배만 저장할지 물어봄. 둘 다 아니면 저장하지 않음
+    const askSync = async (send, canKeep) => {
+      try { return await send(); } catch (ex) {
+        if (ex.confirm?.mode !== "recovery") throw ex;
+        const what = ex.confirm.edited.join(", ");
+        if (confirm(`팀 봉사자가 이어진 회수 기록을 직접 고쳤어요 (${what}).\n확인을 누르면 ${ex.confirm.drop ? "그 회수 기록을 지우고" : "회수 기록을 택배에 맞추고"} ${canKeep ? "저장해요" : "택배도 지워요"}.`)) return send("overwrite");
+        if (canKeep && confirm("회수 기록은 그대로 두고 택배만 저장할까요?")) return send("keep");
+        return null;
+      }
+    };
     const edit = (s) => {
       const party = opsSel(Object.entries(SHIP_PARTY), s?.partyType || "monastery");
       const mon = opsSel(mons.map((x) => [x.id, x.name]), s?.monasteryId, "수도회 고르기");
@@ -7424,17 +7434,24 @@
       const sent = h("input", { type: "date", value: s?.sentDate || "" }), arrived = h("input", { type: "date", value: s?.arrivedDate || "" });
       const note = h("textarea", { rows: "2", maxlength: "500" }, s?.note || "");
       opsSheet(s ? (inbound ? "받을 택배" : "보낼 택배") : inbound ? "받을 택배 적기" : "보낼 택배 적기", [
-        h("div", { class: "row2" }, [field(inbound ? "보낸 곳" : "받는 곳", party), field("상태", status, inbound ? "받으면 '도착'으로 바꿔요. 수도회 물량은 검수 대기로 넘어가요" : "보내면 '발송'으로 바꿔요")]), monF, nameF, field("주소", addr),
+        h("div", { class: "row2" }, [field(inbound ? "보낸 곳" : "받는 곳", party), field("상태", status, inbound ? (s?.recoveryId ? "회수·검수 대기로 넘어간 택배예요. 고치면 회수 기록도 함께 바뀌어요" : "받으면 '도착'으로 바꿔요. 수도회 물량은 검수 대기로 넘어가요") : "보내면 '발송'으로 바꿔요")]), monF, nameF, field("주소", addr),
         h("div", { class: "row2" }, [field("내용물", contents), field("수량", qty)]),
         h("div", { class: "row2" }, [field("택배사", h("span", {}, [carrier, carriers])), field("송장번호", track)]),
         h("div", { class: "row2" }, [field("발송일", sent), field("도착일", arrived)]), field("메모", note)
       ], {
         save: async () => {
           const body = { direction: dir, partyType: party.value, monasteryId: party.value === "monastery" ? mon.value : null, partyName: party.value === "monastery" ? "" : pname.value, address: addr.value, carrier: carrier.value, trackingNo: track.value, contents: contents.value, qty: qty.value, status: status.value, sentDate: sent.value, arrivedDate: arrived.value, note: note.value, ...(s ? {} : { handlerId: state.user.id }) };
-          d = { ...d, ...(await api(s ? `/ops/shipments/${s.id}` : "/ops/shipments", { method: s ? "PATCH" : "POST", body })) };
-          toast(status.value === "arrived" && inbound ? "도착 처리했어요. 수도회 물량은 검수 대기로 넘어가요." : "저장했어요."); draw();
+          const r = await askSync((sync) => api(s ? `/ops/shipments/${s.id}` : "/ops/shipments", { method: s ? "PATCH" : "POST", body: sync ? { ...body, syncRecovery: sync } : body }), true);
+          if (!r) return false;
+          d = { ...d, ...r };
+          toast(r.notice || (status.value === "arrived" && inbound ? "도착 처리했어요. 수도회 물량은 검수 대기로 넘어가요." : "저장했어요.")); draw();
         },
-        del: s ? async () => { if (!confirm("이 택배 기록을 지울까요?")) return false; d = { ...d, ...(await api(`/ops/shipments/${s.id}`, { method: "DELETE" })) }; draw(); } : null
+        del: s ? async () => {
+          if (!confirm(s.recoveryId ? "이 택배 기록을 지울까요? 이어진 회수 기록과 검수 대기도 함께 지워져요." : "이 택배 기록을 지울까요?")) return false;
+          const r = await askSync((sync) => api(`/ops/shipments/${s.id}${sync ? `?syncRecovery=${sync}` : ""}`, { method: "DELETE" }), false);
+          if (!r) return false;
+          d = { ...d, ...r }; if (r.notice) toast(r.notice); draw();
+        } : null
       });
     };
     draw();
