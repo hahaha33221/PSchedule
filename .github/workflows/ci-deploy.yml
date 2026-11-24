@@ -660,7 +660,7 @@ jobs:
           curl -fs -H "$TH" $B/me | node -e 'if(!JSON.parse(require("fs").readFileSync(0)).user.volLeader)process.exit(1)'
           NO=$(curl -fs -H "$TH" -XPOST -d '{"org":"새 수도회","place":"명동","qty":50}' $B/team/orgs | node -pe 'const d=JSON.parse(require("fs").readFileSync(0));const o=d.orgs.find(x=>x.id===d.id);if(!o.tableOnly||o.org!=="새 수도회"||o.reqQty!==50||!o.deletable)process.exit(1);d.id')
           if curl -fs -H "$VH" $B/volunteer/home | grep -q '새 수도회'; then echo "날짜 없는 교육이 달력에 보여요"; exit 1; fi
-          curl -fs -H "$TH" -XPATCH -d '{"org":"고친 수도회","place":"혜화"}' $B/team/orgs/$NO | node -e 'const o=JSON.parse(require("fs").readFileSync(0)).org;if(o.org!=="고친 수도회"||o.place!=="혜화")process.exit(1)'
+          curl -fs -H "$TH" -XPATCH -d '{"org":"고친 수도회","orgConfirm":"rename","place":"혜화"}' $B/team/orgs/$NO | node -e 'const o=JSON.parse(require("fs").readFileSync(0)).org;if(o.org!=="고친 수도회"||o.place!=="혜화")process.exit(1)'
           curl -fs -H "$TH" -XDELETE $B/team/orgs/$NO | node -e 'if(JSON.parse(require("fs").readFileSync(0)).orgs.some(o=>o.org==="고친 수도회"))process.exit(1)'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XDELETE $B/team/orgs/$TO)" = 400
           # 날짜별 필요 인원: 리더·관리자가 정함(0 이면 지움), 봉사 가능 응답에 같이 옴. 제품 회수: 수도회별 합계, 지우기는 적은 사람·리더·관리자

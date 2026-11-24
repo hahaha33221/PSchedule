@@ -181,7 +181,7 @@
       throw Object.assign(new Error("다시 로그인해 주세요."), { status: 401 });
     }
     const data = res.status === 204 ? {} : await res.json().catch(() => ({}));
-    if (!res.ok) throw Object.assign(new Error(data.error || "문제가 생겼어요. 잠시 뒤 다시 시도해 주세요."), { status: res.status, field: data.field, as: data.as });
+    if (!res.ok) throw Object.assign(new Error(data.error || "문제가 생겼어요. 잠시 뒤 다시 시도해 주세요."), { status: res.status, field: data.field, as: data.as, confirm: data.confirm });
     return data;
   }
   // 고치고 나서 화면 새로고침 (실패하면 알림만)
@@ -6657,6 +6657,20 @@
       const made = h("input", { type: "number", min: "0", inputmode: "numeric", value: o.madeQty ?? "" });
       const due = h("input", { value: o.madeDue, maxlength: "40", placeholder: "예: 12월 말" });
       const contact = isAdmin() ? h("textarea", { rows: "2", maxlength: "300", placeholder: "담당자 이름 · 전화 · 이메일 (관리자만 적어요)" }, o.contact) : null;
+      // 수도회 이름을 고치면 무엇이 바뀌는지 먼저 보여 주고 고르게 함 (서버가 409 로 알려 줌)
+      const orgAsk = h("div", { class: "card stack stack--sm org-ask", role: "alert", hidden: true });
+      const askOrg = (c, go) => {
+        const btn = (t, v, main) => h("button", { class: `btn btn--sm ${main ? "btn--primary" : "btn--ghost"}`, type: "button", text: t, onclick: () => { orgAsk.hidden = true; go(v); } });
+        const lines = c.mode === "similar" ? [`'${c.to}'와(과) 띄어쓰기·괄호만 다른 수도회가 이미 있어요. 같은 곳이면 그 수도회로 옮겨 주세요.`]
+          : c.mode === "move" ? [`'${c.to}'은(는) 이미 있는 수도회예요. 이 교육 하나만 '${c.from}'에서 '${c.to}'(으)로 옮겨요.`]
+            : c.mode === "rename" ? [`수도회 이름을 '${c.from}'에서 '${c.to}'(으)로 바꿔요.`, c.edus > 1 ? `이 수도회의 교육 ${c.edus}건 제목이 모두 바뀌어요. 이 교육만 다른 수도회라면 취소해 주세요.` : "연락처·상태는 그대로예요."]
+              : [`'${c.to}' 수도회를 새로 만들어 이 교육과 이어요.`];
+        fill(orgAsk, h("strong", { text: "수도회 이름이 바뀌어요" }), ...lines.map((t) => h("p", { class: "small", text: t })), h("div", { class: "actions actions--start" }, [
+          ...(c.mode === "similar" ? [...c.similar.map((m, i) => btn(`'${m.name}'(으)로 옮기기`, `similar:${m.id}`, !i)), btn(`그래도 '${c.to}'(으)로`, "force")]
+            : [btn(c.mode === "move" ? "이 교육만 옮기기" : c.mode === "rename" ? "이름 바꾸기" : "새로 만들기", c.mode === "move" ? `move:${c.targetId}` : c.mode, true)]),
+          h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "취소", onclick: () => { orgAsk.hidden = true; } })]));
+        orgAsk.hidden = false; orgAsk.scrollIntoView({ block: "center" });
+      };
       const inqBox = h("div", { class: "stack stack--sm" });
       const drawInq = async () => {
         const { inquiries } = await api(`/team/orgs/${o.id}/inquiries`);
@@ -6679,7 +6693,7 @@
       const form = h("form", { class: "stack", novalidate: true }, [
         h("p", { class: "muted small", text: [`교육 순서 ${o.no}`, o.fromForm ? "네이버폼 신청" : "신청서 없음", o.updatedBy ? `마지막 수정 ${o.updatedBy}` : ""].filter(Boolean).join(" · ") }),
         h("h3", { class: "team-sec", text: "교육 일정" }),
-        h("div", { class: "row2" }, [field("수도회", orgName), field("장소", place)]),
+        h("div", { class: "row2" }, [field("수도회", orgName), field("장소", place)]), orgAsk,
         h("div", { class: "row2" }, [field(o.tableOnly ? "교육 날짜 (정하면 달력에 보여요)" : "교육 날짜", date, o.tableOnly && o.fromForm ? `신청서의 희망일 ${o.date}` : null), field("시작 시간", time)]),
         h("div", { class: "row2" }, [field("상태", status), field("담당 봉사자", helper)]),
         h("h3", { class: "team-sec", text: "교육 결과" }),
@@ -6700,21 +6714,21 @@
           } }) : null,
           h("button", { class: "btn btn--ghost", type: "button", text: "닫기", "data-close": true }), ok])
       ]);
-      form.addEventListener("submit", (e) => {
-        e.preventDefault();
+      const submit = (orgConfirm) => {
         busy(ok, async () => {
           try {
             if (!orgName.value.trim()) return showError(err, "수도회 이름을 적어 주세요.");
-            const body = { org: orgName.value, place: place.value, helper: helper.value, attend: attend.value, resultNote: result.value, madeQty: made.value, madeDue: due.value };
+            const body = { ...(orgName.value.trim() !== o.org.trim() ? { org: orgName.value, ...(orgConfirm ? { orgConfirm } : {}) } : {}), place: place.value, helper: helper.value, attend: attend.value, resultNote: result.value, madeQty: made.value, madeDue: due.value };
             if (date.value && (o.tableOnly || date.value !== o.date || time.value !== (o.startTime || ""))) Object.assign(body, { date: date.value, startTime: time.value });
             if (status.value !== o.status) Object.assign(body, { status: status.value, statusFrom: o.status }); // 바꿨을 때만 (관리자 '교육 기록'과 같은 값)
             if (contact) body.contact = contact.value;
             const r = await api(`/team/orgs/${o.id}`, { method: "PATCH", body });
-            orgs = orgs.map((x) => (x.id === o.id ? r.org : x));
+            orgs = body.org ? (await api("/team/orgs")).orgs : orgs.map((x) => (x.id === o.id ? r.org : x)); // 이름을 바꾸면 다른 교육 제목도 바뀔 수 있어 다시 받음
             closeDialog(); toast("저장했어요."); draw();
-          } catch (ex) { showError(err, ex.message); }
+          } catch (ex) { if (ex.confirm) { showError(err, ""); return askOrg(ex.confirm, submit); } showError(err, ex.message); }
         });
-      });
+      };
+      form.addEventListener("submit", (e) => { e.preventDefault(); submit(); });
       openDialog(o.org, form, { wide: true });
       drawInq().catch((ex) => showError(err, ex.message));
       // 문의만 바꾸고 닫아도 목록 숫자가 맞게

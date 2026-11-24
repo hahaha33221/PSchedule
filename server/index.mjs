@@ -1054,6 +1054,8 @@ function viewer(user, mine) {
   return { admin: user.role === "admin" && !mine ? 1 : 0, uid: user.id, units: JSON.stringify(visibleUnits(user)) };
 }
 const viewUnitsOut = (userId) => q.viewUnits.all(userId).map((g) => ({ unitId: g.unit_id, sub: !!g.sub }));
+// 저장하기 전에 사람이 확인해야 하는 것 (409): 화면이 confirm 을 보여 주고, 확인 값을 붙여 다시 보냄
+const needConfirm = (message, confirm) => Object.assign(new Error(message), { status: 409, expose: true, confirm });
 const notFound = (what) => Object.assign(new Error(`${what}을(를) 찾을 수 없어요. 지워졌거나 볼 수 없는 팀의 항목이에요.`), { status: 404, expose: true });
 // 항목의 팀: 보내면 그 팀 (이미 있는 항목은 만든 사람·관리자만), 안 보내면 새로 만들 땐 연결한 회의의 팀 → 만든 사람의 소속
 function itemUnit(b, user, cur, meetingId) {
@@ -1459,6 +1461,18 @@ function delSchedule(s) {
   if (links) throw bad(`${linksText(links)}이(가) 이어져 있어 지울 수 없어요. 그 기록을 다른 교육으로 옮기거나 지운 뒤 다시 해 주세요.`);
   q.delVolSchedule.run(s.id);
 }
+// 교육 하나만 다른 수도회로 옮김. 택배로 받은 회수가 있으면 택배의 수도회와 어긋나므로 막음. 회수·완료 상태는 두 수도회 모두 남은 기록에 맞춤
+function moveEduTo(s, target, name) {
+  const n = db.prepare("SELECT count(*) AS n FROM team_recovery r JOIN shipments x ON x.id = r.shipment_id WHERE r.schedule_id = ? AND x.monastery_id IS NOT ?").get(s.id, target.id).n;
+  if (n) throw bad(`택배로 받은 회수 기록 ${n}건이 있어 다른 수도회로 옮길 수 없어요. 택배 기록의 수도회를 먼저 고쳐 주세요.`);
+  db.prepare("UPDATE vol_schedules SET title = ?, monastery_id = ? WHERE id = ?").run(`묵주 교육 · ${name}`, target.id, s.id);
+  if (eduStatus(s.progress, q.teamOrgInfo.get(s.id)?.status) === "done") db.prepare("UPDATE monasteries SET status = 'edu_done', updated_at = datetime('now') WHERE id = ? AND status = 'new'").run(target.id);
+  if (db.prepare("SELECT 1 FROM team_recovery WHERE schedule_id = ?").get(s.id)) {
+    db.prepare("UPDATE monasteries SET status = 'recovered', updated_at = datetime('now') WHERE id = ? AND status IN ('new', 'edu_done', 'making')").run(target.id);
+    fitMonasteryStatus(target.id);
+    if (s.monastery_id) fitMonasteryStatus(s.monastery_id, true);
+  }
+}
 // 담당 수도회 = 묵주에 이어진 방문 일정(추가 전달 물량의 줄). 교육 순서는 날짜순 번호
 function teamOrgRows(admin) {
   const gid = rosaryGroupId();
@@ -1544,6 +1558,17 @@ async function teamRoute(req, res, user, path, method) {
     if (method === "PATCH") {
       const b = await readJson(req), f = q.teamOrgInfo.get(s.id) || {};
       if (has(b, "contact") && !admin) return ok(403, { error: "연락처는 관리자만 적어요." });
+      // 수도회 이름 고치기: 무엇이 바뀌는지 먼저 알려 주고(409), 화면이 확인(orgConfirm)을 붙여 다시 보내면 저장
+      const orgName = has(b, "org") && text(b.org, 80, "수도회 이름", true).replace(/·/g, " ").trim() !== s.title.split(" · ").pop().trim() ? monName(b.org) : s.title.split(" · ").pop().trim();
+      let plan = orgChangePlan(s, orgName);
+      if (["rename", "create"].includes(plan.mode) && plan.similar.length) {
+        const near = plan.similar.find((m) => String(b.orgConfirm) === `similar:${m.id}`);
+        if (near) plan = { mode: "move", from: plan.from, to: near.name, target: near };
+        else if (b.orgConfirm !== "force") throw needConfirm("띄어쓰기나 괄호만 다른 수도회가 이미 있어요.", { mode: "similar", from: plan.from, to: plan.to, edus: plan.edus, similar: plan.similar.map((m) => ({ id: m.id, name: m.name })) });
+      } else if (plan.mode !== "none" && b.orgConfirm !== (plan.mode === "move" ? `move:${plan.target.id}` : plan.mode)) {
+        throw needConfirm("수도회 이름을 바꾸면 무엇이 달라지는지 확인해 주세요.", { mode: plan.mode, from: plan.from, to: plan.to, edus: plan.edus, targetId: plan.target?.id });
+      }
+      if (plan.mode === "rename" && !opsRole(user).can("monasteries", "e")) return ok(403, { error: "수도회 이름을 고칠 수 없는 계정이에요." });
       const now = eduStatus(s.progress, f.status);
       let status = has(b, "status") ? String(b.status) : now;
       if (!TEAM_STATUS.includes(status)) throw bad("교육 상태를 확인해 주세요.");
@@ -1553,10 +1578,11 @@ async function teamRoute(req, res, user, path, method) {
       inTx(() => {
         // 교육 날짜를 정하면 달력에도 보이게 (달력 미정 → 일정)
         // 수도회 이름·장소 (팀 봉사자 모두)
-        if (has(b, "org") || has(b, "place")) {
-          const org = has(b, "org") ? text(b.org, 80, "수도회 이름", true).replace(/·/g, " ").trim() : s.title.split(" · ").pop();
-          db.prepare("UPDATE vol_schedules SET title = ?, place = ?, monastery_id = ? WHERE id = ?").run(`묵주 교육 · ${org}`, has(b, "place") ? text(b.place, 120, "장소") || "" : s.place, monasteryIdOf(org), s.id);
-        }
+        if (has(b, "place")) db.prepare("UPDATE vol_schedules SET place = ? WHERE id = ?").run(text(b.place, 120, "장소") || "", s.id);
+        if (plan.mode === "move") moveEduTo(s, plan.target, plan.to);
+        else if (plan.mode === "rename") { renameMonastery(plan.cur, plan.to); db.prepare("UPDATE vol_schedules SET title = ? WHERE id = ?").run(`묵주 교육 · ${plan.to}`, s.id); }
+        else if (plan.mode === "create") db.prepare("UPDATE vol_schedules SET title = ?, monastery_id = ? WHERE id = ?").run(`묵주 교육 · ${plan.to}`, monasteryIdOf(plan.to), s.id);
+        else if (plan.retitle) db.prepare("UPDATE vol_schedules SET title = ? WHERE id = ?").run(`묵주 교육 · ${orgName}`, s.id);
         if (has(b, "date")) {
           if (!isDate(b.date)) throw bad("교육 날짜를 확인해 주세요.");
           db.prepare("UPDATE vol_schedules SET date = ?, start_time = ?, table_only = 0 WHERE id = ?").run(b.date, has(b, "startTime") ? optTime(b.startTime) : s.start_time, s.id);
@@ -2028,6 +2054,29 @@ const CONTACT_METHODS = ["phone", "sms", "email", "visit", "etc"];
 const CONTACT_PURPOSES = ["", "recovery", "inspect", "thread", "purchase", "etc"];
 const pick = (v, list, label, dflt) => { const x = v == null || v === "" ? (dflt ?? "") : String(v); if (!list.includes(x)) throw bad(`${label}을(를) 골라 주세요.`); return x; };
 const optId = (v) => (v === "" || v == null ? null : Number.isInteger(Number(v)) && Number(v) > 0 ? Number(v) : (() => { throw bad("고른 항목을 확인해 주세요."); })());
+const monName = (v) => text(v, 80, "수도회 이름", true).replace(/·/g, " ").replace(/\s+/g, " ").trim();
+const monKey = (name) => String(name || "").replace(/[\s·()（）\[\]{}]/g, ""); // 띄어쓰기·괄호만 다른 이름 찾기
+// 이름 바꾸기: 이어진 방문 일정 제목('묵주 교육 · 이름')도 같이 바꿔 팀 화면과 맞춤 (네이버폼 신청의 원문 이름은 그대로)
+function renameMonastery(m, name) {
+  db.prepare("UPDATE monasteries SET name = ?, updated_at = datetime('now') WHERE id = ?").run(name, m.id);
+  for (const s2 of db.prepare("SELECT id, title FROM vol_schedules WHERE monastery_id = ? AND project_item_id IS NOT NULL").all(m.id)) {
+    const parts = s2.title.split(" · ");
+    if (parts.length > 1 && parts[parts.length - 1].trim() === m.name) db.prepare("UPDATE vol_schedules SET title = ? WHERE id = ?").run([...parts.slice(0, -1), name].join(" · "), s2.id);
+  }
+}
+// '교육 일정' 창에서 수도회 이름을 고칠 때 할 일: none 그대로 · move 이미 있는 수도회로 이 교육만 옮김 · rename 이어진 수도회 이름을 바꿈 · create 이어진 수도회가 없어 새로 만듦
+//   similar: 띄어쓰기·괄호만 다른 수도회가 따로 있음 (사람이 고름: 그 수도회로 옮기기 / 그래도 이 이름으로)
+function orgChangePlan(s, name) {
+  const from = s.title.split(" · ").pop().trim();
+  if (name === from) return { mode: "none" };
+  const cur = s.monastery_id ? db.prepare("SELECT * FROM monasteries WHERE id = ?").get(s.monastery_id) : null;
+  const target = db.prepare("SELECT * FROM monasteries WHERE name = ?").get(name);
+  if (target && target.id === cur?.id) return { mode: "none", retitle: true };
+  if (target) return { mode: "move", from, to: name, target };
+  const similar = db.prepare("SELECT * FROM monasteries").all().filter((m) => m.id !== cur?.id && monKey(m.name) === monKey(name));
+  const edus = cur ? db.prepare("SELECT count(*) AS n FROM vol_schedules WHERE monastery_id = ? AND project_item_id IS NOT NULL").get(cur.id).n : 0;
+  return { mode: cur ? "rename" : "create", from: cur ? cur.name : from, to: name, cur, edus, similar };
+}
 const monasteryIdOf = (name) => {
   const n = String(name || "").trim();
   if (!n) return null;
@@ -2212,7 +2261,6 @@ async function opsRoute(req, res, user, path, method) {
   if (path === "/api/ops/menu" && method === "GET") return ok(200, { menu: volMenu() }); // 팀 봉사자도 메뉴 공개 설정(단계형 메뉴)을 읽음
   // F01 수도회
   if (path === "/api/ops/monasteries" && method === "GET") { if (!r.can("monasteries", "v")) return deny("볼 수 없는 메뉴예요."); return ok(200, { monasteries: monasteriesOut(r), canEdit: r.can("monasteries", "e"), canPhone: r.admin }); }
-  const monName = (v) => text(v, 80, "수도회 이름", true).replace(/·/g, " ").replace(/\s+/g, " ").trim();
   if (path === "/api/ops/monasteries" && method === "POST") {
     if (!r.can("monasteries", "e")) return deny("수도회를 추가할 수 없는 계정이에요.");
     const b = await readJson(req), name = monName(b.name);
@@ -2237,16 +2285,13 @@ async function opsRoute(req, res, user, path, method) {
       note: has(b, "note") ? text(b.note, 1000, "메모") || "" : m.note
     };
     if (v.status === "issue" && !v.issue_note) throw bad("문제 내용을 적어 주세요.");
-    // 이름 바꾸기: 같은 이름이 있으면 막음. 이어진 방문 일정 제목('묵주 교육 · 이름')도 같이 바꿔 팀 화면과 맞춤 (네이버폼 신청의 원문 이름은 그대로)
+    // 이름 바꾸기: 같은 이름이 있으면 막음
     const name = has(b, "name") ? monName(b.name) : m.name;
     if (name !== m.name && db.prepare("SELECT 1 FROM monasteries WHERE name = ? AND id <> ?").get(name, m.id)) throw bad("같은 이름의 수도회가 있어요.");
     inTx(() => {
-      db.prepare("UPDATE monasteries SET name = ?, short_name = ?, contact_name = ?, phone = ?, address = ?, status = ?, issue_note = ?, note = ?, updated_at = datetime('now') WHERE id = ?")
-        .run(name, v.short_name, v.contact_name, v.phone, v.address, v.status, v.issue_note, v.note, m.id);
-      if (name !== m.name) for (const s2 of db.prepare("SELECT id, title FROM vol_schedules WHERE monastery_id = ? AND project_item_id IS NOT NULL").all(m.id)) {
-        const parts = s2.title.split(" · ");
-        if (parts.length > 1 && parts[parts.length - 1].trim() === m.name) db.prepare("UPDATE vol_schedules SET title = ? WHERE id = ?").run([...parts.slice(0, -1), name].join(" · "), s2.id);
-      }
+      db.prepare("UPDATE monasteries SET short_name = ?, contact_name = ?, phone = ?, address = ?, status = ?, issue_note = ?, note = ?, updated_at = datetime('now') WHERE id = ?")
+        .run(v.short_name, v.contact_name, v.phone, v.address, v.status, v.issue_note, v.note, m.id);
+      if (name !== m.name) renameMonastery(m, name);
     });
     return ok(200, { monasteries: monasteriesOut(r) });
   }
@@ -2889,6 +2934,18 @@ const purchasesOut = () => db.prepare(`SELECT p.*, e.name AS vendor, l.name AS l
   LEFT JOIN users u ON u.id = p.requested_by ORDER BY CASE p.status WHEN 'request' THEN 0 WHEN 'approved' THEN 1 WHEN 'ordered' THEN 2 ELSE 3 END, p.id DESC`).all()
   .map((p) => ({ id: p.id, status: p.status, vendorId: p.external_contact_id, vendor: p.vendor || "", itemName: p.item_name, ledgerId: p.ledger_id, ledger: p.ledger || "", qty: p.qty, unit: p.unit, amount: p.amount, reason: p.reason,
     requester: p.requester || "", requestedBy: p.requested_by, orderDate: p.order_date || "", expectedDate: p.expected_date || "", moveId: p.move_id, note: p.note, updatedAt: p.updated_at }));
+// 수도회 상태(회수완료·검수완료)를 남은 회수·검수 기록에 맞춤. 사람이 정한 '문제 있음'과 회수 전 단계는 건드리지 않음
+//   undone: 회수를 지우거나 옮긴 뒤 → 회수가 하나도 안 남으면 그 전 단계(제작 중·교육 완료·등록)로. 아니면 회수 기록 없이 손으로 정한 상태는 그대로
+function fitMonasteryStatus(mid, undone = false) {
+  const m = db.prepare("SELECT id, status FROM monasteries WHERE id = ?").get(mid);
+  if (!m || !["recovered", "checked"].includes(m.status)) return;
+  const rec = db.prepare("SELECT count(*) AS c, coalesce(sum(r.qty), 0) AS n FROM team_recovery r JOIN vol_schedules s ON s.id = r.schedule_id WHERE s.monastery_id = ?").get(mid);
+  if (!rec.c && !undone) return;
+  const chk = db.prepare("SELECT coalesce(sum(i.checked_qty), 0) AS n FROM inspections i JOIN vol_schedules s ON s.id = i.schedule_id WHERE s.monastery_id = ?").get(mid).n;
+  const has1 = (cond) => !!db.prepare(`SELECT 1 FROM vol_schedules s LEFT JOIN team_org_info t ON t.schedule_id = s.id WHERE s.monastery_id = ? AND ${cond} LIMIT 1`).get(mid);
+  const st = rec.c ? (rec.n > 0 && chk >= rec.n ? "checked" : "recovered") : has1("t.made_qty IS NOT NULL") ? "making" : has1(`${EDU_STATUS_SQL} = 'done'`) ? "edu_done" : "new";
+  if (st !== m.status) db.prepare("UPDATE monasteries SET status = ?, updated_at = datetime('now') WHERE id = ?").run(st, mid);
+}
 // 검수 저장 뒤: 조 배정의 진행(검수 중·완료)과 수도회 상태(회수완료 → 검수완료)를 맞춤
 function syncAfterInspection(scheduleId, groupId) {
   if (scheduleId && groupId) {
@@ -4472,7 +4529,7 @@ createServer(async (req, res) => {
     send(res, 404, { error: "Not found" });
   } catch (e) {
     if (!res.headersSent) {
-      send(res, e.status || 500, e.expose ? { error: e.message, field: e.field } : { error: e.status ? "잘못된 요청이에요." : "서버 오류가 났어요." });
+      send(res, e.status || 500, e.expose ? { error: e.message, field: e.field, confirm: e.confirm } : { error: e.status ? "잘못된 요청이에요." : "서버 오류가 났어요." });
     }
     if (!e.status) console.error(e);
   }
