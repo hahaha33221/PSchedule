@@ -16,6 +16,7 @@ import { createReadStream, statSync, watch } from "node:fs";
 import { extname, join, normalize, resolve } from "node:path";
 import crypto from "node:crypto";
 import { parseOutline, importOutline, cleanContact, openDb, ensureAdmin, verifyPassword, hashPassword, tempPassword } from "./db.mjs";
+import { eduStatus, EDU_STATUS_SQL, setEduStatus } from "./edu-status.mjs";
 import { createCalendarSync, checkUrl, maskUrl } from "./calendars.mjs";
 import { startAutoBackup, listBackups, backupNow, pruneBackups } from "./backup.mjs";
 import { vapidKeys, sendPush, pushEndpointOk } from "./push.mjs";
@@ -1457,7 +1458,7 @@ function teamOrgRows(admin) {
     return {
       id: s.id, no: i + 1, org: s.title.split(" · ").pop(), date: s.date, startTime: s.start_time, place: s.place, tableOnly: !!s.table_only, fromForm: s.request_id != null,
       reqQty: s.qty, sumNote: s.sum_note || "", eduQty: s.edu_qty ?? null, threadQty: s.thread_qty ?? null, crossQty: s.cross_qty ?? null,
-      monasteryId: s.monastery_id ?? null, monasteryStatus: mon?.status || "", contact: mon?.phone || f.contact || "", helper: f.helper || "", status: f.status || "plan", attend: f.attend ?? null, resultNote: f.result_note || "", madeQty: f.made_qty ?? null, madeDue: f.made_due || "",
+      monasteryId: s.monastery_id ?? null, monasteryStatus: mon?.status || "", contact: mon?.phone || f.contact || "", helper: f.helper || "", status: eduStatus(s.progress, f.status), attend: f.attend ?? null, resultNote: f.result_note || "", madeQty: f.made_qty ?? null, madeDue: f.made_due || "",
       updatedBy: f.updated_by || "", updatedAt: f.updated_at || null, inquiries: c?.n || 0, openInquiries: c?.open || 0, canContact: !!admin,
       deletable: s.request_id == null && s.thread_qty == null && s.cross_qty == null && s.edu_qty == null
     };
@@ -1529,8 +1530,12 @@ async function teamRoute(req, res, user, path, method) {
     if (method === "PATCH") {
       const b = await readJson(req), f = q.teamOrgInfo.get(s.id) || {};
       if (has(b, "contact") && !admin) return ok(403, { error: "연락처는 관리자만 적어요." });
-      const status = has(b, "status") ? String(b.status) : f.status || "plan";
+      const now = eduStatus(s.progress, f.status);
+      let status = has(b, "status") ? String(b.status) : now;
       if (!TEAM_STATUS.includes(status)) throw bad("교육 상태를 확인해 주세요.");
+      // 화면을 연 뒤 다른 사람이 상태를 바꿨으면(statusFrom 이 지금과 다름) 상태는 그대로 둠.
+      // statusFrom 을 모르는 예전 화면은 늘 상태를 같이 보내므로, 완료를 예정으로 되돌리는 것만 막음
+      if (has(b, "statusFrom") ? b.statusFrom !== now : now === "done" && status === "plan") status = now;
       inTx(() => {
         // 교육 날짜를 정하면 달력에도 보이게 (달력 미정 → 일정)
         // 수도회 이름·장소 (팀 봉사자 모두)
@@ -1548,6 +1553,7 @@ async function teamRoute(req, res, user, path, method) {
         q.teamOrgUpsert.run(s.id, f.contact || "", has(b, "helper") ? text(b.helper, 80, "담당 봉사자") || "" : f.helper || "", status,
           has(b, "attend") ? teamQty(b.attend, "참석 인원") : f.attend ?? null, has(b, "resultNote") ? text(b.resultNote, 1000, "특이사항") || "" : f.result_note || "",
           has(b, "madeQty") ? teamQty(b.madeQty, "예상 완성 수량") : f.made_qty ?? null, has(b, "madeDue") ? text(b.madeDue, 40, "완성 예정 시기") || "" : f.made_due || "", user.name);
+        if (status !== now) setEduStatus(db, s.id, status); // 관리자 '교육 기록'의 진행상태도 같이
       });
       return ok(200, { org: teamOrgRows(admin).find((o) => o.id === s.id) });
     }
@@ -2054,7 +2060,7 @@ function monasteriesOut(r) {
   const rows = db.prepare(`SELECT m.*,
       (SELECT count(*) FROM vol_schedules s WHERE s.monastery_id = m.id) AS visits,
       (SELECT count(*) FROM vol_requests x WHERE x.monastery_id = m.id) + (SELECT count(*) FROM shipments x WHERE x.monastery_id = m.id) + (SELECT count(*) FROM contact_logs x WHERE x.monastery_id = m.id) + (SELECT count(*) FROM thread_handouts x WHERE x.monastery_id = m.id) AS other_links,
-      (SELECT count(*) FROM vol_schedules s JOIN team_org_info t ON t.schedule_id = s.id WHERE s.monastery_id = m.id AND t.status = 'done') AS edu_done_n,
+      (SELECT count(*) FROM vol_schedules s LEFT JOIN team_org_info t ON t.schedule_id = s.id WHERE s.monastery_id = m.id AND ${EDU_STATUS_SQL} = 'done') AS edu_done_n,
       (SELECT coalesce(sum(s.qty), 0) FROM vol_schedules s WHERE s.monastery_id = m.id AND s.sum_note = '') AS req_qty,
       (SELECT coalesce(sum(x.qty), 0) FROM team_recovery x JOIN vol_schedules s ON s.id = x.schedule_id WHERE s.monastery_id = m.id) AS recovered_qty,
       (SELECT coalesce(sum(i.checked_qty), 0) FROM inspections i JOIN vol_schedules s ON s.id = i.schedule_id WHERE s.monastery_id = m.id) AS checked_qty
@@ -4461,10 +4467,10 @@ setInterval(() => { try { followupReminders(); } catch (e) { console.log(`[follo
 const ROSTER_KIND = new Set(["making", "cutting", "etc"]);
 const rosterOut = () => {
   const stats = new Map(db.prepare(`SELECT h.roster_id AS id,
-      COUNT(DISTINCT CASE WHEN s.progress = 'done' THEN (CASE WHEN s.edu_code <> '' THEN s.edu_code ELSE 'id' || s.id END) END) AS done,
-      COUNT(DISTINCT CASE WHEN s.progress <> 'done' THEN (CASE WHEN s.edu_code <> '' THEN s.edu_code ELSE 'id' || s.id END) END) AS planned,
+      COUNT(DISTINCT CASE WHEN ${EDU_STATUS_SQL} = 'done' THEN (CASE WHEN s.edu_code <> '' THEN s.edu_code ELSE 'id' || s.id END) END) AS done,
+      COUNT(DISTINCT CASE WHEN ${EDU_STATUS_SQL} <> 'done' THEN (CASE WHEN s.edu_code <> '' THEN s.edu_code ELSE 'id' || s.id END) END) AS planned,
       MIN(s.date) AS first, MAX(s.date) AS last
-    FROM vol_edu_helpers h JOIN vol_schedules s ON s.id = h.schedule_id GROUP BY h.roster_id`).all().map((r) => [r.id, r]));
+    FROM vol_edu_helpers h JOIN vol_schedules s ON s.id = h.schedule_id LEFT JOIN team_org_info t ON t.schedule_id = s.id GROUP BY h.roster_id`).all().map((r) => [r.id, r]));
   return db.prepare("SELECT r.*, u.name AS user_name FROM vol_roster r LEFT JOIN users u ON u.id = r.user_id ORDER BY r.kind, r.call_name").all().map((r) => {
     const st = stats.get(r.id) || {};
     return { id: r.id, call: r.call_name, name: r.name, kind: r.kind, affiliation: r.affiliation, userId: r.user_id, userName: r.user_name || "", note: r.note, done: st.done || 0, planned: st.planned || 0, first: st.first || null, last: st.last || null };
@@ -4472,13 +4478,14 @@ const rosterOut = () => {
 };
 const rosterUsers = () => db.prepare("SELECT id, name FROM users WHERE volunteer = 1 ORDER BY name").all();
 const eduRowOut = (s, helpers) => {
+  const st = eduStatus(s.progress, q.teamOrgInfo.get(s.id)?.status);
   const unT = s.alloc_qty != null && s.thread_qty != null ? s.alloc_qty - s.thread_qty : null;
   const unC = s.alloc_qty != null && s.cross_qty != null ? s.alloc_qty - s.cross_qty : null;
   const mismatch = [];
   if (s.send_thread != null && unT != null && s.send_thread !== unT) mismatch.push(`보낼 실 ${s.send_thread} ≠ 미지급 ${unT}`);
   if (s.send_cross != null && unC != null && s.send_cross !== unC) mismatch.push(`보낼 십자가 ${s.send_cross} ≠ 미지급 ${unC}`);
   return {
-    id: s.id, code: s.edu_code || "", date: s.date, startTime: s.start_time, title: s.title, org: String(s.title || "").split(" · ").pop(), tableOnly: !!s.table_only, progress: s.progress || "planned",
+    id: s.id, code: s.edu_code || "", date: s.date, startTime: s.start_time, title: s.title, org: String(s.title || "").split(" · ").pop(), tableOnly: !!s.table_only, progress: st === "done" ? "done" : "planned", delay: st === "delay",
     qty: s.qty ?? null, alloc: s.alloc_qty ?? null, thread: s.thread_qty ?? null, cross: s.cross_qty ?? null, unpaidThread: unT, unpaidCross: unC,
     sendThread: s.send_thread ?? null, sendCross: s.send_cross ?? null, sample: s.sample_qty ?? null, done: s.done_qty ?? null, loss: s.loss_qty ?? null,
     handler: s.mat_handler || "", matNote: s.mat_note || "", mismatch, helpers: helpers.get(s.id) || []
@@ -4541,7 +4548,7 @@ async function rosaryAdminRoute(req, res, path, method, user) {
     const b = await readJson(req);
     const q2 = (k) => (has(b, k) ? volQtyInput(b[k]) : undefined);
     const set = {};
-    if (has(b, "progress")) { if (!["planned", "done"].includes(b.progress)) throw bad("진행상태를 확인해 주세요."); set.progress = b.progress; }
+    if (has(b, "progress")) { if (!["planned", "done"].includes(b.progress)) throw bad("진행상태를 확인해 주세요."); }
     if (has(b, "code")) set.edu_code = text(b.code, 20, "교육 회차") || "";
     for (const [k, c] of [["alloc", "alloc_qty"], ["sendThread", "send_thread"], ["sendCross", "send_cross"], ["sample", "sample_qty"], ["done", "done_qty"], ["loss", "loss_qty"]]) { const v = q2(k); if (v !== undefined) set[c] = v; }
     if (has(b, "handler")) set.mat_handler = text(b.handler, 100, "담당") || "";
@@ -4564,8 +4571,8 @@ async function rosaryAdminRoute(req, res, path, method, user) {
         const add = db.prepare("INSERT OR IGNORE INTO vol_edu_helpers (schedule_id, roster_id, role) VALUES (?, ?, ?)");
         for (const h of helpers) add.run(s.id, h.id, h.role);
       }
-      // 진행완료면 수도회를 '교육완료'로 (이미 그 다음 단계면 그대로)
-      if (set.progress === "done" && s.monastery_id) db.prepare("UPDATE monasteries SET status = 'edu_done', updated_at = datetime('now') WHERE id = ? AND status = 'new'").run(s.monastery_id);
+      // 진행상태가 바뀔 때만 팀 봉사자 쪽 상태도 같이 (그대로 저장하면 '연기'를 덮어쓰지 않음)
+      if (has(b, "progress") && b.progress !== (eduStatus(s.progress, q.teamOrgInfo.get(s.id)?.status) === "done" ? "done" : "planned")) setEduStatus(db, s.id, b.progress === "done" ? "done" : "plan");
     });
     return send(res, 200, { row: eduRows(s.id)[0], roster: rosterOut() });
   }

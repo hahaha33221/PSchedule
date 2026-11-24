@@ -2071,6 +2071,7 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .stepbar__next { display: flex; justify-content: flex-end; margin: 18px 0 0; }
 .stepbar__next .btn { min-height: 48px; }
 .ops-home { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; }
+.ops-home__team { margin-bottom: 20px; }
 .ops-home__card { display: flex; flex-direction: column; gap: 6px; padding: 16px; color: inherit; text-decoration: none; border: 1px solid var(--line); }
 .ops-home__card.is-todo { border: 2px solid var(--ink); }
 .ops-home__card strong { font-size: 17px; }

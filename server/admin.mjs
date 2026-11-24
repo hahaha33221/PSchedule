@@ -273,7 +273,7 @@ switch (cmd) {
     const opts = { dry, rename: args.includes("--rename"), contacts: args.includes("--contacts"), dates: args.includes("--dates"), qty: qa ? qa.slice(6) : "keep", pins: Object.fromEntries(args.filter((a) => a.startsWith("--pin=")).map((a) => a.slice(6).split(":"))), today: process.env.TODAY || new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10) };
     try {
       if (!dry) {
-        const file = join(DATA_DIR, `pre-rosary-${new Date().toISOString().replace(/\D/g, "").slice(0, 14)}.db`);
+        const file = join(DATA_DIR, `pre-rosary-${new Date().toISOString().replace(/\D/g, "").slice(0, 17)}.db`);
         db.exec(`VACUUM INTO '${file.replace(/'/g, "''")}'`); chmodSync(file, 0o600);
         console.log(`먼저 백업했어요 → ${file}`);
       }

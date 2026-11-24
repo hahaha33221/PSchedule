@@ -5291,6 +5291,7 @@
         const sub = (id, label, ic, badge) => link(id, label, ic, true, null, badge);
         return navBox.replaceChildren(...[
           link(team ? "thome" : "vhome", "홈 (오늘 할 일)", "home"),
+          team ? link("tcal", "캘린더", "cal") : null,
           ...STEP_CATS[team ? "team" : "dept"].map((cat) => group(cat.icon, cat.name, cat.steps.map(([k, l], i) => stepLink(k, l, i + 1)))),
           group("chat", "소통", team
             ? [sub("tissues", "이슈", "note"), sub("vboard", "게시판", "chat"), sub("vnotices", "공지", "bell", state.unreadNotices), sub("tdocs", "자료실·역할", "folder")]
@@ -6443,8 +6444,8 @@
     openDialog("교육 등록", form);
   }
   const teamHead = (title, sub) => [h("h1", { class: "vol__hello", text: title }), sub ? h("p", { class: "muted small", text: sub }) : null];
-  async function teamHome() {
-    document.title = `팀 봉사자 · ${TITLE}`;
+  // 홈 카드 두 장: 다가오는 교육(위) · 봉사 가능 신청(아래). 예전 홈과 단계형 홈에서 같이 씀
+  async function teamHomeCards() {
     const [d, av, o] = await Promise.all([api("/team/home"), api("/team/avail"), api("/team/orgs")]);
     const st = { avail: av };
     const availCard = h("section", { class: "card vol__card" });
@@ -6472,6 +6473,20 @@
         })) : h("p", { class: "muted", text: "아직 봉사가 필요한 날이 없어요." }));
     };
     drawAvail();
+    const eduCard = h("section", { class: "card vol__card" }, [
+      h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "다가오는 교육" }), h("span", { class: "actions" }, [
+        st.avail.canSetNeed ? h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => teamEduDialog("", () => render()) }, [icon("plus"), "교육 등록"]) : null,
+        h("a", { class: "link-btn", href: "#/tcal", text: "캘린더" })])]),
+      d.nextEdu.length ? h("ul", { class: "vol-sched-list" }, d.nextEdu.map((x) => h("li", { class: "vol-sched" }, [
+        h("div", { class: "vol-sched__when" }, [h("strong", { text: volDay(x.date) }), h("span", { class: "muted small", text: x.startTime || "시간 없음" })]),
+        h("div", { class: "vol-sched__what" }, [h("strong", { text: x.org }), h("span", { class: "muted small", text: [x.place, x.helper ? `담당 ${x.helper}` : "", TEAM_STATUS[x.status]].filter(Boolean).join(" · ") })])
+      ]))) : h("p", { class: "muted", text: "다가오는 교육 일정이 없어요." })
+    ]);
+    return { d, eduCard, availCard };
+  }
+  async function teamHome() {
+    document.title = `팀 봉사자 · ${TITLE}`;
+    const { d, eduCard, availCard } = await teamHomeCards();
     const tile = (href, label, value, sub) => h("a", { class: "card vstat__tile team-tile", href }, [h("span", { class: "muted small", text: label }), h("strong", { text: value }), sub ? h("span", { class: "muted small", text: sub }) : null]);
     return [
       ...teamHead(`안녕하세요, ${state.user.name}님`, "팀 봉사자(교육·검수) 화면이에요. 맡은 일을 입력하고, 원자재·입고 정보는 조회만 해요."),
@@ -6484,15 +6499,7 @@
         tile("#/tissues", "처리 전 이슈", `${d.openIssues}건`, "접수·처리 중"),
         tile("#/tinsp/shifts", "내 봉사 신청", `${d.myShifts.length}일`, d.myShifts.slice(0, 2).map((s) => shortDate(s.date)).join(", ") || "신청한 날이 없어요")
       ]),
-      h("section", { class: "card vol__card" }, [
-        h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "다가오는 교육" }), h("span", { class: "actions" }, [
-          st.avail.canSetNeed ? h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => teamEduDialog("", () => render()) }, [icon("plus"), "교육 등록"]) : null,
-          h("a", { class: "link-btn", href: "#/tcal", text: "캘린더" })])]),
-        d.nextEdu.length ? h("ul", { class: "vol-sched-list" }, d.nextEdu.map((o) => h("li", { class: "vol-sched" }, [
-          h("div", { class: "vol-sched__when" }, [h("strong", { text: volDay(o.date) }), h("span", { class: "muted small", text: o.startTime || "시간 없음" })]),
-          h("div", { class: "vol-sched__what" }, [h("strong", { text: o.org }), h("span", { class: "muted small", text: [o.place, o.helper ? `담당 ${o.helper}` : "", TEAM_STATUS[o.status]].filter(Boolean).join(" · ") })])
-        ]))) : h("p", { class: "muted", text: "다가오는 교육 일정이 없어요." })
-      ]),
+      eduCard,
       availCard
     ];
   }
@@ -6696,8 +6703,9 @@
         busy(ok, async () => {
           try {
             if (!orgName.value.trim()) return showError(err, "수도회 이름을 적어 주세요.");
-            const body = { org: orgName.value, place: place.value, status: status.value, helper: helper.value, attend: attend.value, resultNote: result.value, madeQty: made.value, madeDue: due.value };
+            const body = { org: orgName.value, place: place.value, helper: helper.value, attend: attend.value, resultNote: result.value, madeQty: made.value, madeDue: due.value };
             if (date.value && (o.tableOnly || date.value !== o.date || time.value !== (o.startTime || ""))) Object.assign(body, { date: date.value, startTime: time.value });
+            if (status.value !== o.status) Object.assign(body, { status: status.value, statusFrom: o.status }); // 바꿨을 때만 (관리자 '교육 기록'과 같은 값)
             if (contact) body.contact = contact.value;
             const r = await api(`/team/orgs/${o.id}`, { method: "PATCH", body });
             orgs = orgs.map((x) => (x.id === o.id ? r.org : x));
@@ -7200,7 +7208,9 @@
         h("span", { class: "small " + (idx >= 0 ? "ops-home__todo" : "muted"), text: idx >= 0 ? `처리할 일 ${c[k]}건` : "지금 처리할 일이 없어요. 1단계부터 둘러볼 수 있어요." })
       ]);
     };
+    const tc = team ? await teamHomeCards() : null; // 팀 봉사자: 다가오는 교육 → 봉사 가능 신청 → 오늘 할 일
     return [
+      tc ? h("div", { class: "stack ops-home__team" }, [tc.eduCard, tc.availCard]) : null,
       h("h1", { class: "vol__hello", text: "오늘 할 일" }),
       h("p", { class: "muted small", text: "카테고리마다 지금 할 단계를 모았어요. 누르면 그 단계로 가고, 단계를 마치면 [다음 단계 →]가 보여요." }),
       c.followups ? h("a", { class: "card ops-home__card is-todo", href: team ? "#/tedu4" : "#/vcontacts" }, [h("span", { class: "ops-home__cat" }, [icon("bell"), "연락 후속 조치"]), h("strong", { text: `기한이 된 후속 조치 ${c.followups}건` }), h("span", { class: "small ops-home__todo", text: "연락 기록에서 처리해요" })]) : null,
@@ -7855,7 +7865,7 @@
           h("thead", {}, h("tr", {}, ["회차", "날짜", "수도회", "진행", "진행 봉사자", "요청", "배당", "자른실 지급", "십자가 지급", "미지급 실·십자가", "보낼 실·십자가", "샘플", "완성", "로스", "담당", "확인"].map((t) => h("th", { text: t })))),
           h("tbody", {}, rows.map((r) => h("tr", { class: "stock-row" + (r.mismatch.length ? " is-warn" : ""), tabindex: "0", onclick: () => edit(r), onkeydown: (e) => { if (e.key === "Enter") edit(r); } }, [
             h("td", { class: "nowrap", text: r.code || "-" }), h("td", { class: "nowrap", text: r.tableOnly ? `${shortDate(r.date)} (미정)` : `${shortDate(r.date)}${r.startTime ? ` ${r.startTime}` : ""}` }), h("td", { text: r.org }),
-            h("td", { class: "nowrap" }, statusTag(EDU_PROG[r.progress], r.progress === "done" ? "is-done" : "is-plan")),
+            h("td", { class: "nowrap" }, r.delay ? statusTag("연기", "is-delay") : statusTag(EDU_PROG[r.progress], r.progress === "done" ? "is-done" : "is-plan")),
             h("td", { class: "small", text: r.helpers.map((x) => x.call).join(", ") || "-" }),
             ...["qty", "alloc", "thread", "cross"].map((k) => h("td", { class: "num", text: qtyText(r[k]) })),
             h("td", { class: "num nowrap", text: `${qtyText(r.unpaidThread)} · ${qtyText(r.unpaidCross)}` }), h("td", { class: "num nowrap", text: `${qtyText(r.sendThread)} · ${qtyText(r.sendCross)}` }),
@@ -7877,7 +7887,7 @@
       const f = { alloc: num(r.alloc), thread: num(r.thread), cross: num(r.cross), sendThread: num(r.sendThread), sendCross: num(r.sendCross), sample: num(r.sample), done: num(r.done), loss: num(r.loss) };
       const handler = h("input", { maxlength: "100", value: r.handler }), note = h("textarea", { rows: "2", maxlength: "500" }, r.matNote);
       opsSheet(`${r.code ? `${r.code} · ` : ""}${r.org}`, [
-        opsHint(`${volDay(r.date)}${r.startTime ? ` ${r.startTime}` : ""} · 요청 ${qtyText(r.qty)}. 미지급은 배당 − 지급으로 계산하고, 보낼 수량과 다르면 '확인'에 표시해요.`),
+        opsHint(`${volDay(r.date)}${r.startTime ? ` ${r.startTime}` : ""} · 요청 ${qtyText(r.qty)}. 미지급은 배당 − 지급으로 계산하고, 보낼 수량과 다르면 '확인'에 표시해요.${r.delay ? " 팀 봉사자가 '연기'로 둔 교육이에요. 진행완료로 바꾸면 연기가 풀려요." : ""}`),
         h("div", { class: "row2" }, [field("교육 회차", code), field("진행상태", pr)]),
         h("div", { class: "field" }, [h("span", { class: "field__label", text: `진행 봉사자 (${on.size}명)` }), d.roster.length ? pick : h("p", { class: "muted small", text: "먼저 '봉사자 명단'에 봉사자를 넣어 주세요." })]),
         h("div", { class: "row2" }, [field("배당물량", f.alloc), field("담당 봉사자", handler)]),
@@ -7887,7 +7897,7 @@
         field("출납 비고", note)
       ], {
         save: async () => {
-          const body = { code: code.value, progress: pr.value, handler: handler.value, matNote: note.value, helpers: [...on].map(([id, role]) => ({ id, role })) };
+          const body = { code: code.value, ...(pr.value !== r.progress ? { progress: pr.value } : {}), handler: handler.value, matNote: note.value, helpers: [...on].map(([id, role]) => ({ id, role })) };
           for (const [k, el] of Object.entries(f)) body[k] = el.value;
           const x = await api(`/admin/vol-edu/${r.id}`, { method: "PATCH", body });
           d.rows = d.rows.map((y) => (y.id === r.id ? x.row : y)); d.roster = x.roster; toast("저장했어요."); draw();

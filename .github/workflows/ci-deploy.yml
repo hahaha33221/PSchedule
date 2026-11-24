@@ -868,6 +868,30 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XDELETE $B/admin/vol-roster/$GR)" = 400
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPATCH -d '{"progress":"x"}' $B/admin/vol-edu/$RE)" = 400
           curl -fs -H "$H" -XPATCH -d '{"helpers":[],"sendThread":40,"progress":"planned"}' $B/admin/vol-edu/$RE | JQ 'if(d.row.helpers.length||d.row.mismatch.length||d.row.progress!=="planned")process.exit(1)'
+          # 교육 상태는 하나: 교육 기록(관리자)과 팀 봉사자 화면이 서로 맞고, 결과 칸은 그대로, 연기는 덮어쓰지 않음
+          ST() { curl -fs -H "$TH" $B/team/orgs | JQ 'const o=d.orgs.find(x=>x.id=='$RE');console.log(o.status+"/"+o.attend+"/"+o.madeQty+"/"+o.resultNote)'; }
+          PG() { curl -fs -H "$H" $B/admin/vol-edu | JQ 'const r=d.rows.find(x=>x.id=='$RE');console.log(r.progress+"/"+r.delay)'; }
+          CN() { curl -fs -H "$TH" $B/ops/counts | JQ 'console.log(d.counts.'$1')'; }
+          ED() { curl -fs -H "$H" $B/ops/monasteries | JQ 'console.log(d.monasteries.find(m=>m.name==="시험수도회").eduDone)'; }
+          curl -fs -H "$TH" -XPATCH -d '{"attend":7,"resultNote":"메모"}' $B/team/orgs/$RE >/dev/null
+          test "$(ST)" = "plan/7/null/메모"; test "$(PG)" = "planned/false"; test "$(ED)" = 0; M0=$(CN tmake1)
+          curl -fs -H "$H" -XPATCH -d '{"progress":"done"}' $B/admin/vol-edu/$RE >/dev/null
+          test "$(ST)" = "done/7/null/메모"; test "$(ED)" = 1; test "$(CN tmake1)" = $((M0+1))
+          curl -fs -H "$TH" -XPATCH -d '{"status":"plan","attend":8}' $B/team/orgs/$RE >/dev/null
+          curl -fs -H "$TH" -XPATCH -d '{"status":"plan","statusFrom":"delay"}' $B/team/orgs/$RE >/dev/null
+          test "$(ST)" = "done/8/null/메모"; test "$(PG)" = "done/false"
+          curl -fs -H "$TH" -XPATCH -d '{"status":"delay","statusFrom":"done"}' $B/team/orgs/$RE >/dev/null
+          test "$(ST)" = "delay/8/null/메모"; test "$(PG)" = "planned/true"; test "$(ED)" = 0; test "$(CN tmake1)" = $M0
+          curl -fs -H "$H" -XPATCH -d '{"progress":"planned","alloc":100}' $B/admin/vol-edu/$RE >/dev/null
+          TODAY=2030-08-01 ADM rosary-import < /tmp/ps/rosary.json | grep -q '팀 화면에서 연기라 진행상태 그대로'
+          test "$(ST)" = "delay/8/null/메모"; test "$(PG)" = "planned/true"
+          curl -fs -H "$TH" -XPATCH -d '{"status":"done","statusFrom":"delay","madeQty":90}' $B/team/orgs/$RE >/dev/null
+          test "$(ST)" = "done/8/90/메모"; test "$(PG)" = "done/false"; test "$(CN tmake1)" = $M0
+          curl -fs -H "$H" -XPATCH -d '{"progress":"planned","helpers":[]}' $B/admin/vol-edu/$RE >/dev/null
+          test "$(ST)" = "plan/8/90/메모"; test "$(PG)" = "planned/false"
+          TODAY=2030-08-01 ADM rosary-import < /tmp/ps/rosary.json >/dev/null
+          test "$(ST)" = "done/8/90/메모"; test "$(PG)" = "done/false"
+          curl -fs -H "$H" -XPATCH -d '{"helpers":[]}' $B/admin/vol-edu/$RE >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/vol-roster/$GR | JQ 'if(d.roster.length!==1)process.exit(1)'
           for S in $(curl -fs -H "$H" $B/admin/vol-schedules | JQ 'console.log(d.schedules.filter(s=>/시험수도회|새수도회/.test(s.title)||(s.title==="봉사자 모임"&&s.date==="2030-08-03")).map(s=>s.id).join(" "))'); do curl -fs -H "$H" -XDELETE $B/admin/vol-schedules/$S >/dev/null; done
           curl -fs -H "$H" -XDELETE $B/admin/vol-roster/$(curl -fs -H "$H" $B/admin/vol-roster | JQ 'console.log(d.roster[0].id)') >/dev/null

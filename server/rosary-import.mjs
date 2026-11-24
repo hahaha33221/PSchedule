@@ -7,6 +7,7 @@
 //   --dates     날짜·시간을 엑셀(일정표 시간, 비면 명단 시간) 값으로 (달력 미정 줄은 그대로)
 //   --pin=27:28 엑셀 번호 27 을 DB 일정 #28 에 맞춤 (--pin=27:new 는 새로 넣음). 여러 번 써도 됨
 // 오늘까지의 교육은 모두 진행완료로 봄. 출력에는 봉사자 이름·연락처를 넣지 않음
+import { eduStatus, setEduStatus } from "./edu-status.mjs";
 const TITLE = "묵주 교육 · ";
 
 const norm = (s) => String(s || "").replace(/[\s·.,()（）\[\]_-]/g, "").replace(/수녀회|수도회|수녀원|수녀$/g, "");
@@ -37,6 +38,7 @@ export function importRosary(db, data, opts = {}) {
   if (!g) throw new Error("묵주 교육 일정을 찾을 수 없어요.");
   const dbRows = db.prepare("SELECT * FROM vol_schedules WHERE project_item_id = ? ORDER BY date, id").all(g.id);
 
+  const eduDoneN = () => db.prepare("SELECT count(*) AS n FROM monasteries WHERE status = 'edu_done'").get().n, eduDone0 = eduDoneN();
   db.exec("BEGIN");
   try {
     // 1) 엑셀 수업 ↔ DB 일정 짝짓기 (이름 비슷함 + 날짜, 이미 회차가 적힌 줄은 회차도)
@@ -103,7 +105,10 @@ export function importRosary(db, data, opts = {}) {
       const ch = [];
       const dbOrg = orgOf(s.title);
       if (s.edu_code !== x.code) setCol("edu_code", x.code, s.id);
-      if (s.progress !== prog) { setCol("progress", prog, s.id); ch.push(prog === "done" ? "진행완료" : "진행예정"); }
+      // 팀 봉사자 쪽 상태도 같이 맞춤. 팀에서 '연기'로 둔 교육은 덮어쓰지 않음
+      const cur = eduStatus(s.progress, db.prepare("SELECT status FROM team_org_info WHERE schedule_id = ?").get(s.id)?.status);
+      if (cur === "delay") ch.push(`(팀 화면에서 연기라 진행상태 그대로, 엑셀 ${prog === "done" ? "진행완료" : "진행예정"})`);
+      else if ((cur === "done") !== (prog === "done")) { setEduStatus(db, s.id, prog === "done" ? "done" : "plan"); ch.push(prog === "done" ? "진행완료" : "진행예정"); }
       sum[prog]++;
       if (intOrNull(x.alloc) !== null && s.alloc_qty !== x.alloc) setCol("alloc_qty", x.alloc, s.id);
       if (dates && !s.table_only) {
@@ -192,7 +197,8 @@ export function importRosary(db, data, opts = {}) {
     if (unknown) warn.push(`참여 기록에만 있는 사람 ${unknown}명을 명단에 '기타'로 넣음`);
 
     // 5) 진행완료 교육의 수도회는 '교육완료' (이미 그 다음 단계면 그대로)
-    sum.eduDone = db.prepare("UPDATE monasteries SET status = 'edu_done', updated_at = datetime('now') WHERE status = 'new' AND id IN (SELECT monastery_id FROM vol_schedules WHERE project_item_id = ? AND progress = 'done' AND monastery_id IS NOT NULL)").run(g.id).changes;
+    db.prepare("UPDATE monasteries SET status = 'edu_done', updated_at = datetime('now') WHERE status = 'new' AND id IN (SELECT s.monastery_id FROM vol_schedules s LEFT JOIN team_org_info t ON t.schedule_id = s.id WHERE s.project_item_id = ? AND s.monastery_id IS NOT NULL AND s.progress = 'done' AND coalesce(t.status, '') <> 'delay')").run(g.id);
+    sum.eduDone = eduDoneN() - eduDone0;
 
     // 6) 기타 일정 (봉사자 모임): 같은 날 같은 제목이 없으면 넣음
     for (const o of data.other || []) {
