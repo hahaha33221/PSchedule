@@ -7086,7 +7086,7 @@
       const photoBox = h("div", { class: "move-photos" });
       const fileIn = h("input", { type: "file", accept: "image/jpeg,image/png,image/webp", multiple: true, hidden: true });
       const drawPhotos = () => photoBox.replaceChildren(
-        ...kept.map((pid) => h("span", { class: "move-photos__item" }, [inspImg(pid), h("button", { class: "move-photos__x", type: "button", "aria-label": "사진 지우기", html: ICON.close, onclick: async () => { if (!confirm("이 사진을 지울까요?")) return; insp.inspections = (await act(() => api(`${base}/inspection-photos/${pid}`, { method: "DELETE" }))).inspections; kept = kept.filter((p) => p !== pid); drawPhotos(); } })])),
+        ...kept.map((pid) => h("span", { class: "move-photos__item" }, [inspImg(pid), x.delPhotos.includes(pid) ? h("button", { class: "move-photos__x", type: "button", "aria-label": "사진 지우기", html: ICON.close, onclick: async () => { if (!confirm("이 사진을 지울까요?")) return; insp.inspections = (await act(() => api(`${base}/inspection-photos/${pid}`, { method: "DELETE" }))).inspections; kept = kept.filter((p) => p !== pid); drawPhotos(); } }) : null])),
         ...pending.map((b, i) => h("span", { class: "move-photos__item is-new" }, [h("img", { class: "move-photo", alt: "올릴 사진", src: URL.createObjectURL(b) }), h("button", { class: "move-photos__x", type: "button", "aria-label": "빼기", html: ICON.close, onclick: () => { pending.splice(i, 1); drawPhotos(); } })]))
       );
       fileIn.addEventListener("change", async () => { for (const f of [...fileIn.files]) { if (kept.length + pending.length >= 4) break; try { pending.push(await shrinkImage(f)); } catch (ex) { showError(err, ex.message); } } fileIn.value = ""; drawPhotos(); });
@@ -7102,7 +7102,7 @@
         h("div", { class: "field" }, [h("span", { class: "field__label", text: "사진 (선택, 4장까지, 불량 근거)" }), photoBox, h("div", {}, [h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => fileIn.click() }, [icon("plus"), "사진 추가"]), fileIn])]),
         err,
         h("div", { class: "actions" }, [
-          x ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 검수 기록과 사진을 지울까요?")) return; insp.inspections = (await act(() => api(`${base}/inspections/${x.id}`, { method: "DELETE" }))).inspections; closeDialog(); redraw(); } }) : null,
+          x?.canDelete ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => { if (!confirm("이 검수 기록과 사진을 지울까요?")) return; insp.inspections = (await act(() => api(`${base}/inspections/${x.id}`, { method: "DELETE" }))).inspections; closeDialog(); redraw(); } }) : null,
           h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok
         ])
       ]);

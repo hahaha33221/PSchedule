@@ -1396,7 +1396,12 @@ function inspectionLinks(b, old) {
 const setInspLinks = (links, version, id) => { db.prepare("UPDATE inspections SET group_id = ?, schedule_id = ?, recovery_id = ?, criteria_version = coalesce(?, criteria_version) WHERE id = ?").run(...links, version, id); syncAfterInspection(links[1], links[0]); };
 const reworkInput = (v) => { const r = v == null ? "" : String(v); if (!REWORK.includes(r)) throw bad("불합격품 처리를 확인해 주세요."); return r; };
 async function inspectionRoute(req, res, user, path, method, base) {
-  const list = () => q.inspections.all().map(inspectionOut);
+  // 지우기(기록·사진)는 적은 사람·리더 봉사자·관리자만. 사진은 올린 사람도. 남의 기록을 고치는 것은 모두 할 수 있음
+  const boss = user.role === "admin" || !!user.vol_leader, canDel = (x) => boss || x.created_by === user.id;
+  const list = () => {
+    const mine = new Set(db.prepare("SELECT id FROM inspection_photos WHERE created_by = ?").all(user.id).map((p) => p.id));
+    return q.inspections.all().map((x) => { const o = inspectionOut(x); return { ...o, canDelete: canDel(x), delPhotos: canDel(x) ? o.photos : o.photos.filter((p) => mine.has(p)) }; });
+  };
   const crit = () => { const c = criteriaOut(); const cur = c.versions.find((v) => v.version === c.current); return { current: c.current, items: cur ? cur.items : [] }; };
   if (path === `${base}/inspections` && method === "GET") { const c = crit(); send(res, 200, { groups: inspGroups(), types: c.items.length ? c.items.map((x) => x.defectKey) : DEFECT_TYPES, criteria: c, inspections: list() }); return true; }
   if (path === `${base}/inspections` && method === "POST") {
@@ -1419,8 +1424,16 @@ async function inspectionRoute(req, res, user, path, method, base) {
       q.addInspPhoto.run(x.id, mime, buf, user.id);
       send(res, 201, { inspections: list() }); return true;
     }
-    if (method === "PATCH") { const b = await readJson(req), v = inspectionInput(b), rw = has(b, "rework") ? reworkInput(b.rework) : x.rework || "", links = inspectionLinks(b, x); inTx(() => { q.setInspection.run(...v, x.id); q.setInspRework.run(rw, x.id); setInspLinks(links, null, x.id); }); send(res, 200, { inspections: list() }); return true; }
-    if (method === "DELETE") { q.delInspection.run(x.id); send(res, 200, { inspections: list() }); return true; }
+    if (method === "PATCH") { const b = await readJson(req), v = inspectionInput(b), rw = has(b, "rework") ? reworkInput(b.rework) : x.rework || "", links = inspectionLinks(b, x); inTx(() => {
+      q.setInspection.run(...v, x.id); q.setInspRework.run(rw, x.id); setInspLinks(links, null, x.id);
+      // 수량·조·교육이 바뀌면 예전에 이어졌던 쪽과 지금 쪽을 남은 기록으로 다시 맞춤
+      if (v[4] !== x.checked_qty || links[0] !== x.group_id || links[1] !== x.schedule_id) { refitInspection(x.schedule_id, x.group_id); refitInspection(links[1], links[0]); }
+    }); send(res, 200, { inspections: list() }); return true; }
+    if (method === "DELETE") {
+      if (!canDel(x)) { send(res, 403, { error: "검수 기록은 적은 사람과 리더 봉사자·관리자만 지울 수 있어요." }); return true; }
+      inTx(() => { q.delInspection.run(x.id); refitInspection(x.schedule_id, x.group_id); });
+      send(res, 200, { inspections: list() }); return true;
+    }
     send(res, 405, { error: "Method not allowed" }); return true;
   }
   const pm = path === `${base}/inspection-photos/${path.split("/").pop()}` && path.match(/\/inspection-photos\/(\d+)$/);
@@ -1428,6 +1441,7 @@ async function inspectionRoute(req, res, user, path, method, base) {
     const ph = q.inspPhoto.get(Number(pm[1]));
     if (!ph) throw notFound("사진");
     if (method === "GET") { sendPhoto(res, ph); return true; }
+    if (method === "DELETE" && ph.created_by !== user.id && !canDel(q.inspection.get(ph.inspection_id))) { send(res, 403, { error: "검수 사진은 올린 사람과 검수 기록을 적은 사람, 리더 봉사자·관리자만 지울 수 있어요." }); return true; }
     if (method === "DELETE") { q.delInspPhoto.run(ph.id); send(res, 200, { inspections: list() }); return true; }
     send(res, 405, { error: "Method not allowed" }); return true;
   }
@@ -2984,6 +2998,16 @@ function fitMonasteryStatus(mid, undone = false) {
   const has1 = (cond) => !!db.prepare(`SELECT 1 FROM vol_schedules s LEFT JOIN team_org_info t ON t.schedule_id = s.id WHERE s.monastery_id = ? AND ${cond} LIMIT 1`).get(mid);
   const st = rec.c ? (rec.n > 0 && chk >= rec.n ? "checked" : "recovered") : has1("t.made_qty IS NOT NULL") ? "making" : has1(`${EDU_STATUS_SQL} = 'done'`) ? "edu_done" : "new";
   if (st !== m.status) db.prepare("UPDATE monasteries SET status = ?, updated_at = datetime('now') WHERE id = ?").run(st, mid);
+}
+// 검수를 고치거나 지운 뒤: 조 배정 상태와 수도회 상태를 남은 기록으로 다시 맞춤 (되돌리는 쪽까지)
+function refitInspection(scheduleId, groupId) {
+  if (scheduleId && groupId) for (const a of db.prepare("SELECT * FROM inspection_group_assigns WHERE group_id = ? AND schedule_id = ?").all(groupId, scheduleId)) {
+    const done = db.prepare("SELECT coalesce(sum(checked_qty), 0) AS n FROM inspections WHERE group_id = ? AND schedule_id = ?").get(groupId, scheduleId).n;
+    const st = a.qty && done >= a.qty ? "done" : done > 0 ? "doing" : "wait";
+    if (st !== a.status) db.prepare("UPDATE inspection_group_assigns SET status = ?, updated_at = datetime('now') WHERE id = ?").run(st, a.id);
+  }
+  const mid = scheduleId ? db.prepare("SELECT monastery_id FROM vol_schedules WHERE id = ?").get(scheduleId)?.monastery_id : null;
+  if (mid) fitMonasteryStatus(mid);
 }
 // 검수 저장 뒤: 조 배정의 진행(검수 중·완료)과 수도회 상태(회수완료 → 검수완료)를 맞춤
 function syncAfterInspection(scheduleId, groupId) {
