@@ -162,10 +162,10 @@ export const TOPICS = {
   daily: { label: "하루 봉사 기록", team: "tins5", team0: "tinsp", admin: "volunteers", link: "volunteers/team" },
   issue: { label: "이슈", team: "tissues", team0: "tissues", dept: "vissues", admin: "volunteers", link: "volunteers/team" },
   board: { label: "게시판", team: "vboard", team0: "vboard", dept: "vboard", dept0: "vboard", admin: "board", link: "board" },
-  docs: { label: "자료실", team: "tdocs", team0: "tdocs", admin: "volunteers", link: "volunteers/team" },
-  duties: { label: "담당·역할", team: "tdocs", staff: "ops", admin: "ops", link: "ops/duties", perm: "duties" },
+  docs: { label: "검수 기준 자료", admin: "volunteers", link: "volunteers/team" },
+  duties: { label: "담당·역할", staff: "ops", admin: "ops", link: "ops/duties", perm: "duties" },
   contacts: { label: "연락·문의 기록", dept: "vcontacts", staff: "ops", admin: "ops", link: "ops/contacts", perm: "contacts" },
-  deadline: { label: "데드라인", dept: "vdeadlines", team: "vdeadlines", admin: "volunteers", link: "volunteers/deadlines" },
+  deadline: { label: "데드라인" }, // 화면을 없앰: 아무에게도 안 보임
   sched: { label: "일정", team: "vschedule", dept0: "vschedule", admin: "volunteers", link: "volunteers" },
   training: { label: "기본 교육", dept: "vtraining", dept0: "vtraining", admin: "volunteers/training", link: "volunteers/training" },
   cutting: { label: "실자르기·타래", staff: "ops", admin: "ops", link: "ops/cut", perm: "cutting" },

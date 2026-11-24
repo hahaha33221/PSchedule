@@ -1172,9 +1172,12 @@ jobs:
           curl -fs -H "$VH" -XPATCH -d '{"category":"free","title":"알림공개글","body":"공개","secret":true}' $B/board/$BP >/dev/null; test "$(SQL "SELECT count(*) FROM changes WHERE title LIKE '%알림공개글%'" 1)" = 0
           # 개인 일정은 남지 않음
           curl -fs -H "$VH" -XPOST -d '{"title":"알림개인일정","date":"2027-03-03"}' $B/volunteer/schedules >/dev/null; test "$(SQL "SELECT count(*) FROM changes WHERE title LIKE '%알림개인일정%'" 1)" = 0
-          # 데드라인은 보는 사람에게만
+          # 없앤 화면(자료실·역할, 데드라인 일정)의 변경은 봉사자에게 안 보이고 숫자에도 안 셈. 데드라인은 관리자 화면도 없앰
           curl -fs -H "$H" -XPOST -d '{"title":"알림부서마감","date":"2027-03-04","audience":"dept"}' $B/ops/deadlines >/dev/null; test "$(HAS "$TH" 'c.title=="알림부서마감"')" = 0
-          test "$(HAS "$VH" 'c.title=="알림부서마감"')" = 1; test "$(HAS "$TH" 'c.title=="알림부서마감"')" = 0
+          test "$(HAS "$VH" 'c.title=="알림부서마감"')" = 0; test "$(HAS "$H" 'c.title=="알림부서마감"')" = 0
+          curl -fs -H "$H" -XPOST -d '{"category":"inspect","title":"알림시험자료","url":"https://example.com/b"}' $B/team/docs >/dev/null; test "$(HAS "$TH" 'c.topic=="docs"||c.topic=="duties"||c.topic=="deadline"')" = 0; test "$(HAS "$H" 'c.title=="알림시험자료"&&c.topic=="docs"')" = 1
+          for W in "$TH" "$VH"; do curl -fs -H "$W" $B/changes/counts | JQ 'if("tdocs" in d.counts||"vdeadlines" in d.counts)process.exit(1)'; done
+          SEEN "$TH" tdocs; test "$(SQL "SELECT count(*) FROM change_seen WHERE menu IN ('tdocs', 'vdeadlines')" 1)" = 0
           # 택배 도착 → 팀의 회수에도 남음, 팀은 수도회 검수 택배만. 재료 택배는 부서만
           AE=$(EDU 알림택배수도회 2026-01-05); AM=$(ORG $AE monasteryId); SEEN "$TH" tmake2; SEEN "$VH" dr1
           printf '{"direction":"in","kind":"inspect","partyType":"monastery","monasteryId":%s,"status":"sent","qty":5}' $AM > /tmp/ps/j.json; AS=$(curl -fs -H "$VH" -XPOST -d @/tmp/ps/j.json $B/ops/shipments | JQ 'console.log(d.shipments.reduce((n,x)=>Math.max(n,x.id),0))')

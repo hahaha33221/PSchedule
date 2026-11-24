@@ -1476,7 +1476,7 @@ async function inspectionRoute(req, res, user, path, method, base) {
 }
 
 // ---- 팀 봉사자(교육·검수): 담당 수도회·교육·문의·제작 진행, 검수(기록·하루 검수 기록·봉사), 이슈, 자료실, 봉사 가능한 날
-// 관리자도 같은 API 를 씀 (연락처 입력·이슈 처리·자료실 관리는 관리자만)
+// 관리자도 같은 API 를 씀 (연락처 입력·이슈 처리·검수 기준 자료 관리는 관리자만)
 const today = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10); // 한국 날짜
 const TEAM_STATUS = ["plan", "done", "delay"];
 // 성 빼고 이름만: 띄어 쓴 한글 이름은 마지막 낱말(영문은 첫 낱말), 한글 2~3자는 첫 글자, 4자 이상은 앞 두 글자(남궁·선우 같은 두 글자 성)를 뺌
@@ -3441,10 +3441,6 @@ function changeView(user, role) {
     }
     if (role === "admin" && c.topic === "req" && c.action !== "edit") return null;
     if (c.topic === "ship_in" && role === "team" && !c.scope_id) return null; // 팀은 수도회에서 오는 검수 택배만
-    if (c.topic === "deadline" && vol) {
-      const d = row("SELECT audience FROM deadlines WHERE id = ?", c.ref_id), a = d ? d.audience : ["all", "dept", "team"][c.scope_id || 0];
-      if (a !== "all" && a !== role) return null;
-    }
     if (c.topic === "sched" && vol) { const s = row("SELECT audience FROM vol_schedules WHERE id = ?", c.ref_id); if (s && s.audience !== "all") return null; }
     if (c.topic === "board") { const b = row("SELECT secret FROM board_posts WHERE id = ?", c.ref_id); if (b?.secret) return null; }
     if (role === "dept" && !steps) {

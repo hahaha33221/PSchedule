@@ -78,7 +78,6 @@ await post("/team/daily", { date: day(-1), qty: 321, workers: "시험하나, 시
 await post("/admin/inspections", { itemId: gid, stage: 3, date: day(-1), source: LONG, checkedQty: 300, defects: { knot: 7 }, note: "불량 메모" }).catch(() => post("/admin/inspections", { itemId: gid, stage: 3, date: day(-1), source: LONG, checkedQty: 300 }));
 await post("/team/issues", { kind: "thread", title: "실이 자주 끊어진다는 연락이 여러 곳에서 왔어요", body: "긴 내용" });
 await post("/ops/contacts", { targetType: "monastery", monasteryId: mid, date: day(-2), method: "phone", purpose: "recovery", content: "묵주를 보내 달라고 안내", followUp: "도착하면 확인 전화", dueDate: day(-1) });
-await post("/ops/deadlines", { title: "1차 검수 결과 제출 마감", date: day(6), audience: "all", note: "메모" });
 await post("/ops/purchases", { itemName: "대형 비닐팩", qty: 1000, unit: "장", amount: 1234567 }).catch(() => {});
 await post("/volunteer/records", { itemId: gid, kind: "recovery", stage: "in", date: day(-1), name: LONG, qty: 12345, note: "메모" });
 await post("/volunteer/records", { itemId: cross, kind: "recovery", stage: "in", date: day(-1), name: "", qty: 123, note: "" });
@@ -86,22 +85,25 @@ await post("/notices", { title: "긴 제목의 공지입니다 모두 읽어 주
 const bp = (await post("/board", { title: "게시판 글 제목", body: "내용" })).id;
 await post("/admin/vol-trainings", { title: "기본 교육", body: "내용", date: day(3) });
 await post("/admin/vol-schedules", { title: "포장 봉사", date: day(2), startTime: "10:00", audience: "all", place: "시험 건물" });
-await post("/team/docs", { category: "edu", title: "교육 자료", url: "https://example.com/a/very/long/path/that/does/not/break/easily", note: "설명" });
+await post("/team/docs", { category: "inspect", title: "검수 기준 자료", url: "https://example.com/a/very/long/path/that/does/not/break/easily", note: "설명" });
 await call("/ops/perms", "PUT", { staffOn: true });
 const setMenu = (steps) => call("/admin/vol-menu", "PUT", { menu: ["home", "schedule", "training", "notices", "wbs", "req", "in", "out", "recovery", "moves2", ...(steps ? ["steps2"] : [])] });
 
 /* ---- 볼 화면: 주소와 눌러 열 것(글자) ---- */
-const TEAM = ["thome", "alerts", "tcal", "tedu1", "tedu2", "tmake1", "tmake2", "tins1", "tins2", "tins3", "tins4", "tins5", "vschedule", "tissues", "vboard", `vboard/${bp}`, "vnotices", "tdocs", "vdeadlines", "vcontacts"];
-const DEPT = ["vhome", "alerts", "dr1", "dr2", "ds1", "ds2", "ds3", "df1", "df2", "vcontacts", "vtraining", "vissues", "vboard", "vnotices", "vdeadlines"];
+const TEAM = ["thome", "alerts", "tcal", "tedu1", "tedu2", "tmake1", "tmake2", "tins1", "tins2", "tins3", "tins4", "tins5", "vschedule", "tissues", "vboard", `vboard/${bp}`, "vnotices", "vcontacts"];
+const DEPT = ["vhome", "alerts", "dr1", "dr2", "ds1", "ds2", "ds3", "df1", "df2", "vcontacts", "vtraining", "vissues", "vboard", "vnotices"];
 const OPS = ["dash", "mon", "ship-in", "ship-out", "stock", "cut", "buy", "contacts", "groups", "criteria", "duties"].map((k) => `ops/${k}`);
 const STAFF = ["today", "dashboard", "tasks", "meetings", "memos", "projects", `projects/${pj}`, "stock", `stock/${led.ledger.id}`, "alerts", "notices", "orgchart", "contacts"];
 const RUNS = [
   ["leader", true, TEAM], ["team", true, ["tedu1", "tedu2", "tmake2", "tins1"]], ["dept", true, DEPT],
-  ["admin", true, ["alerts", "members", "org", "backup", "board", "volunteers", ...["edu", "roster", "training", "stock", "records", "inspect", "team", "deadlines", "wbs", "menu"].map((k) => `volunteers/${k}`), ...OPS, "ops/perms", ...STAFF.slice(0, 9)]],
+  ["admin", true, ["alerts", "members", "org", "backup", "board", "volunteers", ...["edu", "roster", "training", "stock", "records", "inspect", "team", "wbs", "menu"].map((k) => `volunteers/${k}`), ...OPS, "ops/perms", ...STAFF.slice(0, 9)]],
   ["staff", true, [...STAFF, ...OPS.slice(0, 5)]],
-  ["leader", false, ["thome", "alerts", "torgs", "trecov", "tinsp/records", "tinsp/shifts", "tissues", "tdocs"]],
+  ["leader", false, ["thome", "alerts", "torgs", "trecov", "tinsp/records", "tinsp/shifts", "tissues", "tinsp/guide"]],
   ["dept", false, ["vhome", "alerts", "vschedule", "vp/rosary", "vp/rosary/in", "vp/rosary/out", "vp/rosary/req", "vp/rosary/wbs", "vp/rosary/recovery", "vp/cross/recovery", "vstock"]]
 ];
+
+// 없앤 화면의 예전 주소는 홈으로
+const GONE = { leader: ["tdocs", "vdeadlines"], dept: ["tdocs", "vdeadlines"], admin: ["volunteers/deadlines"] }, HOME = { leader: "#/thome", dept: "#/vhome", admin: "#/volunteers" };
 
 /* ---- 크롬 (CDP) ---- */
 chrome = spawn(CHROME, ["--headless=new", "--disable-gpu", "--no-sandbox", "--hide-scrollbars", "--no-first-run", "--remote-debugging-port=0", `--user-data-dir=${join(TMP, "chrome")}`, "about:blank"], { stdio: ["ignore", "ignore", "pipe"] });
@@ -176,6 +178,7 @@ for (const [role, steps, list] of RUNS) {
       }
     }
   }
+  if (!ONLY) for (const g of GONE[role] || []) { await ev(`location.hash = "#/${g}"; 1`); await sleep(700); const at = await ev("location.hash"); if (at !== HOME[role]) note(`${role}${steps ? "" : "(예전)"} 없앤 주소 ${g}`, 360, [`${at} 로 감`]); }
   // 알림을 눌러 그 기록까지 가는지: 종류마다 하나씩 (지운 기록은 안내만)
   if (!ONLY || ONLY === "alerts") {
     await cdp("Emulation.setDeviceMetricsOverride", { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false });
