@@ -2160,3 +2160,25 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .mon-hist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .mon-hist li { padding-left: 10px; border-left: 3px solid var(--line); overflow-wrap: anywhere; }
 @media (max-width: 420px) { .pick-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; } .pick-tile { padding: 12px; } }
+
+/* 택배 카드 · 종류 설명 (기능확인 이미지1·3) */
+.ship-card { gap: 8px; }
+.ship-card__top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.ship-card__name { min-width: 0; font-size: 18px; overflow-wrap: anywhere; }
+.ship-badge { flex-shrink: 0; min-width: 58px; padding: 4px 12px; border-radius: 9px; color: #fff; font-size: 14px; font-weight: 700; text-align: center; }
+.ship-badge.is-ready { background: #666; } .ship-badge.is-sent { background: #d3161f; } .ship-badge.is-arrived { background: #1f7a3d; } .ship-badge.is-returned { background: #7a3e00; }
+.ship-card__chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.ship-chip { max-width: 100%; padding: 3px 12px; border-radius: 999px; background: #ececec; color: #222; font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+.ship-chip.is-monastery { background: #ffc4dd; color: #3d0a20; } .ship-chip.is-volunteer { background: #ffe382; color: #3a2b00; } .ship-chip.is-vendor { background: #cfe3ff; color: #0b2547; }
+.ship-chip.is-none { background: transparent; border: 1px dashed var(--line); color: var(--ink-2); }
+.ship-chip.is-line { background: var(--surface); border: 1px solid var(--line); color: var(--ink); font-weight: 500; }
+.ship-chip.is-ok { border-color: #1f7a3d; }
+.ship-sep { width: 1px; height: 16px; background: var(--line); }
+.ship-card__meta { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 14px; }
+.ship-card__meta > span { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.ship-card__meta svg { width: 16px; height: 16px; }
+.ship-kinds { padding: 10px 14px; margin-bottom: 12px; }
+.ship-kinds summary { font-weight: 700; cursor: pointer; }
+.ship-kinds ul { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 14px; }
+.ship-filters { margin: 10px 0; }
+.addr-row { display: flex; gap: 8px; } .addr-row input { flex: 1; min-width: 0; } .addr-row .btn { flex-shrink: 0; }

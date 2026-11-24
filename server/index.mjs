@@ -2160,6 +2160,7 @@ async function volunteerRoute(req, res, user, path, method, url) {
 // 관리자와 봉사자(부서·팀)가 같이 씀. 권한은 기능마다 아래에서 나눔
 const MON_STATUS = ["new", "edu_done", "making", "recovered", "checked", "issue"];
 const SHIP_STATUS = ["ready", "sent", "arrived", "returned"];
+const SHIP_KINDS = { in: ["", "inspect", "material_done", "vendor"], out: ["", "material_make", "material_work", "return"] }; // '' 종류 미정 (예전 택배)
 const PARTY_TYPES = ["monastery", "volunteer", "vendor", "etc"];
 const DUTIES = ["parcel_out", "parcel_in", "storage", "inspect_place", "purchase", "thread", "etc"];
 const ASSIGN_STATUS = ["wait", "doing", "done"];
@@ -2259,7 +2260,7 @@ function shipmentsOut(user) {
     FROM shipments x LEFT JOIN monasteries m ON m.id = x.monastery_id LEFT JOIN users u ON u.id = x.user_id LEFT JOIN external_contacts e ON e.id = x.external_contact_id
     LEFT JOIN users h ON h.id = x.handler_id LEFT JOIN vol_schedules s ON s.id = x.schedule_id LEFT JOIN users c ON c.id = x.created_by
     ORDER BY CASE x.status WHEN 'ready' THEN 0 WHEN 'sent' THEN 1 ELSE 2 END, coalesce(x.arrived_date, x.sent_date, x.created_at) DESC, x.id DESC`).all()
-    .map((x) => ({ id: x.id, direction: x.direction, partyType: x.party_type, monasteryId: x.monastery_id, userId: x.user_id, externalContactId: x.external_contact_id,
+    .map((x) => ({ id: x.id, direction: x.direction, kind: x.kind, partyType: x.party_type, monasteryId: x.monastery_id, userId: x.user_id, externalContactId: x.external_contact_id,
       party: x.monastery || x.party_user || x.vendor || x.party_name || "", partyName: x.party_name, address: x.address, carrier: x.carrier, trackingNo: x.tracking_no, contents: x.contents, qty: x.qty,
       status: x.status, sentDate: x.sent_date || "", arrivedDate: x.arrived_date || "", handlerId: x.handler_id, handler: x.handler || "", scheduleId: x.schedule_id,
       schedule: x.schedule_title ? x.schedule_title.split(" · ").pop() : "", note: x.note, author: x.author || "", createdBy: x.created_by, recoveryId: x.recovery_id || null, canDelete: canShip && (user.role === "admin" || (x.created_by === user.id && !x.recovery_id)), updatedAt: x.updated_at }));
@@ -2269,7 +2270,10 @@ function shipmentSchedule(sh) {
   if (sh.schedule_id && db.prepare("SELECT 1 FROM vol_schedules WHERE id = ? AND monastery_id = ?").get(sh.schedule_id, sh.monastery_id)) return sh.schedule_id;
   return db.prepare("SELECT id FROM vol_schedules WHERE monastery_id = ? AND project_item_id = ? ORDER BY date DESC LIMIT 1").get(sh.monastery_id, rosaryGroupId())?.id || null;
 }
-const shipmentArrived = (sh) => sh.direction === "in" && sh.status === "arrived" && !!sh.monastery_id;
+// 회수·검수 대기로 넘기는 택배: 수도회에서 도착한 검수 택배 (종류 미정인 예전 택배도 지금까지처럼). 재료·업체 택배는 넘기지 않음
+const shipmentArrived = (sh) => sh.direction === "in" && sh.status === "arrived" && !!sh.monastery_id && ["", "inspect"].includes(sh.kind);
+const NOT_INSPECT_NOTICE = "검수 택배가 아니라서 회수 기록과 검수 대기는 만들지 않았어요. 완성 묵주가 들어 있으면 종류를 '검수 택배'로 바꿔 주세요.";
+const kindNotice = (sh) => (sh.direction === "in" && sh.status === "arrived" && sh.monastery_id && !shipmentArrived(sh) ? NOT_INSPECT_NOTICE : "");
 const NO_EDU_NOTICE = "이 수도회에 교육이 없어서 회수 기록과 검수 대기는 만들지 않았어요. 교육을 등록한 뒤 이 택배를 다시 저장하면 넘어가요.";
 const raiseRecovered = (mid) => setMonStatus(db, mid, "recovered", ["new", "edu_done", "making"], "택배 도착"); // 문제 있음·검수완료는 그대로
 // 택배 수신(도착)이 수도회 물량이면 회수 기록을 하나 만들어 검수 대기 목록에 보이게. 교육이 없으면 아무것도 바꾸지 않고 안내만
@@ -2319,7 +2323,7 @@ function shipmentInput(b, old) {
   const status = has(b, "status") ? pick(b.status, SHIP_STATUS, "택배 상태") : old ? old.status : "ready";
   const date = (v, label) => { if (v === "" || v == null) return null; if (!isDate(v)) throw bad(`${label}을 확인해 주세요.`); return v; };
   const v = {
-    direction, party_type,
+    direction, party_type, kind: has(b, "kind") ? pick(b.kind, SHIP_KINDS[direction], "택배 종류") : old ? old.kind : "",
     monastery_id: has(b, "monasteryId") ? optId(b.monasteryId) : old ? old.monastery_id : null,
     user_id: has(b, "userId") ? optId(b.userId) : old ? old.user_id : null,
     external_contact_id: has(b, "externalContactId") ? optId(b.externalContactId) : old ? old.external_contact_id : null,
@@ -2484,9 +2488,10 @@ async function opsRoute(req, res, user, path, method) {
     const v = shipmentInput(await readJson(req));
     let notice = "";
     const id = inTx(() => {
-      const id = Number(db.prepare(`INSERT INTO shipments (direction, party_type, monastery_id, user_id, external_contact_id, party_name, address, carrier, tracking_no, contents, qty, status, sent_date, arrived_date, handler_id, schedule_id, note, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.direction, v.party_type, v.monastery_id, v.user_id, v.external_contact_id, v.party_name, v.address, v.carrier, v.tracking_no, v.contents, v.qty, v.status, v.sent_date, v.arrived_date, v.handler_id, v.schedule_id, v.note, user.id).lastInsertRowid);
-      notice = recoveryFromShipment(db.prepare("SELECT * FROM shipments WHERE id = ?").get(id), user);
+      const id = Number(db.prepare(`INSERT INTO shipments (direction, kind, party_type, monastery_id, user_id, external_contact_id, party_name, address, carrier, tracking_no, contents, qty, status, sent_date, arrived_date, handler_id, schedule_id, note, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(v.direction, v.kind, v.party_type, v.monastery_id, v.user_id, v.external_contact_id, v.party_name, v.address, v.carrier, v.tracking_no, v.contents, v.qty, v.status, v.sent_date, v.arrived_date, v.handler_id, v.schedule_id, v.note, user.id).lastInsertRowid);
+      const sh = db.prepare("SELECT * FROM shipments WHERE id = ?").get(id);
+      notice = recoveryFromShipment(sh, user) || kindNotice(sh);
       return id;
     });
     return ok(201, { id, notice, shipments: shipmentsOut(user) });
@@ -2500,9 +2505,10 @@ async function opsRoute(req, res, user, path, method) {
       const b = await readJson(req), v = shipmentInput(b, x);
       let notice = "";
       inTx(() => {
-        db.prepare(`UPDATE shipments SET party_type = ?, monastery_id = ?, user_id = ?, external_contact_id = ?, party_name = ?, address = ?, carrier = ?, tracking_no = ?, contents = ?, qty = ?, status = ?, sent_date = ?, arrived_date = ?, handler_id = ?, schedule_id = ?, note = ?, updated_at = datetime('now') WHERE id = ?`)
-          .run(v.party_type, v.monastery_id, v.user_id, v.external_contact_id, v.party_name, v.address, v.carrier, v.tracking_no, v.contents, v.qty, v.status, v.sent_date, v.arrived_date, v.handler_id, v.schedule_id, v.note, x.id);
-        notice = syncShipmentRecovery(x, db.prepare("SELECT * FROM shipments WHERE id = ?").get(x.id), user, b.syncRecovery);
+        db.prepare(`UPDATE shipments SET kind = ?, party_type = ?, monastery_id = ?, user_id = ?, external_contact_id = ?, party_name = ?, address = ?, carrier = ?, tracking_no = ?, contents = ?, qty = ?, status = ?, sent_date = ?, arrived_date = ?, handler_id = ?, schedule_id = ?, note = ?, updated_at = datetime('now') WHERE id = ?`)
+          .run(v.kind, v.party_type, v.monastery_id, v.user_id, v.external_contact_id, v.party_name, v.address, v.carrier, v.tracking_no, v.contents, v.qty, v.status, v.sent_date, v.arrived_date, v.handler_id, v.schedule_id, v.note, x.id);
+        const sh = db.prepare("SELECT * FROM shipments WHERE id = ?").get(x.id);
+        notice = syncShipmentRecovery(x, sh, user, b.syncRecovery) || kindNotice(sh);
       });
       return ok(200, { notice, shipments: shipmentsOut(user) });
     }
@@ -3009,7 +3015,7 @@ function writeHandout(id, v, user) {
     const addr = v.address || (v.mid ? db.prepare("SELECT address FROM monasteries WHERE id = ?").get(v.mid).address : "");
     const party = [v.type === "monastery" ? "monastery" : v.uid ? "volunteer" : "etc", v.mid, v.uid, v.type === "monastery" ? "" : v.rname || who, addr, contents, v.qty || null];
     if (sid) db.prepare("UPDATE shipments SET party_type = ?, monastery_id = ?, user_id = ?, party_name = ?, address = ?, contents = ?, qty = ?, updated_at = datetime('now') WHERE id = ?").run(...party, sid);
-    else db.prepare("UPDATE thread_handouts SET shipment_id = ? WHERE id = ?").run(Number(db.prepare("INSERT INTO shipments (direction, party_type, monastery_id, user_id, party_name, address, contents, qty, status, note, created_by) VALUES ('out', ?, ?, ?, ?, ?, ?, ?, 'ready', '타래 배분', ?)").run(...party, user.id).lastInsertRowid), id);
+    else db.prepare("UPDATE thread_handouts SET shipment_id = ? WHERE id = ?").run(Number(db.prepare("INSERT INTO shipments (direction, kind, party_type, monastery_id, user_id, party_name, address, contents, qty, status, note, created_by) VALUES ('out', ?, ?, ?, ?, ?, ?, ?, ?, 'ready', '타래 배분', ?)").run(v.type === "monastery" ? "material_make" : "material_work", ...party, user.id).lastInsertRowid), id);
   } else if (sid) {
     db.prepare("UPDATE thread_handouts SET shipment_id = NULL WHERE id = ?").run(id);
     db.prepare("DELETE FROM shipments WHERE id = ? AND status = 'ready'").run(sid);

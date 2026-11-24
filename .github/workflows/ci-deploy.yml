@@ -1119,6 +1119,14 @@ jobs:
           curl -fs -H "$T2" -XPATCH -d '{"status":"done","statusFrom":"plan"}' $B/team/orgs/$P1 >/dev/null; curl -fs -H "$T2" -XPATCH -d '{"status":"plan","statusFrom":"done"}' $B/team/orgs/$P1 >/dev/null; test "$(MON $PM status)" = edu_done
           curl -fs -H "$TH" -XPATCH -d '{"status":"new"}' $B/ops/monasteries/$PM >/dev/null; AUTO; test "$(MON $PM status)" = new
           curl -fs -H "$T2" $B/ops/monasteries/$PM/history | JQ 'if(d.history[0].to!=="new"||d.history[0].who!=="팀봉사")process.exit(1)'
+          # 택배 종류: 검수·종류 미정만 회수로 넘김, 다른 종류는 안내, 방향에 없는 종류는 막음, 종류를 바꾸면 회수도 맞춤
+          K1=$(EDU "종류 하나" 2030-11-05); KM=$(ORG $K1 monasteryId)
+          test "$(CODE -H "$VH" -XPOST -d '{"direction":"in","kind":"return","partyType":"monastery","monasteryId":'$KM'}' $B/ops/shipments)" = 400
+          test "$(CODE -H "$VH" -XPOST -d '{"direction":"in","kind":"material_done","partyType":"monastery","monasteryId":'$KM',"status":"arrived","qty":4}' $B/ops/shipments)" = 201; BODY 'if(!/검수 택배가 아니라서/.test(d.notice))process.exit(1)'; KS=$(BODY 'console.log(d.id)')
+          test "$(REC $KS)/$(MON $KM status)" = "없음/new"
+          curl -fs -H "$VH" -XPATCH -d '{"kind":"inspect"}' $B/ops/shipments/$KS | JQ 'if(d.shipments.find(x=>x.id==='$KS').kind!=="inspect")process.exit(1)'; test "$(REC $KS | cut -d/ -f1,2)/$(MON $KM status)" = "$K1/4/recovered"
+          curl -fs -H "$VH" -XPATCH -d '{"kind":"vendor"}' $B/ops/shipments/$KS >/dev/null; test "$(REC $KS)/$(MON $KM status)" = "없음/new"
+          curl -fs -H "$VH" $B/ops/shipments | JQ 'if(!d.shipments.some(x=>x.kind==="material_make"&&x.direction==="out")||!d.shipments.some(x=>x.kind===""))process.exit(1)'
           curl -fs -H "$H" -XPATCH -d '{"role":"volunteer","volKinds":["dept"],"volLeader":false}' $B/admin/users/$(USR volb) >/dev/null
           curl -fs -H "$H" -XPATCH -d '{"volLeader":false}' $B/admin/users/$(USR teamv) >/dev/null
           curl -fs -H "$H" -XPUT -d '{"staffOn":false}' $B/ops/perms >/dev/null

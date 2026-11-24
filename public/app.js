@@ -7517,33 +7517,61 @@
   // ---- F02 택배 (받기·보내기). readOnly 면 조회만 (팀 봉사자 '회수 받기')
   const SHIP_STATUS = { ready: "준비", sent: "발송", arrived: "도착", returned: "반송" };
   const SHIP_PARTY = { monastery: "수도회", volunteer: "봉사자", vendor: "업체", etc: "기타" };
+  // 택배 종류: 받는 택배 · 보내는 택배 (예전 택배는 '종류 미정')
+  const SHIP_KIND = {
+    in: { inspect: ["검수 택배", "수도회가 만든 완성 묵주. 도착하면 회수·검수 대기로 넘어가요"], material_done: ["재료 택배(작업완료)", "봉사자가 작업을 마친 재료(자른실·안 자른 실·십자가)"], vendor: ["업체 택배", "업체에서 산 물건"] },
+    out: { material_make: ["재료 택배(제작용)", "수도회가 묵주를 만들 재료(자른실·십자가)"], material_work: ["재료 택배(작업용)", "봉사자가 작업할 재료(안 자른 실 등)"], return: ["반송 택배", "불량 등으로 돌려보내는 물건"] }
+  };
+  const shipKind = (s) => SHIP_KIND[s.direction]?.[s.kind]?.[0] || "종류 미정";
+  const shipBadge = (st) => h("span", { class: `ship-badge is-${st}`, text: SHIP_STATUS[st] });
+  // 택배 카드 (이름 · 내용물 · 상대/종류 칩 · 택배사·송장 · 날짜·담당, 오른쪽 위 상태)
+  const shipCard = (s, onclick) => opsCard(onclick, [
+    h("span", { class: "ship-card__top" }, [h("strong", { class: "ship-card__name", text: s.party || SHIP_PARTY[s.partyType] }), shipBadge(s.status)]),
+    opsLine([s.contents, s.qty != null ? `${fmtN(s.qty)}개` : ""].filter(Boolean).join(" · ") || "내용물 안 적음"),
+    h("span", { class: "ship-card__chips" }, [
+      h("span", { class: `ship-chip is-${s.partyType}`, text: SHIP_PARTY[s.partyType] }), h("span", { class: `ship-chip is-${s.partyType}` + (s.kind ? "" : " is-none"), text: shipKind(s) }),
+      s.carrier || s.trackingNo ? h("i", { class: "ship-sep", "aria-hidden": "true" }) : null,
+      s.carrier ? h("span", { class: "ship-chip is-line", text: s.carrier }) : null, s.trackingNo ? h("span", { class: "ship-chip is-line", text: `송장 ${s.trackingNo}` }) : null,
+      s.recoveryId ? h("span", { class: "ship-chip is-line is-ok", text: "회수·검수 대기로 넘김" }) : null]),
+    h("span", { class: "ship-card__meta" }, [
+      h("span", {}, [icon("cal"), [s.sentDate ? `발송 ${shortDate(s.sentDate)}` : "", s.arrivedDate ? `도착 ${shortDate(s.arrivedDate)}` : ""].filter(Boolean).join(" · ") || "날짜 안 적음"]),
+      h("span", {}, [icon("user"), `담당자: ${s.handler || s.author || "-"}`])]),
+    s.note ? h("span", { class: "vm-card__note small", text: s.note }) : null
+  ], "ship-card");
   async function opsShipments(dir, readOnly) {
     const inbound = dir === "in";
     document.title = `${inbound ? "택배 수신" : "택배 발송"} · ${TITLE}`;
-    let [d, m] = await Promise.all([api("/ops/shipments"), api("/ops/monasteries")]);
-    let waiting = readOnly ? (await api("/ops/inspect-waiting")).waiting : null;
+    let [d, m] = await Promise.all([api("/ops/shipments"), api("/ops/monasteries").catch(() => ({ monasteries: [] }))]);
     const can = d.canEdit && !readOnly;
     const mons = m.monasteries;
-    let view = "open";
+    let view = "open", mineOnly = false;
+    const on = new Set(Object.keys(SHIP_STATUS));
     const box = h("div", { class: "vm" });
+    // 내 담당: 담당자가 나이거나, 담당자가 없으면 내가 적은 것
+    const mine = (s) => (s.handlerId ? s.handlerId === state.user.id : s.createdBy === state.user.id);
+    // 정렬: 상태(받기 발송>준비, 보내기 준비>발송) → 내 것 → 날짜. 할 일은 이른 날짜부터, 끝난 것은 최근부터
+    const ORDER = inbound ? ["sent", "ready", "arrived", "returned"] : ["ready", "sent", "arrived", "returned"];
+    const dayKey = (s) => s.arrivedDate || s.sentDate || "";
+    const sortShips = (a, b) => ORDER.indexOf(a.status) - ORDER.indexOf(b.status) || mine(b) - mine(a)
+      || (["ready", "sent"].includes(a.status) ? (dayKey(a) || "9").localeCompare(dayKey(b) || "9") : dayKey(b).localeCompare(dayKey(a))) || b.id - a.id;
     const draw = () => {
       const all = d.shipments.filter((s) => s.direction === dir);
-      const open = all.filter((s) => (inbound ? s.status === "sent" || s.status === "ready" : s.status === "ready"));
-      const list = view === "open" ? open : all;
+      const isOpen = (s) => s.status === "sent" || s.status === "ready";
+      const open = all.filter(isOpen), arrived = all.filter((s) => s.status === "arrived");
+      const list = (view === "open" ? open : view === "arrived" ? arrived : all.filter((s) => on.has(s.status))).filter((s) => !mineOnly || mine(s)).sort(sortShips);
+      const mineBox = h("input", { type: "checkbox", checked: mineOnly, onchange: (e) => { mineOnly = e.target.checked; draw(); } });
       fill(box,
+        h("details", { class: "card ship-kinds", open: store.get("ps.shipKinds", "1") !== "0", ontoggle: (e) => store.set("ps.shipKinds", e.currentTarget.open ? "1" : "0") }, [h("summary", { text: inbound ? "받는 택배에는 어떤 종류가 있나요?" : "보내는 택배에는 어떤 종류가 있나요?" }),
+          h("ul", {}, Object.values(SHIP_KIND[dir]).map(([t, sub]) => h("li", {}, [h("strong", { text: t }), h("span", { class: "muted", text: ` ${sub}` })])))]),
         h("div", { class: "vm-stats" }, inbound
-          ? [vmStat("오는 중", all.filter((s) => s.status === "sent").length), vmStat("도착", all.filter((s) => s.status === "arrived").length), vmStat(readOnly ? "검수 대기" : "받은 수량", readOnly ? waiting.length : all.filter((s) => s.status === "arrived").reduce((n, s) => n + (s.qty || 0), 0))]
-          : [vmStat("보낼 준비", all.filter((s) => s.status === "ready").length, false), vmStat("발송", all.filter((s) => s.status === "sent").length), vmStat("도착 확인", all.filter((s) => s.status === "arrived").length)]),
-        readOnly && waiting.length ? h("section", { class: "card vm-sum" }, [h("h2", { class: "vm-sum__name", text: `검수 대기 ${waiting.length}건` }), h("ul", { class: "vm-opts__list" }, waiting.map((w) => h("li", { class: "small", text: `${shortDate(w.date)} · ${w.org} · ${fmtN(w.qty - w.checked)}개${w.trackingNo ? ` · 송장 ${w.trackingNo}` : ""}` }))), h("a", { class: "btn btn--ghost btn--sm", href: "#/tins3" }, "검수 입력으로 →")]) : null,
-        opsSeg([["open", inbound ? `처리할 것 ${open.length}` : `보낼 것 ${open.length}`], ["all", "전체"]], view, (k) => { view = k; draw(); }),
-        opsCards(list, (s) => opsCard(can ? () => edit(s) : null, [
-          opsTop(s.party || SHIP_PARTY[s.partyType], SHIP_STATUS[s.status]),
-          opsLine([s.contents, s.qty != null ? `${fmtN(s.qty)}개` : ""].filter(Boolean).join(" · ")),
-          opsTags(opsTag(SHIP_PARTY[s.partyType]), s.carrier ? opsTag(s.carrier) : null, s.trackingNo ? opsTag(`송장 ${s.trackingNo}`) : null, s.recoveryId ? opsTag("회수·검수 대기로 넘김", "is-mine") : null),
-          opsLine([s.sentDate ? `발송 ${shortDate(s.sentDate)}` : "", s.arrivedDate ? `도착 ${shortDate(s.arrivedDate)}` : "", s.handler ? `담당 ${s.handler}` : ""].filter(Boolean).join(" · ")),
-          s.note ? h("span", { class: "vm-card__note small", text: s.note }) : null
-        ], s.status === "sent" && inbound ? "is-new-ish" : ""), view === "open" ? (inbound ? "오는 중인 택배가 없어요." : "보낼 준비 중인 택배가 없어요.") : "아직 택배 기록이 없어요."),
-        can ? opsAddBtn(inbound ? "받을 택배 적기" : "보낼 택배 적기", () => edit(null)) : opsHint(readOnly ? "택배는 부서 봉사자가 적어요. 도착하면 회수 기록이 생겨 검수 대기로 넘어와요." : ""));
+          ? [vmStat("오는 중", all.filter((s) => s.status === "sent").length), vmStat("도착", arrived.length), vmStat("받은 수량", arrived.reduce((n, s) => n + (s.qty || 0), 0))]
+          : [vmStat("보낼 준비", all.filter((s) => s.status === "ready").length), vmStat("발송", all.filter((s) => s.status === "sent").length), vmStat("도착 확인", arrived.length)]),
+        opsSeg([["open", `처리할 것 ${open.length}`], ["arrived", `도착 ${arrived.length}`], ["all", `전체 ${all.length}`]], view, (k) => { view = k; draw(); }),
+        h("div", { class: "filters ship-filters" }, [
+          ...(view === "all" ? Object.entries(SHIP_STATUS).map(([k, t]) => h("label", { class: "check" }, [h("input", { type: "checkbox", checked: on.has(k), onchange: (e) => { if (e.target.checked) on.add(k); else on.delete(k); draw(); } }), h("span", { text: `${t} ${all.filter((s) => s.status === k).length}` })])) : []),
+          h("label", { class: "check" }, [mineBox, h("span", { text: "내 것만" })]), h("span", { class: "muted small filters__end", text: `${list.length}건` })]),
+        opsCards(list, (s) => shipCard(s, can ? () => edit(s) : null), mineOnly ? "내 담당 택배가 없어요." : view === "open" ? (inbound ? "처리할 택배가 없어요." : "보낼 준비 중이거나 가는 중인 택배가 없어요.") : "택배 기록이 없어요."),
+        can ? opsAddBtn(inbound ? "받을 택배 적기" : "보낼 택배 적기", () => edit(null)) : opsHint(readOnly ? "택배는 부서 봉사자가 적어요. 여기서는 보기만 해요." : ""));
     };
     // 팀 봉사자가 회수 기록을 직접 고쳤으면(409) 맞출지, 택배만 저장할지 물어봄. 둘 다 아니면 저장하지 않음
     const askSync = async (send, canKeep) => {
@@ -7559,11 +7587,23 @@
       const party = opsSel(Object.entries(SHIP_PARTY), s?.partyType || "monastery");
       const mon = opsSel(mons.map((x) => [x.id, x.name]), s?.monasteryId, "수도회 고르기");
       const pname = h("input", { value: s?.partyName || "", maxlength: "80", placeholder: "보내는·받는 사람 이름" });
-      const addr = h("input", { value: s?.address || "", maxlength: "200", placeholder: "주소" });
       const monF = field("수도회", mon), nameF = field(inbound ? "보낸 사람" : "받는 사람", pname);
-      const sync = () => { monF.hidden = party.value !== "monastery"; nameF.hidden = party.value === "monastery"; };
+      // 종류: 새 택배는 상대에 맞춰 먼저 골라 두고, 사람이 고르면 그대로
+      const kind = opsSel(Object.entries(SHIP_KIND[dir]).map(([k, v]) => [k, v[0]]), s ? s.kind : "", s && !s.kind ? "종류 미정" : "종류 고르기");
+      const kindHint = h("small", { class: "muted" });
+      let kindTouched = !!s;
+      const guess = () => (inbound ? { monastery: "inspect", volunteer: "material_done", vendor: "vendor" } : { monastery: "material_make", volunteer: "material_work" })[party.value] || "";
+      const syncKind = () => { if (!kindTouched) kind.value = guess(); kindHint.textContent = SHIP_KIND[dir][kind.value]?.[1] || "종류를 골라 두면 목록에서 알아보기 쉬워요."; };
+      kind.addEventListener("change", () => { kindTouched = true; syncKind(); });
+      // 주소: 수도회를 고르면 채우고, 수도회를 바꾸면 같이 바꿈. 사람이 고친 주소는 덮어쓰지 않음
+      const addr = h("input", { value: s?.address || "", maxlength: "200", placeholder: "주소" });
+      const addrOf = (id) => mons.find((y) => String(y.id) === String(id))?.address || "";
+      let lastMon = mon.value;
+      mon.addEventListener("change", () => { if (!inbound && (!addr.value.trim() || addr.value === addrOf(lastMon))) addr.value = addrOf(mon.value); lastMon = mon.value; });
+      if (!s && !inbound && mon.value) addr.value = addrOf(mon.value);
+      const addrRow = h("div", { class: "addr-row" }, [addr, h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "주소 복사", onclick: () => (addr.value.trim() ? copyText(addr.value.trim(), "주소를 복사") : toast("복사할 주소가 없어요.")) })]);
+      const sync = () => { monF.hidden = party.value !== "monastery"; nameF.hidden = party.value === "monastery"; syncKind(); };
       party.addEventListener("change", sync); sync();
-      mon.addEventListener("change", () => { const x = mons.find((y) => String(y.id) === mon.value); if (x?.address && !addr.value) addr.value = x.address; });
       const carrier = h("input", { value: s?.carrier || "", maxlength: "40", placeholder: "예: 우체국", list: "ops-carriers" });
       const carriers = h("datalist", { id: "ops-carriers" }, ["우체국", "CJ대한통운", "한진", "롯데", "로젠"].map((v) => h("option", { value: v })));
       const track = h("input", { value: s?.trackingNo || "", maxlength: "40", inputmode: "numeric" });
@@ -7572,18 +7612,22 @@
       const status = opsSel(Object.entries(SHIP_STATUS), s?.status || (inbound ? "sent" : "ready"));
       const sent = h("input", { type: "date", value: s?.sentDate || "" }), arrived = h("input", { type: "date", value: s?.arrivedDate || "" });
       const note = h("textarea", { rows: "2", maxlength: "500" }, s?.note || "");
+      const statusHint = inbound ? `자동으로 바뀌지 않아요. 택배를 받으면 직접 '도착'으로 바꿔 주세요.${s?.recoveryId ? " 회수·검수 대기로 넘어간 택배라 고치면 회수 기록도 함께 바뀌어요." : " 검수 택배는 도착으로 바꾸면 검수 대기로 넘어가요."}` : "자동으로 바뀌지 않아요. 택배를 보내면 직접 '발송'으로 바꿔 주세요.";
       opsSheet(s ? (inbound ? "받을 택배" : "보낼 택배") : inbound ? "받을 택배 적기" : "보낼 택배 적기", [
-        h("div", { class: "row2" }, [field(inbound ? "보낸 곳" : "받는 곳", party), field("상태", status, inbound ? (s?.recoveryId ? "회수·검수 대기로 넘어간 택배예요. 고치면 회수 기록도 함께 바뀌어요" : "받으면 '도착'으로 바꿔요. 수도회 물량은 검수 대기로 넘어가요") : "보내면 '발송'으로 바꿔요")]), monF, nameF, field("주소", addr),
+        h("div", { class: "row2" }, [field(inbound ? "보낸 곳" : "받는 곳", party), field("상태", status, statusHint)]), monF, nameF,
+        h("div", { class: "field" }, [h("span", { class: "field__label", text: "택배 종류" }), kind, kindHint]),
+        inbound ? null : field("주소", addrRow, "수도회를 고르면 적어 둔 주소가 채워져요"),
         h("div", { class: "row2" }, [field("내용물", contents), field("수량", qty)]),
         h("div", { class: "row2" }, [field("택배사", h("span", {}, [carrier, carriers])), field("송장번호", track)]),
-        h("div", { class: "row2" }, [field("발송일", sent), field("도착일", arrived)]), field("메모", note)
+        h("div", { class: "row2" }, [field("발송일", sent), field("도착일", arrived)]), field("메모", note),
+        inbound ? h("details", { class: "vm-extra", open: !!s?.address }, [h("summary", { text: "보낸 곳 주소 (선택, 받는 택배에는 안 적어도 돼요)" }), addrRow]) : null
       ], {
         save: async () => {
-          const body = { direction: dir, partyType: party.value, monasteryId: party.value === "monastery" ? mon.value : null, partyName: party.value === "monastery" ? "" : pname.value, address: addr.value, carrier: carrier.value, trackingNo: track.value, contents: contents.value, qty: qty.value, status: status.value, sentDate: sent.value, arrivedDate: arrived.value, note: note.value, ...(s ? {} : { handlerId: state.user.id }) };
+          const body = { direction: dir, kind: kind.value, partyType: party.value, monasteryId: party.value === "monastery" ? mon.value : null, partyName: party.value === "monastery" ? "" : pname.value, address: addr.value, carrier: carrier.value, trackingNo: track.value, contents: contents.value, qty: qty.value, status: status.value, sentDate: sent.value, arrivedDate: arrived.value, note: note.value, ...(s ? {} : { handlerId: state.user.id }) };
           const r = await askSync((sync) => api(s ? `/ops/shipments/${s.id}` : "/ops/shipments", { method: s ? "PATCH" : "POST", body: sync ? { ...body, syncRecovery: sync } : body }), true);
           if (!r) return false;
           d = { ...d, ...r };
-          toast(r.notice || (status.value === "arrived" && inbound ? "도착 처리했어요. 수도회 물량은 검수 대기로 넘어가요." : "저장했어요.")); draw();
+          toast(r.notice || (status.value === "arrived" && inbound ? "도착 처리했어요." : "저장했어요.")); draw();
         },
         del: s?.canDelete ? async () => {
           if (!confirm(s.recoveryId ? "이 택배 기록을 지울까요? 이어진 회수 기록과 검수 대기도 함께 지워져요." : "이 택배 기록을 지울까요?")) return false;
@@ -7594,7 +7638,8 @@
       });
     };
     draw();
-    return [opsHint(readOnly ? "수도회에서 보낸 완성품 택배를 확인해요. 도착한 물량은 검수 대기로 넘어가요." : inbound ? "받을 택배를 적고, 받으면 '도착'으로 바꿔요. 수도회 물량은 팀 봉사자 검수 대기로 넘어가요." : "수도회·봉사자에게 보낼 택배를 적고, 보내면 '발송'으로 바꿔요."), box];
+    openRef(inbound ? "ship_in" : "ship_out", (id) => d.shipments.find((s) => s.id === id && s.direction === dir), (s) => (can ? edit(s) : toast(`${s.party} 택배예요.`)));
+    return [opsHint(inbound ? "받을 택배를 적어 두고, 실제로 받으면 직접 '도착'으로 바꿔 주세요 (자동으로 바뀌지 않아요). 검수 택배는 팀 봉사자의 검수 대기로 넘어가요." : "수도회·봉사자에게 보낼 택배를 적어 두고, 실제로 보내면 직접 '발송'으로 바꿔 주세요 (자동으로 바뀌지 않아요)."), box];
   }
   // ---- F04 검수 기준 보기 (리더·관리자는 새 판 만들기)
   async function opsCriteria() {
