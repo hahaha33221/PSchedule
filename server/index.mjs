@@ -1472,7 +1472,7 @@ const eduLinksAll = () => { // 일정 id → [[이름, 건수], …]
 };
 function delSchedule(s) {
   const links = eduLinksAll().get(s.id);
-  if (links) throw bad(`${linksText(links)}이(가) 이어져 있어 지울 수 없어요. 그 기록을 다른 교육으로 옮기거나 지운 뒤 다시 해 주세요.`);
+  if (links) throw bad(`${linksText(links)}이 이어져 있어 지울 수 없어요. 그 기록을 다른 교육으로 옮기거나 지운 뒤 다시 해 주세요.`);
   q.delVolSchedule.run(s.id);
 }
 // 교육 하나만 다른 수도회로 옮김. 택배로 받은 회수가 있으면 택배의 수도회와 어긋나므로 막음. 회수·완료 상태는 두 수도회 모두 남은 기록에 맞춤
@@ -4146,7 +4146,7 @@ async function api(req, res, path) {
         const { fields, users } = adminVolFields(b2);
         // 묵주 방문 연결을 끄면 팀 봉사자 화면에서 교육이 사라지므로, 이어진 기록이 있으면 막음
         const links = s.project_item_id && !b2.project ? eduLinksAll().get(s.id) : null;
-        if (links) throw bad(`${linksText(links)}이(가) 이어져 있어 '묵주 프로젝트 방문'을 끌 수 없어요.`);
+        if (links) throw bad(`${linksText(links)}이 이어져 있어 '묵주 프로젝트 방문'을 끌 수 없어요.`);
         inTx(() => {
           q.setVolSchedule.run(...fields, s.id);
           if (fields[7] !== s.qty) q.markVolQty.run(user.name, s.id);

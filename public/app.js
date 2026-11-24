@@ -5115,7 +5115,7 @@
         const body = list.map((m, i) => {
           const day = Object.values(m.qty).reduce((a, b) => a + b, 0);
           running += day;
-          const rowAttrs = canEditMove(m) ? { class: "stock-row", tabindex: "0", title: m.refType ? "눌러서 보기" : "눌러서 고치기", onclick: () => moveDialog(type, m), onkeydown: (e) => { if (e.key === "Enter") moveDialog(type, m); } } : {};
+          const rowAttrs = canEditMove(m) ? { class: "stock-row", tabindex: "0", title: m.refType && m.refType !== "purchase" ? "눌러서 보기" : "눌러서 고치기", onclick: () => moveDialog(type, m), onkeydown: (e) => { if (e.key === "Enter") moveDialog(type, m); } } : {};
           return h("tr", rowAttrs, [
             h("td", { class: "num muted", text: String(i + 1) }), h("td", { class: "nowrap", text: m.date }),
             ...options.map((o) => num(m.qty[o.id])), num(day, "stock-strong"), num(running),
@@ -6681,7 +6681,7 @@
       const orgAsk = h("div", { class: "card stack stack--sm org-ask", role: "alert", hidden: true });
       const askOrg = (c, go) => {
         const btn = (t, v, main) => h("button", { class: `btn btn--sm ${main ? "btn--primary" : "btn--ghost"}`, type: "button", text: t, onclick: () => { orgAsk.hidden = true; go(v); } });
-        const lines = c.mode === "similar" ? [`'${c.to}'와(과) 띄어쓰기·괄호만 다른 수도회가 이미 있어요. 같은 곳이면 그 수도회로 옮겨 주세요.`]
+        const lines = c.mode === "similar" ? [`'${c.to}' 이름과 띄어쓰기·괄호만 다른 수도회가 이미 있어요. 같은 곳이면 그 수도회로 옮겨 주세요.`]
           : c.mode === "move" ? [`'${c.to}'은(는) 이미 있는 수도회예요. 이 교육 하나만 '${c.from}'에서 '${c.to}'(으)로 옮겨요.`]
             : c.mode === "rename" ? [`수도회 이름을 '${c.from}'에서 '${c.to}'(으)로 바꿔요.`, c.edus > 1 ? `이 수도회의 교육 ${c.edus}건 제목이 모두 바뀌어요. 이 교육만 다른 수도회라면 취소해 주세요.` : "연락처·상태는 그대로예요."]
               : [`'${c.to}' 수도회를 새로 만들어 이 교육과 이어요.`];
@@ -6691,6 +6691,7 @@
           h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "취소", onclick: () => { orgAsk.hidden = true; } })]));
         orgAsk.hidden = false; orgAsk.scrollIntoView({ block: "center" });
       };
+      orgName.addEventListener("input", () => { orgAsk.hidden = true; }); // 이름을 또 고치면 다시 물어봄
       const inqBox = h("div", { class: "stack stack--sm" });
       const drawInq = async () => {
         const { inquiries } = await api(`/team/orgs/${o.id}/inquiries`);
@@ -6708,7 +6709,7 @@
         );
       };
       let changed = false;
-      const delWhy = o.linked ? `${o.linked}이(가) 이어져 있어요.` : "네이버폼 신청이나 출고·교육물량 기록이 있어요.";
+      const delWhy = o.linked ? `${o.linked}이 이어져 있어요.` : "네이버폼 신청이나 출고·교육물량 기록이 있어요.";
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: "저장" });
       const form = h("form", { class: "stack", novalidate: true }, [
         h("p", { class: "muted small", text: [`교육 순서 ${o.no}`, o.fromForm ? "네이버폼 신청" : "신청서 없음", o.updatedBy ? `마지막 수정 ${o.updatedBy}` : ""].filter(Boolean).join(" · ") }),
