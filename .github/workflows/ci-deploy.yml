@@ -574,10 +574,10 @@ jobs:
           J="{\"qty\":{\"$VO\":8}}"; curl -fs -H "$VH" -XPATCH -d "$J" $B/volunteer/stock-moves/$VM >/dev/null
           test "$(curl -fs -H "$H" $B/stock/$VL | node -pe 'JSON.parse(require("fs").readFileSync(0)).history.length')" = "$HN"
           curl -fs -H "$H" -XPATCH -d '{"contract":50}' $B/stock/$VL | node -e 'const h=JSON.parse(require("fs").readFileSync(0)).history[0];if(h.action!=="ledger"||!h.summary.includes("계약 수량")||!h.summary.includes("50"))process.exit(1)'
-          curl -fs -H "$VH" -XDELETE $B/volunteer/stock-moves/$VM >/dev/null
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XDELETE $B/volunteer/stock-moves/$VM)" = 409; curl -fs -H "$VH" -XDELETE "$B/volunteer/stock-moves/$VM?confirmed=1" >/dev/null
           curl -fs -H "$H" $B/stock/$VL | node -e 'const h=JSON.parse(require("fs").readFileSync(0)).history[0];if(h.action!=="delete"||h.by!=="봉사자일"||!h.summary.includes("입고 삭제"))process.exit(1)'
           # 봉사자는 남(직원·다른 봉사자)이 적은 기록도 고치고 지움, 사진도 올리고 지움, 수정 기록에 고친 봉사자로 남음
-          J="{\"qty\":{\"$VO\":3}}"; curl -fs -H "$VH" -XPATCH -d "$J" $B/volunteer/stock-moves/$SM | grep -q '"qty":{"'$VO'":3}'
+          J="{\"qty\":{\"$VO\":3},\"confirmed\":true}"; curl -fs -H "$VH" -XPATCH -d "$J" $B/volunteer/stock-moves/$SM | grep -q '"qty":{"'$VO'":3}'
           curl -fs -H "$H" $B/stock/$VL | node -e 'const h=JSON.parse(require("fs").readFileSync(0)).history[0];if(h.action!=="edit"||h.by!=="봉사자일"||!h.summary.includes("2 → 3"))process.exit(1)'
           P2=$(curl -fs -H "$(bearer "$A9")" -XPOST -d "{\"data\":\"$PNG\"}" $B/volunteer/stock-moves/$SM/photos | node -pe 'const d=JSON.parse(require("fs").readFileSync(0));const m=d.moves.find(x=>x.id==='$SM');if(m.photos.length!==1)process.exit(1);m.photos[0]')
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XDELETE $B/volunteer/stock-photos/$P2)" = 200
@@ -792,11 +792,13 @@ jobs:
           curl -fs -H "$H" $B/ops/groups | JQ 'const a=d.groups.find(g=>g.id==='$GR').assigns.find(x=>x.scheduleId==='$SC2');if(a.status!=="done"||a.checked!==20)process.exit(1)'
           curl -fs -H "$H" $B/ops/monasteries | JQ 'const m=d.monasteries.find(x=>x.id=='$MID2');if(m.status!=="checked"||m.checkedQty!==20)process.exit(1)'
           # CRUD 보강: 수도회 추가·이름(· 정리·중복 막음·일정 제목 같이)·지우기(이어진 것 있으면 막음)
-          MX=$(curl -fs -H "$VH" -XPOST -d '{"name":"오타·수도회"}' $B/ops/monasteries | JQ 'const m=d.monasteries.find(x=>x.name==="오타 수도회");if(!m||!m.deletable)process.exit(1);console.log(m.id)')
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPOST -d '{"name":"오타·수도회"}' $B/ops/monasteries)" = 403
+          MX=$(curl -fs -H "$H" -XPOST -d '{"name":"오타·수도회"}' $B/ops/monasteries | JQ 'const m=d.monasteries.find(x=>x.name==="오타 수도회");if(!m||!m.deletable)process.exit(1);console.log(m.id)')
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XPATCH -d '{"name":"연결 수도회"}' $B/ops/monasteries/$MX)" = 400
           curl -fs -H "$VH" -XPATCH -d '{"name":"바른  수도회"}' $B/ops/monasteries/$MX | JQ 'if(!d.monasteries.some(x=>x.name==="바른 수도회"))process.exit(1)'
-          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$TH" -XDELETE $B/ops/monasteries/$MID2)" = 400
-          curl -fs -H "$VH" -XDELETE $B/ops/monasteries/$MX | JQ 'if(d.monasteries.some(x=>x.id=='$MX'))process.exit(1)'
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XDELETE $B/ops/monasteries/$MID2)" = 400
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$VH" -XDELETE $B/ops/monasteries/$MX)" = 403
+          curl -fs -H "$H" -XDELETE $B/ops/monasteries/$MX | JQ 'if(d.monasteries.some(x=>x.id=='$MX'))process.exit(1)'
           curl -fs -H "$H" -XPATCH -d '{"name":"이름 바뀐 수도회"}' $B/ops/monasteries/$MID2 >/dev/null
           curl -fs -H "$TH" $B/team/orgs | JQ 'const o=d.orgs.find(x=>x.id==='$SC2');if(o.org!=="이름 바뀐 수도회"||o.monasteryId!=='$MID2')process.exit(1)'
           # 검수 기준: 쓰인 판은 고치기·지우기 막음, 안 쓴 판은 고치고 지움
@@ -963,7 +965,7 @@ jobs:
           test "$(MON $M4 status)" = checked
           for J in '{"qty":81}' '{"status":"sent"}' '{"monasteryId":'$M5'}'; do test "$(CODE -H "$VH" -XPATCH -d "$J" $B/ops/shipments/$S4)" = 400; done
           test "$(CODE -H "$H" -XDELETE $B/ops/shipments/$S4)" = 400; test "$(CODE -H "$VH" -XPATCH -d '{"carrier":"우체국"}' $B/ops/shipments/$S4)" = 200; test "$(REC $S4)" = "$E4/80/2030-09-11"
-          MN=$(curl -fs -H "$VH" -XPOST -d '{"name":"교육 없는 곳"}' $B/ops/monasteries | JQ 'console.log(d.monasteries.find(m=>m.name==="교육 없는 곳").id)')
+          MN=$(curl -fs -H "$TH" -XPOST -d '{"name":"교육 없는 곳"}' $B/ops/monasteries | JQ 'console.log(d.monasteries.find(m=>m.name==="교육 없는 곳").id)')
           test "$(CODE -H "$VH" -XPOST -d '{"direction":"in","partyType":"monastery","monasteryId":'$MN',"status":"arrived","qty":3}' $B/ops/shipments)" = 201; BODY 'if(!/교육이 없어서/.test(d.notice))process.exit(1)'; test "$(MON $MN status)" = new
           # [5] 남의 검수 기록·사진은 못 지움, 남의 기록 고치기는 그대로, 고치거나 지우면 배정·수도회 상태를 다시 맞춤, 손으로 정한 issue 는 그대로
           ASG() { curl -fs -H "$H" $B/ops/groups | JQ 'console.log(d.groups.find(g=>g.id==='$GR').assigns.find(a=>a.scheduleId==='$E4').status)'; }
@@ -1095,6 +1097,28 @@ jobs:
           MV9=$(curl -fs -H "$H" $B/ops/stock | JQ 'const m=d.moves.find(x=>x.refType==="move"&&x.type==="out");console.log(m.id)')
           test "$(CODE -H "$H" -XPATCH -d '{"qty":1,"date":"2030-10-14","note":"메모"}' $B/ops/stock/moves/$MV9)" = 200; MV9=$(curl -fs -H "$H" $B/ops/stock | JQ 'const m=d.moves.find(x=>x.refType==="move"&&x.type==="out");console.log(m.id)')
           test "$(CODE -H "$H" -XPATCH -d '{"qty":'$((LQ+1))',"date":"2030-10-14"}' $B/ops/stock/moves/$MV9)" = 400; test "$(CODE -H "$H" -XDELETE $B/ops/stock/moves/$MV9)" = 200
+          # ---- 기능확인(11/24): 수도회 전화·추가는 리더·관리자, 비슷한 이름 확인, 상태 이력, 날짜가 지나면 교육 완료
+          F1=$(EDU "확인 하나" 2030-11-01); FM=$(ORG $F1 monasteryId)
+          for X in "$T2" "$VH"; do test "$(CODE -H "$X" -XPATCH -d '{"phone":"02-1"}' $B/ops/monasteries/$FM)" = 403; test "$(CODE -H "$X" -XPOST -d '{"name":"몰래"}' $B/ops/monasteries)" = 403; done
+          test "$(CODE -H "$T2" -XPATCH -d '{"contact":"02-1"}' $B/team/orgs/$F1)" = 403; test "$(CODE -H "$TH" -XPATCH -d '{"contact":"02-2"}' $B/team/orgs/$F1)" = 200; test "$(CODE -H "$TH" -XPATCH -d '{"phone":"02-345-6789"}' $B/ops/monasteries/$FM)" = 200
+          curl -fs -H "$T2" $B/ops/monasteries | JQ 'if(d.monasteries.find(m=>m.id=='$FM').phone!=="02-345-6789"||d.canPhone||d.canAdd)process.exit(1)'; curl -fs -H "$VH" $B/ops/monasteries | JQ 'if(d.monasteries.some(m=>m.phone))process.exit(1)'
+          test "$(CODE -H "$TH" -XPOST -d '{"name":"확인하나"}' $B/ops/monasteries)" = 409; BODY 'if(d.confirm.mode!=="similar")process.exit(1)'; test "$(CODE -H "$TH" -XPOST -d '{"name":"확인하나","orgConfirm":"force"}' $B/ops/monasteries)" = 201
+          curl -fs -H "$T2" $B/ops/monasteries | JQ 'const m=d.monasteries.find(x=>x.name==="확인하나");if(!m.addedBy||!m.addedAt)process.exit(1)'
+          test "$(CODE -H "$TH" -XPOST -d '{"org":"(확인) 하나"}' $B/team/orgs)" = 409; curl -fs -H "$TH" -XPOST -d '{"org":"(확인) 하나","orgConfirm":"similar:'$FM'"}' $B/team/orgs | JQ 'if(d.orgs.find(o=>o.id===d.id).monasteryId!=='$FM')process.exit(1)'
+          SQL() { DATA=/tmp/ps/pschedule.db node --disable-warning=ExperimentalWarning -e 'const {DatabaseSync}=require("node:sqlite");const r=new DatabaseSync(process.env.DATA).prepare(process.argv[1]);console.log(process.argv[2]?Object.values(r.get())[0]:r.run().changes)' "$@"; }
+          SQL "UPDATE vol_schedules SET monastery_id = NULL WHERE id = $F1" >/dev/null
+          test "$(CODE -H "$T2" -XPATCH -d '{"org":"우회 수도회","orgConfirm":"create"}' $B/team/orgs/$F1)" = 403; test "$(CODE -H "$TH" -XPATCH -d '{"org":"우회 수도회","orgConfirm":"create"}' $B/team/orgs/$F1)" = 200
+          # 날짜가 지난 교육: 등록→교육 완료(자동), 미정·연기·사람이 예정으로 되돌린 교육은 빼고, 예정으로 되돌려도 다른 지난 교육이 있으면 서로 되돌리지 않음
+          AUTO() { (cd server && DATA=/tmp/ps/pschedule.db node --disable-warning=ExperimentalWarning --input-type=module -e 'import {DatabaseSync} from "node:sqlite";import {autoEduDone} from "./edu-status.mjs";autoEduDone(new DatabaseSync(process.env.DATA))'); }
+          P1=$(EDU "지난 하나" 2020-01-01); PM=$(ORG $P1 monasteryId); P2=$(EDU "지난 연기" 2020-01-01); PM2=$(ORG $P2 monasteryId); P3=$(EDU "지난 미정" "" ); PM3=$(ORG $P3 monasteryId)
+          curl -fs -H "$T2" -XPATCH -d '{"status":"delay","statusFrom":"plan"}' $B/team/orgs/$P2 >/dev/null
+          test "$(MON $PM status)" = new; AUTO; test "$(MON $PM status)/$(MON $PM2 status)/$(MON $PM3 status)/$(ORG $P1 status)" = "edu_done/new/new/plan"
+          curl -fs -H "$T2" $B/ops/monasteries/$PM/history | JQ 'const x=d.history[0];if(x.to!=="edu_done"||x.from!=="new"||x.who!=="자동")process.exit(1)'
+          curl -fs -H "$T2" -XPATCH -d '{"status":"done","statusFrom":"plan"}' $B/team/orgs/$P1 >/dev/null; curl -fs -H "$T2" -XPATCH -d '{"status":"plan","statusFrom":"done"}' $B/team/orgs/$P1 >/dev/null; test "$(MON $PM status)" = new; AUTO; test "$(MON $PM status)" = new
+          P4=$(EDU "지난 하나" 2020-02-01); AUTO; test "$(MON $PM status)" = edu_done
+          curl -fs -H "$T2" -XPATCH -d '{"status":"done","statusFrom":"plan"}' $B/team/orgs/$P1 >/dev/null; curl -fs -H "$T2" -XPATCH -d '{"status":"plan","statusFrom":"done"}' $B/team/orgs/$P1 >/dev/null; test "$(MON $PM status)" = edu_done
+          curl -fs -H "$TH" -XPATCH -d '{"status":"new"}' $B/ops/monasteries/$PM >/dev/null; AUTO; test "$(MON $PM status)" = new
+          curl -fs -H "$T2" $B/ops/monasteries/$PM/history | JQ 'if(d.history[0].to!=="new"||d.history[0].who!=="팀봉사")process.exit(1)'
           curl -fs -H "$H" -XPATCH -d '{"role":"volunteer","volKinds":["dept"],"volLeader":false}' $B/admin/users/$(USR volb) >/dev/null
           curl -fs -H "$H" -XPATCH -d '{"volLeader":false}' $B/admin/users/$(USR teamv) >/dev/null
           curl -fs -H "$H" -XPUT -d '{"staffOn":false}' $B/ops/perms >/dev/null

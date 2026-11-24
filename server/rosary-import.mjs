@@ -7,7 +7,7 @@
 //   --dates     날짜·시간을 엑셀(일정표 시간, 비면 명단 시간) 값으로 (달력 미정 줄은 그대로)
 //   --pin=27:28 엑셀 번호 27 을 DB 일정 #28 에 맞춤 (--pin=27:new 는 새로 넣음). 여러 번 써도 됨
 // 오늘까지의 교육은 모두 진행완료로 봄. 출력에는 봉사자 이름·연락처를 넣지 않음
-import { eduStatus, setEduStatus } from "./edu-status.mjs";
+import { eduStatus, setEduStatus, setMonStatus } from "./edu-status.mjs";
 const TITLE = "묵주 교육 · ";
 
 const norm = (s) => String(s || "").replace(/[\s·.,()（）\[\]_-]/g, "").replace(/수녀회|수도회|수녀원|수녀$/g, "");
@@ -197,7 +197,7 @@ export function importRosary(db, data, opts = {}) {
     if (unknown) warn.push(`참여 기록에만 있는 사람 ${unknown}명을 명단에 '기타'로 넣음`);
 
     // 5) 진행완료 교육의 수도회는 '교육완료' (이미 그 다음 단계면 그대로)
-    db.prepare("UPDATE monasteries SET status = 'edu_done', updated_at = datetime('now') WHERE status = 'new' AND id IN (SELECT s.monastery_id FROM vol_schedules s LEFT JOIN team_org_info t ON t.schedule_id = s.id WHERE s.project_item_id = ? AND s.monastery_id IS NOT NULL AND s.progress = 'done' AND coalesce(t.status, '') <> 'delay')").run(g.id);
+    for (const m of db.prepare("SELECT DISTINCT s.monastery_id AS id FROM vol_schedules s LEFT JOIN team_org_info t ON t.schedule_id = s.id WHERE s.project_item_id = ? AND s.monastery_id IS NOT NULL AND s.progress = 'done' AND coalesce(t.status, '') <> 'delay'").all(g.id)) setMonStatus(db, m.id, "edu_done", ["new"], "엑셀 반영");
     sum.eduDone = eduDoneN() - eduDone0;
 
     // 6) 기타 일정 (봉사자 모임): 같은 날 같은 제목이 없으면 넣음

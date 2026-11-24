@@ -887,6 +887,7 @@ function addOpsTables(db) {
   linkMonasteries(db);
   addOpsTables2(db);
   addRosaryEduTables(db);
+  addFeedbackTables(db);
 }
 // DB 설계 v2 2차 (F07~F12): 보관 위치·실자르기·타래 배분·업체 구매, 입출고에 위치·원천 연결
 // stock_moves.type 은 그대로 in·out (CHECK 제약이 있고, 재고 계산이 모두 입고 − 출고라서). 위치 이동은 출고+입고 두 줄, 실사 조정은 차이만큼 입고·출고 한 줄로 쌓고 ref_type 으로 구분
@@ -1081,5 +1082,59 @@ function addRosaryEduTables(db) {
       PRIMARY KEY (schedule_id, roster_id)
     );
     CREATE INDEX IF NOT EXISTS vol_edu_helpers_roster ON vol_edu_helpers (roster_id);
+  `);
+}
+
+// 기능확인(2026-11-24) 반영: 택배 종류, 품목 색, 수도회 추가한 사람·상태 이력, 검수 기준 사진, 변경 내역(알림). 더하기만 하고 있던 값은 바꾸지 않음
+function addFeedbackTables(db) {
+  const has = (t, c) => db.prepare(`PRAGMA table_info(${t})`).all().some((x) => x.name === c);
+  const col = (t, c, def) => { if (!has(t, c)) db.exec(`ALTER TABLE ${t} ADD COLUMN ${c} ${def}`); };
+  col("shipments", "kind", "TEXT NOT NULL DEFAULT ''");            // 택배 종류 ('' = 종류 미정, 예전 택배)
+  col("stock_options", "color", "TEXT NOT NULL DEFAULT ''");       // 품목 색: #rrggbb · none 색 없음 · '' 이름으로 정한 기본색
+  col("monasteries", "created_by", "INTEGER REFERENCES users(id) ON DELETE SET NULL"); // 추가한 사람 (앞으로 추가한 것부터)
+  col("vol_schedules", "auto_skip", "INTEGER NOT NULL DEFAULT 0"); // 1: 사람이 예정으로 되돌려서 날짜가 지나도 수도회를 저절로 '교육 완료'로 안 올림
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS monastery_status_log (
+      id           INTEGER PRIMARY KEY,
+      monastery_id INTEGER NOT NULL REFERENCES monasteries(id) ON DELETE CASCADE,
+      from_status  TEXT NOT NULL,
+      to_status    TEXT NOT NULL,
+      reason       TEXT NOT NULL DEFAULT '',
+      actor_id     INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      actor_name   TEXT NOT NULL DEFAULT '',
+      at           TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS monastery_status_log_m ON monastery_status_log (monastery_id, id);
+    -- 검수 기준 사진: 정상 예시(ok)·불량 예시(bad). item_key 는 불량 코드(''=묵주 전체) → 기준 판을 새로 만들어도 같은 코드면 이어짐
+    CREATE TABLE IF NOT EXISTS criteria_photos (
+      id         INTEGER PRIMARY KEY,
+      kind       TEXT NOT NULL CHECK (kind IN ('ok', 'bad')),
+      item_key   TEXT NOT NULL DEFAULT '',
+      mime       TEXT NOT NULL,
+      data       BLOB NOT NULL,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    -- 변경 내역(알림): 누가·언제·무엇을·어떻게. 전화번호·주소 같은 값은 넣지 않음. 볼 수 있는 사람은 읽을 때 지금 권한으로 거름
+    CREATE TABLE IF NOT EXISTS changes (
+      id         INTEGER PRIMARY KEY,
+      at         TEXT NOT NULL DEFAULT (datetime('now')),
+      actor_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      actor_name TEXT NOT NULL DEFAULT '',
+      topic      TEXT NOT NULL,
+      action     TEXT NOT NULL CHECK (action IN ('add', 'edit', 'delete')),
+      title      TEXT NOT NULL DEFAULT '',
+      detail     TEXT NOT NULL DEFAULT '',
+      ref_id     INTEGER,
+      scope_id   INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS changes_topic ON changes (topic, id);
+    -- 사람마다 메뉴별로 어디까지 봤는지 (기기 사이에도 같게)
+    CREATE TABLE IF NOT EXISTS change_seen (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      menu    TEXT NOT NULL,
+      last_id INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (user_id, menu)
+    );
   `);
 }

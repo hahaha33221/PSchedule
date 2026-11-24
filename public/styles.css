@@ -2144,3 +2144,19 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .org-ask { padding: 12px 14px; border: 2px solid var(--ink); }
 .org-ask .actions { flex-wrap: wrap; }
 .org-ask .btn { white-space: normal; height: auto; min-height: 36px; text-align: left; }
+
+/* 누르면 목록이 바뀌는 칸 · 전화 복사 · 상태 이력 (기능확인 2026-11-24) */
+.pick-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.pick-tile { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); color: var(--ink); text-align: left; font: inherit; cursor: pointer; }
+.pick-tile span { font-size: 13.5px; font-weight: 600; word-break: keep-all; }
+.pick-tile strong { font-size: 24px; }
+.pick-tile.is-on { background: var(--accent-soft, var(--surface-2)); border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.shell--vol .pick-tile.is-on { background: var(--primary); color: var(--primary-ink); border-color: var(--primary); }
+.pick-tile.is-warn strong { color: var(--danger); }
+.phone-box { display: grid; gap: 6px; }
+.phone-box p { margin: 0; overflow-wrap: anywhere; }
+.phone-box__row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.phone-box__num { font-weight: 700; }
+.mon-hist { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.mon-hist li { padding-left: 10px; border-left: 3px solid var(--line); overflow-wrap: anywhere; }
+@media (max-width: 420px) { .pick-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; } .pick-tile { padding: 12px; } }

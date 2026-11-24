@@ -5068,7 +5068,8 @@
         h("div", { class: "actions" }, [
           m && !lock ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
             if (!confirm(`${m.date} 기록을 지울까요?`)) return;
-            const r = await act(() => api(moveUrl(m.id), { method: "DELETE" }));
+            const r = await act(() => apiAsk(moveUrl(m.id), { method: "DELETE" }));
+            if (!r) return;
             closeDialog(); apply(r);
           } }) : null,
           h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok
@@ -5086,7 +5087,8 @@
             const qty = Object.fromEntries(inputs.map((x) => [x.o.id, x.el.value]));
             const body = { date: date.value, handler: handler.value, note: note.value, issue: issue.value, qty, ...(type === "in" ? { inspectOk: insOk.value, inspectBad: insBad.value } : {}) };
             // 기록이 한 번 저장되면 (사진 올리기가 실패해도) 다시 누를 때는 기록을 또 만들지 않고 그 기록에 사진만 올림
-            let r = savedId ? null : await api(m ? moveUrl(m.id) : `${base}/moves`, { method: m ? "PATCH" : "POST", body: m ? body : { ...body, type } });
+            let r = savedId ? null : await apiAsk(m ? moveUrl(m.id) : `${base}/moves`, { method: m ? "PATCH" : "POST", body: m ? { ...body, ...(over.length ? { confirmed: true } : {}) } : { ...body, type } });
+            if (!savedId && !r) return;
             if (r) { savedId = m ? m.id : r.newMoveId; apply(r); }
             while (pending.length) {
               try { r = await api(`${moveUrl(savedId)}/photos`, { method: "POST", body: { data: await blobToBase64(pending[0]) } }); }
@@ -6335,7 +6337,8 @@
         h("div", { class: "vm-foot" }, [err, sumLine, h("div", { class: "vm-foot__btns" }, [
           m && !lock ? h("button", { class: "btn btn--danger-outline", type: "button", text: "지우기", onclick: async () => {
             if (!confirm(`${vmDay(m.date)} ${lab} 기록을 지울까요? 사진도 함께 지워져요.`)) return;
-            const r = await act(() => api(`/volunteer/stock-moves/${m.id}`, { method: "DELETE" }));
+            const r = await act(() => apiAsk(`/volunteer/stock-moves/${m.id}`, { method: "DELETE" }));
+            if (!r) return;
             closeDialog(); apply(r); toast(`${lab} 기록을 지웠어요.`);
           } }) : null, ok])])
       ]);
@@ -6351,7 +6354,8 @@
             const qty = Object.fromEntries(rows.map((x) => [x.o.id, x.inp.value]));
             const body = { date: date.value, handler: handler.value, note: note.value, issue: issue.value, qty, ...(t === "in" ? { inspectOk: insOk.value, inspectBad: insBad.value } : {}) };
             // 기록이 한 번 저장되면 (사진 올리기가 실패해도) 다시 누를 때는 기록을 또 만들지 않고 사진만 올림
-            let r = savedId ? null : await api(m ? `/volunteer/stock-moves/${m.id}` : `/volunteer/stock/${l.id}/moves`, { method: m ? "PATCH" : "POST", body: m ? body : { ...body, type: t } });
+            let r = savedId ? null : await apiAsk(m ? `/volunteer/stock-moves/${m.id}` : `/volunteer/stock/${l.id}/moves`, { method: m ? "PATCH" : "POST", body: m ? { ...body, ...(over.length ? { confirmed: true } : {}) } : { ...body, type: t } });
+            if (!savedId && !r) return;
             if (r) { savedId = m ? m.id : r.newMoveId; data = r; }
             while (pending.length) {
               try { r = await api(`/volunteer/stock-moves/${savedId}/photos`, { method: "POST", body: { data: await blobToBase64(pending[0]) } }); }
@@ -6458,17 +6462,20 @@
     const org = h("input", { maxlength: "80", autofocus: true, placeholder: "예: ○○수녀회" }), date = h("input", { type: "date", value: date0 || "" }), time = h("input", { type: "time" });
     const place = h("input", { maxlength: "120", placeholder: "예: 명동" }), qty = h("input", { type: "number", min: "0", inputmode: "numeric" }), helper = h("input", { maxlength: "80", placeholder: "예: 길동" });
     const ok = h("button", { class: "btn btn--primary", type: "submit", text: "등록" });
+    const { el: askEl, ask } = orgAskPanel();
+    let orgConfirm = "";
+    org.addEventListener("input", () => { askEl.hidden = true; orgConfirm = ""; });
     const form = h("form", { class: "stack", novalidate: true }, [
       h("p", { class: "muted small", text: "지금 목록에 없는 교육도 새로 등록할 수 있어요. 등록하면 수도회·교육 목록과 캘린더에 보여요." }),
-      field("수도회", org), h("div", { class: "row2" }, [field("교육 날짜", date, "비우면 '달력 미정'으로 수도회·교육 목록에만 보여요"), field("시작 시간", time, "모르면 비워 두세요 ('시간 없음')")]),
+      field("수도회", org), askEl, h("div", { class: "row2" }, [field("교육 날짜", date, "비우면 '달력 미정'으로 수도회·교육 목록에만 보여요"), field("시작 시간", time, "모르면 비워 두세요 ('시간 없음')")]),
       h("div", { class: "row2" }, [field("장소", place), field("요청수량 (선택)", qty)]), field("담당 봉사자 (선택)", helper), err,
       h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok])]);
     form.addEventListener("submit", (e) => { e.preventDefault(); busy(ok, async () => {
       try {
         if (!org.value.trim()) return showError(err, "수도회 이름을 적어 주세요.");
-        const r = await api("/team/orgs", { method: "POST", body: { org: org.value, date: date.value, startTime: time.value, place: place.value, qty: qty.value, helper: helper.value } });
+        const r = await api("/team/orgs", { method: "POST", body: { org: org.value, date: date.value, startTime: time.value, place: place.value, qty: qty.value, helper: helper.value, ...(orgConfirm ? { orgConfirm } : {}) } });
         closeDialog(); toast("교육을 등록했어요."); done(r);
-      } catch (ex) { showError(err, ex.message); }
+      } catch (ex) { if (ex.confirm) return ask(ex.confirm, (v) => { orgConfirm = v; form.requestSubmit(); }); showError(err, ex.message); }
     }); });
     openDialog("교육 등록", form);
   }
@@ -6593,17 +6600,39 @@
     draw();
     return [...teamHead("캘린더", "교육 일정과 검수 봉사일을 보고, 봉사할 수 있는 날을 표시해요."), box];
   }
+  // 글자 복사 (https 가 아니거나 막혀 있으면 옛 방식으로)
+  async function copyText(t, what = "복사") {
+    try { await navigator.clipboard.writeText(t); } catch (e) {
+      const a = h("textarea", { style: "position:fixed;opacity:0" }, t); (dialog.open ? dialog : document.body).append(a); a.select();
+      const done = document.execCommand("copy"); a.remove();
+      if (!done) return toast("복사하지 못했어요. 길게 눌러 복사해 주세요.");
+    }
+    toast(`${what}했어요: ${t}`);
+  }
+  // 연락처 글에서 전화번호를 찾아 전화 걸기·복사 버튼으로 (번호가 없으면 글 전체 복사)
+  function phoneBox(text) {
+    const t = String(text || "").trim();
+    if (!t) return null;
+    const nums = [...new Set(t.match(/\+?\d[\d\s().-]{7,}\d/g) || [])].map((x) => x.trim());
+    return h("div", { class: "phone-box" }, [
+      h("p", { class: "vol-pre small", text: t }),
+      ...(nums.length ? nums : [t]).map((n) => h("div", { class: "phone-box__row" }, [
+        nums.length ? h("span", { class: "phone-box__num", text: n }) : null,
+        nums.length ? h("a", { class: "btn btn--ghost btn--sm", href: `tel:${n.replace(/[^\d+]/g, "")}` }, [icon("phone"), "전화 걸기"]) : null,
+        h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "복사하기", onclick: () => copyText(n) })]))
+    ]);
+  }
   // 수도회 이름을 고치면 무엇이 바뀌는지 보여 주고 고르게 하는 칸 (팀 '교육 일정', 관리자 '교육 기록')
   function orgAskPanel() {
     const orgAsk = h("div", { class: "card stack stack--sm org-ask", role: "alert", hidden: true });
     const askOrg = (c, go) => {
       const btn = (t, v, main) => h("button", { class: `btn btn--sm ${main ? "btn--primary" : "btn--ghost"}`, type: "button", text: t, onclick: () => { orgAsk.hidden = true; go(v); } });
-      const lines = c.mode === "similar" ? [`'${c.to}' 이름과 띄어쓰기·괄호만 다른 수도회가 이미 있어요. 같은 곳이면 그 수도회로 옮겨 주세요.`]
+      const lines = c.mode === "similar" ? [`'${c.to}' 이름과 띄어쓰기·괄호만 다른 수도회가 이미 있어요${c.add ? ` (${c.similar.map((m) => m.name).join(", ")})` : ""}. 같은 곳이면 ${c.add && !c.edu ? "추가하지 말고 그 수도회를 써" : c.add ? "그 수도회의 교육으로 등록해" : "그 수도회로 옮겨"} 주세요.`]
         : c.mode === "move" ? [`'${c.to}'은(는) 이미 있는 수도회예요. 이 교육 하나만 '${c.from}'에서 '${c.to}'(으)로 옮겨요.`]
           : c.mode === "rename" ? [`수도회 이름을 '${c.from}'에서 '${c.to}'(으)로 바꿔요.`, c.edus > 1 ? `이 수도회의 교육 ${c.edus}건 제목이 모두 바뀌어요. 이 교육만 다른 수도회라면 취소해 주세요.` : "연락처·상태는 그대로예요."]
             : [`'${c.to}' 수도회를 새로 만들어 이 교육과 이어요.`];
-      fill(orgAsk, h("strong", { text: "수도회 이름이 바뀌어요" }), ...lines.map((t) => h("p", { class: "small", text: t })), h("div", { class: "actions actions--start" }, [
-        ...(c.mode === "similar" ? [...c.similar.map((m, i) => btn(`'${m.name}'(으)로 옮기기`, `similar:${m.id}`, !i)), btn(`그래도 '${c.to}'(으)로`, "force")]
+      fill(orgAsk, h("strong", { text: c.add ? "비슷한 이름이 있어요" : "수도회 이름이 바뀌어요" }), ...lines.map((t) => h("p", { class: "small", text: t })), h("div", { class: "actions actions--start" }, [
+        ...(c.mode === "similar" ? [...(c.add && !c.edu ? [] : c.similar.map((m, i) => btn(c.add ? `'${m.name}' 교육으로 등록` : `'${m.name}'(으)로 옮기기`, `similar:${m.id}`, !i))), btn(`그래도 '${c.to}'(으)로`, "force")]
           : [btn(c.mode === "move" ? "이 교육만 옮기기" : c.mode === "rename" ? "이름 바꾸기" : "새로 만들기", c.mode === "move" ? `move:${c.targetId}` : c.mode, true)]),
         h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "취소", onclick: () => { orgAsk.hidden = true; } })]));
       orgAsk.hidden = false; orgAsk.scrollIntoView({ block: "center" });
@@ -6702,7 +6731,7 @@
       const result = h("textarea", { rows: "2", maxlength: "1000" }, o.resultNote);
       const made = h("input", { type: "number", min: "0", inputmode: "numeric", value: o.madeQty ?? "" });
       const due = h("input", { value: o.madeDue, maxlength: "40", placeholder: "예: 12월 말" });
-      const contact = isAdmin() ? h("textarea", { rows: "2", maxlength: "300", placeholder: "담당자 이름 · 전화 · 이메일 (관리자만 적어요)" }, o.contact) : null;
+      const contact = isAdmin() || state.user.volLeader ? h("textarea", { rows: "2", maxlength: "300", placeholder: "담당자 이름 · 전화 · 이메일" }, o.contact) : null;
       // 수도회 이름을 고치면 무엇이 바뀌는지 먼저 보여 주고 고르게 함 (서버가 409 로 알려 줌)
       const { el: orgAsk, ask: askOrg } = orgAskPanel();
       orgName.addEventListener("input", () => { orgAsk.hidden = true; }); // 이름을 또 고치면 다시 물어봄
@@ -6748,7 +6777,8 @@
         h("h3", { class: "team-sec", text: "원자재 배분 (조회)" }),
         h("p", { class: "small", text: `요청 ${o.reqQty != null ? fmtN(o.reqQty) : "-"}${o.sumNote ? ` (${o.sumNote}, 합계 제외)` : ""} · 교육물량 ${o.eduQty != null ? fmtN(o.eduQty) : "-"} · 실 ${o.threadQty != null ? fmtN(o.threadQty) : "-"} · 십자가 ${o.crossQty != null ? fmtN(o.crossQty) : "-"}` }),
         h("h3", { class: "team-sec", text: "연락처" }),
-        contact ? field("연락처 (관리자 입력)", contact) : h("p", { class: "vol-pre small", text: o.contact || "관리자가 아직 적지 않았어요." }),
+        contact ? field("연락처 (리더 봉사자·관리자만 고쳐요)", contact) : o.contact ? null : h("p", { class: "small muted", text: "아직 적은 연락처가 없어요. 리더 봉사자나 관리자에게 알려 주세요." }),
+        phoneBox(o.contact),
         h("h3", { class: "team-sec", text: "문의 대응 기록" }), inqBox,
         canAdd && !o.deletable ? h("p", { class: "muted small", text: `이 교육은 지울 수 없어요: ${delWhy}` }) : null,
         err,
@@ -6766,7 +6796,7 @@
             const body = { ...(orgName.value.trim() !== o.org.trim() ? { org: orgName.value, ...(orgConfirm ? { orgConfirm } : {}) } : {}), place: place.value, helper: helper.value, attend: attend.value, resultNote: result.value, madeQty: made.value, madeDue: due.value };
             if (date.value ? o.tableOnly || date.value !== o.date || time.value !== (o.startTime || "") : !o.tableOnly) Object.assign(body, { date: date.value, startTime: date.value ? time.value : "" }); // 날짜를 비우면 '미정'으로
             if (status.value !== o.status) Object.assign(body, { status: status.value, statusFrom: o.status }); // 바꿨을 때만 (관리자 '교육 기록'과 같은 값)
-            if (contact) body.contact = contact.value;
+            if (contact && contact.value !== o.contact) body.contact = contact.value;
             const r = await apiAsk(`/team/orgs/${o.id}`, { method: "PATCH", body });
             if (!r) return;
             orgs = body.org ? (await api("/team/orgs")).orgs : orgs.map((x) => (x.id === o.id ? r.org : x)); // 이름을 바꾸면 다른 교육 제목도 바뀔 수 있어 다시 받음
@@ -6923,7 +6953,7 @@
   async function teamIssues() {
     document.title = `이슈 · ${TITLE}`;
     let { issues } = await api("/team/issues");
-    const orgs = (await api("/team/orgs").catch(() => ({ orgs: [] }))).orgs; // 부서 봉사자는 수도회 목록 없이
+    const orgs = isAdmin() || state.user.volKind === "team" ? (await api("/team/orgs").catch(() => ({ orgs: [] }))).orgs : []; // 부서 봉사자는 수도회 목록 없이
     let only = "";
     const box = h("div", { class: "stack" });
     const draw = () => {
@@ -7325,67 +7355,105 @@
     form.addEventListener("submit", (e) => { e.preventDefault(); if (!save) return; if (ask && !confirm(ask)) return; busy(ok, async () => { try { if (await save() !== false) closeDialog(); } catch (ex) { showError(err, ex.message); } }); });
     openDialog(title, form, { tone });
   }
+  // 누르면 아래 목록이 바뀌는 칸 (수도회 확인·교육)
+  const pickTile = (label, n, unit, on, onclick, warn) => h("button", { type: "button", class: "pick-tile" + (on ? " is-on" : "") + (warn && n ? " is-warn" : ""), "aria-pressed": String(on), onclick }, [h("span", { text: label }), h("strong", { text: `${fmtN(n)}${unit}` })]);
+  // 알림에서 눌러 온 기록 열기: 화면을 다 그린 뒤 그 기록을 찾아 열고, 없으면 안내
+  function openRef(topic, find, open) {
+    const r = state.openRef;
+    if (!r || ![].concat(topic).includes(r.topic)) return;
+    state.openRef = null;
+    const x = find(r.id);
+    setTimeout(() => { if (x) open(x); else toast("그 기록을 찾을 수 없어요. 지워졌거나 지금은 볼 수 없는 기록이에요."); }, 60);
+  }
   const opsHint = (t) => h("p", { class: "muted small", text: t });
   const nospace = (s) => String(s || "").replace(/\s/g, "");
   // ---- F01 수도회 확인
   const MON_STATUS = { new: "등록", edu_done: "교육 완료", making: "제작 중", recovered: "회수 완료", checked: "검수 완료", issue: "문제 있음" };
   async function opsMonasteries() {
     document.title = `수도회 확인 · ${TITLE}`;
-    let d = await api("/ops/monasteries"), qv = "", only = "";
+    let d = await api("/ops/monasteries"), qv = "", view = "all";
     const box = h("div", { class: "vm" });
+    const byName = (a, b) => a.name.localeCompare(b.name, "ko");
+    const DONE = ["edu_done", "making", "recovered", "checked"];
+    // 위 칸을 누르면 아래 목록이 그 조건으로 거르고 정렬됨
+    const VIEWS = {
+      all: { label: "전체 수도회", hint: "가나다순이에요.", pick: () => true, sort: byName },
+      done: { label: "교육 진행 완료", hint: "교육을 마친 뒤 단계(교육 완료·제작 중·회수 완료·검수 완료)예요. 최근 교육부터 보여요.", pick: (m) => DONE.includes(m.status), sort: (a, b) => b.lastEdu.localeCompare(a.lastEdu) || byName(a, b) },
+      todo: { label: "미진행·진행 필요", hint: "아직 '등록'인 수도회예요. 교육 날짜가 가까운 곳부터 보여요.", pick: (m) => m.status === "new", sort: (a, b) => (a.nextEdu || "9").localeCompare(b.nextEdu || "9") || byName(a, b) },
+      issue: { label: "문제 있음", hint: "문제가 있다고 적은 수도회예요.", pick: (m) => m.status === "issue", sort: byName },
+      added: { label: "추가된 수도회", hint: "새로 추가한 수도회예요. 최근에 추가한 곳부터 보여요.", pick: (m) => !!m.addedAt, sort: (a, b) => b.addedAt.localeCompare(a.addedAt) }
+    };
+    const when = (at) => { const t = new Date(`${at.replace(" ", "T")}Z`); return `${t.getMonth() + 1}/${t.getDate()} ${pad(t.getHours())}:${pad(t.getMinutes())}`; };
     const draw = () => {
-      const all = d.monasteries, list = all.filter((m) => (!only || m.status === only) && (!qv || nospace(m.name).includes(nospace(qv))));
+      const all = d.monasteries, v = VIEWS[view];
       const search = h("input", { type: "search", placeholder: "수도회 이름 검색", "aria-label": "수도회 검색", value: qv });
       search.addEventListener("input", () => { qv = search.value.trim(); drawList(); });
-      const st = opsSel(Object.entries(MON_STATUS), only, "모든 상태");
-      st.addEventListener("change", () => { only = st.value; draw(); });
-      const listBox = h("div");
+      const listBox = h("div"), count = h("span", { class: "muted small filters__end" });
       const drawList = () => {
-        const l2 = all.filter((m) => (!only || m.status === only) && (!qv || nospace(m.name).includes(nospace(qv))));
-        fill(listBox, opsCards(l2, (m) => opsCard(d.canEdit ? () => edit(m) : null, [
+        const list = all.filter((m) => v.pick(m) && (!qv || nospace(m.name).includes(nospace(qv)))).sort(v.sort);
+        count.textContent = `${list.length}곳`;
+        fill(listBox, opsCards(list, (m) => opsCard(() => edit(m), [
           opsTop(m.name, MON_STATUS[m.status]),
-          opsLine(`교육 ${m.visits}회 (완료 ${m.eduDone}) · 요청 ${fmtN(m.reqQty)} · 회수 ${fmtN(m.recoveredQty)} · 검수 ${fmtN(m.checkedQty)}`),
+          view === "added" ? opsLine(`추가 ${when(m.addedAt)} · ${m.addedBy}`) : null,
+          opsLine(`교육 ${m.visits}회 (완료 ${m.eduDone})${m.nextEdu ? ` · 다음 교육 ${shortDate(m.nextEdu)}` : ""} · 요청 ${fmtN(m.reqQty)} · 회수 ${fmtN(m.recoveredQty)} · 검수 ${fmtN(m.checkedQty)}`),
           opsTags(m.status === "issue" ? opsTag("문제 있음", "is-bad") : null, m.contactName ? opsTag(`담당 ${m.contactName}`) : null),
           m.issueNote ? h("span", { class: "vm-card__note small", text: `문제: ${m.issueNote}` }) : null,
           m.phone ? opsLine(`연락처 ${m.phone.replace(/\s*\n\s*/g, " · ")}`) : null,
           m.address ? opsLine(`주소 ${m.address}`) : null
-        ], m.status === "issue" ? "is-warn" : ""), "찾는 수도회가 없어요."));
+        ], m.status === "issue" ? "is-warn" : ""), view === "added" ? "아직 추가한 수도회가 없어요. 앞으로 추가하면 누가 언제 추가했는지 여기에 보여요." : "찾는 수도회가 없어요."));
       };
       fill(box,
-        h("div", { class: "vm-stats" }, [vmStat("담당 수도회", all.length), vmStat("교육 완료 이후", all.filter((m) => m.status !== "new" && m.status !== "issue").length), vmStat("문제 있음", all.filter((m) => m.status === "issue").length, all.some((m) => m.status === "issue"))]),
-        h("div", { class: "filters" }, [h("label", { class: "search" }, [icon("search"), search]), st, h("span", { class: "muted small filters__end", text: `${list.length}곳` })]),
-        listBox,
-        d.canEdit ? opsAddBtn("수도회 추가", addMon) : null);
+        h("div", { class: "pick-tiles" }, Object.entries(VIEWS).map(([k, x]) => pickTile(x.label, all.filter(x.pick).length, "곳", k === view, () => { view = k; draw(); }, k === "issue"))),
+        h("div", { class: "filters" }, [h("label", { class: "search" }, [icon("search"), search]), count]),
+        opsHint(v.hint), listBox,
+        d.canAdd ? opsAddBtn("수도회 추가", addMon) : null);
       drawList();
     };
     const addMon = () => {
       const name = h("input", { maxlength: "80", placeholder: "예: ○○ 수녀회" });
-      opsSheet("수도회 추가", [field("수도회 이름", name, "같은 이름은 넣을 수 없어요. 가운뎃점(·)은 띄어쓰기로 바꿔 저장해요.")], {
-        saveText: "추가하기", save: async () => { d = { ...d, ...(await api("/ops/monasteries", { method: "POST", body: { name: name.value } })) }; toast("수도회를 추가했어요."); draw(); }
+      const { el: askEl, ask } = orgAskPanel();
+      let orgConfirm = "";
+      name.addEventListener("input", () => { askEl.hidden = true; orgConfirm = ""; });
+      opsSheet("수도회 추가", [field("수도회 이름", name, "같은 이름은 넣을 수 없어요. 가운뎃점(·)은 띄어쓰기로 바꿔 저장해요."), askEl], {
+        saveText: "추가하기",
+        save: async () => {
+          try { d = { ...d, ...(await api("/ops/monasteries", { method: "POST", body: { name: name.value, ...(orgConfirm ? { orgConfirm } : {}) } })) }; }
+          catch (ex) { if (!ex.confirm) throw ex; ask(ex.confirm, (v) => { orgConfirm = v; name.closest("form").requestSubmit(); }); return false; }
+          toast("수도회를 추가했어요."); draw();
+        }
       });
     };
     const edit = (m) => {
-      const status = opsSel(Object.entries(MON_STATUS), m.status);
-      const issue = h("textarea", { rows: "2", maxlength: "500", placeholder: "예: 연락이 안 됨, 실 부족" }, m.issueNote);
+      const ro = !d.canEdit;
+      const status = opsSel(Object.entries(MON_STATUS), m.status); status.disabled = ro;
+      const issue = h("textarea", { rows: "2", maxlength: "500", disabled: ro, placeholder: "예: 연락이 안 됨, 실 부족" }, m.issueNote);
       const issueField = field("문제 내용", issue, "'문제 있음'일 때 꼭 적어요");
       const syncIssue = () => { issueField.hidden = status.value !== "issue" && !issue.value; };
       status.addEventListener("change", syncIssue); syncIssue();
-      const cname = h("input", { value: m.contactName, maxlength: "80", placeholder: "담당 수녀·수사 이름" });
-      const phone = d.canPhone ? h("textarea", { rows: "2", maxlength: "300", placeholder: "전화 · 이메일 (관리자만 적어요)" }, m.phone) : null;
-      const addr = h("input", { value: m.address, maxlength: "200", placeholder: "택배 받을 주소" });
-      const note = h("textarea", { rows: "2", maxlength: "1000" }, m.note);
-      const mname = h("input", { value: m.name, maxlength: "80" });
-      opsSheet(m.name, [field("수도회 이름", mname, "바꾸면 이어진 방문 일정 제목도 같이 바뀌어요"), field("진행 상태", status), issueField, field("담당 수녀·수사", cname), phone ? field("연락처 (관리자만)", phone) : (m.phone ? h("p", { class: "small", text: `연락처: ${m.phone}` }) : null), field("택배 주소", addr), field("메모", note)], {
-        ask: "이대로 고칠까요?",
-        save: async () => {
-          const body = { name: mname.value, status: status.value, issueNote: issue.value, contactName: cname.value, address: addr.value, note: note.value, ...(phone ? { phone: phone.value } : {}) };
+      const cname = h("input", { value: m.contactName, maxlength: "80", disabled: ro, placeholder: "담당 수녀·수사 이름" });
+      const phone = d.canPhone ? h("textarea", { rows: "2", maxlength: "300", placeholder: "전화 · 이메일" }, m.phone) : null;
+      const addr = h("input", { value: m.address, maxlength: "200", disabled: ro, placeholder: "택배 받을 주소" });
+      const note = h("textarea", { rows: "2", maxlength: "1000", disabled: ro }, m.note);
+      const mname = h("input", { value: m.name, maxlength: "80", disabled: ro });
+      const hist = h("div", { class: "small muted", text: "불러오는 중…" });
+      api(`/ops/monasteries/${m.id}/history`).then((r) => fill(hist, r.history.length ? h("ul", { class: "mon-hist" }, r.history.map((x) => h("li", {}, [h("strong", { text: MON_STATUS[x.to] || x.to }), h("span", { class: "muted", text: ` ← ${MON_STATUS[x.from] || x.from}` }), h("div", { class: "muted", text: [when(x.at), x.who, x.reason].filter(Boolean).join(" · ") })]))) : h("p", { class: "muted small", text: "아직 바뀐 기록이 없어요. 앞으로 바뀐 것부터 남아요." })), () => { hist.textContent = "이력을 불러오지 못했어요."; });
+      opsSheet(m.name, [
+        field("수도회 이름", mname, "바꾸면 이어진 방문 일정 제목도 같이 바뀌어요"), field("진행 상태", status), issueField, field("담당 수녀·수사", cname),
+        h("div", { class: "field" }, [h("span", { class: "field__label", text: "연락처" }), phoneBox(m.phone) || h("p", { class: "small muted", text: "적은 연락처가 없어요." }), phone ? h("details", { class: "vm-extra" }, [h("summary", { text: "연락처 고치기 (리더 봉사자·관리자)" }), phone]) : null]),
+        field("주소", addr), field("메모", note),
+        h("div", { class: "field" }, [h("span", { class: "field__label", text: "상태 이력" }), hist])
+      ], {
+        ask: ro ? null : "이대로 고칠까요?",
+        save: ro ? null : async () => {
+          const body = { name: mname.value, status: status.value, issueNote: issue.value, contactName: cname.value, address: addr.value, note: note.value, ...(phone && phone.value !== m.phone ? { phone: phone.value } : {}) };
           d = { ...d, ...(await api(`/ops/monasteries/${m.id}`, { method: "PATCH", body })) }; toast("저장했어요."); draw();
         },
-        del: m.deletable ? async () => { if (!confirm(`'${m.name}' 수도회를 지울까요? 되돌릴 수 없어요.`)) return false; d = { ...d, ...(await api(`/ops/monasteries/${m.id}`, { method: "DELETE" })) }; toast("수도회를 지웠어요."); draw(); } : null
+        del: d.canAdd && m.deletable ? async () => { if (!confirm(`'${m.name}' 수도회를 지울까요? 되돌릴 수 없어요.`)) return false; d = { ...d, ...(await api(`/ops/monasteries/${m.id}`, { method: "DELETE" })) }; toast("수도회를 지웠어요."); draw(); } : null
       });
     };
     draw();
-    return [opsHint("담당 수도회와 진행 상태를 확인해요. 문제가 있으면 수도회를 눌러 '문제 있음'을 고르고 내용을 적어요."), box];
+    openRef("mon", (id) => d.monasteries.find((m) => m.id === id), edit);
+    return [opsHint("수도회와 진행 상태를 확인해요. 위 칸을 누르면 그 수도회만 보여요. 문제가 있으면 수도회를 눌러 '문제 있음'을 고르고 내용을 적어요."), box];
   }
   // ---- F06 연락·문의 기록
   const CT_TARGET = { monastery: "수도회", vendor: "업체", volunteer: "봉사자", etc: "기타" };
@@ -8036,9 +8104,12 @@
     };
     const addEdu = () => {
       const org = h("input", { maxlength: "80", placeholder: "예: ○○수녀회" }), date = h("input", { type: "date" }), time = h("input", { type: "time" }), qty = h("input", { type: "number", min: "0", inputmode: "numeric" }), place = h("input", { maxlength: "120" });
-      opsSheet("교육 추가", [field("수도회", org), h("div", { class: "row2" }, [field("교육 날짜", date, "비우면 '미정'으로 표에만 보여요"), field("시작 시간", time)]), h("div", { class: "row2" }, [field("요청수량", qty), field("장소", place)])], {
+      const { el: askEl, ask } = orgAskPanel();
+      let orgConfirm = "";
+      org.addEventListener("input", () => { askEl.hidden = true; orgConfirm = ""; });
+      opsSheet("교육 추가", [field("수도회", org), askEl, h("div", { class: "row2" }, [field("교육 날짜", date, "비우면 '미정'으로 표에만 보여요"), field("시작 시간", time)]), h("div", { class: "row2" }, [field("요청수량", qty), field("장소", place)])], {
         saveText: "추가하기",
-        save: async () => { const x = await api("/admin/vol-edu", { method: "POST", body: { org: org.value, date: date.value, startTime: time.value, qty: qty.value, place: place.value } }); d.rows = x.rows; d.roster = x.roster; toast("교육을 추가했어요."); draw(); }
+        save: async () => { let x; try { x = await api("/admin/vol-edu", { method: "POST", body: { org: org.value, date: date.value, startTime: time.value, qty: qty.value, place: place.value, ...(orgConfirm ? { orgConfirm } : {}) } }); } catch (ex) { if (!ex.confirm) throw ex; ask(ex.confirm, (v) => { orgConfirm = v; org.closest("form").requestSubmit(); }); return false; } d.rows = x.rows; d.roster = x.roster; toast("교육을 추가했어요."); draw(); }
       });
     };
     draw();
