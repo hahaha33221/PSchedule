@@ -5658,7 +5658,7 @@
             h("h2", { class: "card__title", text: volDay(volCal.sel) }),
             h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => volScheduleDialog(null, volCal.sel) }, [icon("plus"), "일정 추가"])
           ]),
-          dayRows.length ? h("ul", { class: "vol-list" }, dayRows.map((s) => h("li", s.mine ? { class: "vol-dayrow is-mine", tabindex: "0", title: "눌러서 고치기", onclick: () => volScheduleDialog(s), onkeydown: (e) => { if (e.key === "Enter") volScheduleDialog(s); } } : { class: "vol-dayrow" }, [
+          dayRows.length ? h("ul", { class: "vol-list" }, dayRows.map((s) => h("li", s.mine ? { "data-ref": `sched:${s.id}`, class: "vol-dayrow is-mine", tabindex: "0", title: "눌러서 고치기", onclick: () => volScheduleDialog(s), onkeydown: (e) => { if (e.key === "Enter") volScheduleDialog(s); } } : { class: "vol-dayrow", "data-ref": `sched:${s.id}` }, [
             h("i", { class: `vol-dayrow__mark ${color(s)}` }),
             h("div", { class: "vol-sched__what" }, [
               h("strong", { text: s.title }),
@@ -5671,7 +5671,7 @@
       );
     };
     draw();
-    openRef("sched", (id) => list.find((s) => s.id === id), (s) => { volCal.sel = s.date; volCal.month = s.date.slice(0, 7); draw(); });
+    openRef("sched", (id) => list.find((s) => s.id === id), (s) => { volCal.sel = s.date; volCal.month = s.date.slice(0, 7); draw(); flashRef("sched", s.id); });
     return [
       h("div", { class: "page-head" }, [h("h1", { class: "vol__hello", text: "일정" })]),
       box
@@ -6962,6 +6962,13 @@
   async function teamRecoveryStep() {
     const ships = await api("/ops/shipments").catch(() => ({ shipments: [] }));
     const coming = ships.shipments.filter((s) => s.direction === "in" && ["ready", "sent"].includes(s.status) && s.partyType === "monastery" && ["", "inspect"].includes(s.kind)).sort((a, b) => (a.status === "sent" ? 0 : 1) - (b.status === "sent" ? 0 : 1) || (a.arrivedDate || a.sentDate || "9").localeCompare(b.arrivedDate || b.sentDate || "9"));
+    // 알림의 '택배 수신': 오는 중이면 그 카드로, 도착했으면 이어진 회수 기록으로
+    const ref = state.openRef?.topic === "ship_in" ? state.openRef.id : null, ship = ref && ships.shipments.find((s) => s.id === ref);
+    if (ref) {
+      state.openRef = null;
+      if (ship?.recoveryId) state.openRef = { topic: "recovery", id: ship.recoveryId };
+      else setTimeout(() => (coming.some((s) => s.id === ref) ? flashRef("ship_in", ref) : toast(ship ? `이 택배는 지금 '${SHIP_STATUS[ship.status]}' 상태예요.` : REF_GONE)), 60);
+    }
     const rest = await teamRecovery({ bare: true });
     document.title = `회수 · ${TITLE}`;
     return [
@@ -7678,6 +7685,7 @@
   const shipBadge = (st) => h("span", { class: `ship-badge is-${st}`, text: SHIP_STATUS[st] });
   // 택배 카드 (이름 · 내용물 · 상대/종류 칩 · 택배사·송장 · 날짜·담당, 오른쪽 위 상태)
   const shipCard = (s, onclick) => opsCard(onclick, [
+    h("span", { hidden: true, "data-ref": `ship_in:${s.id}` }),
     h("span", { class: "ship-card__top" }, [h("strong", { class: "ship-card__name", text: s.party || SHIP_PARTY[s.partyType] }), shipBadge(s.status)]),
     opsLine([s.contents, s.qty != null ? `${fmtN(s.qty)}개` : ""].filter(Boolean).join(" · ") || "내용물 안 적음"),
     h("span", { class: "ship-card__chips" }, [
@@ -8467,7 +8475,7 @@
     let teamData = null; // 팀 봉사자 탭: { issues, docs, orgs }
     const ins = inspModule("/admin", () => draw(), "검수할 때마다 한 줄씩 적고, 거른 기록을 업체 클레임 근거로 CSV·인쇄로 내보내요. 샘플링이면 불량률은 샘플 수 기준이에요. 팀 봉사자가 적은 기록도 여기에 함께 보여요.");
     let vols = [], schedules = [], trainings = [], stockMoves = [], volRecords = [], volMenuSet = null;
-    const seg = h("div", { class: "seg", role: "tablist" }, [["schedule", "일정"], ["edu", "교육 기록"], ["roster", "봉사자 명단"], ["training", "기본 교육"], ["stock", "입출고 입력"], ["records", "완제품 기록"], ["inspect", "검수 관리"], ["team", "팀 봉사자"], ["deadlines", "데드라인 일정"], ["wbs", "묵주 WBS"], ["menu", "메뉴 공개"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "schedule" ? "#/volunteers" : `#/volunteers/${k}`) })));
+    const seg = h("div", { class: "seg ops-tabs", role: "tablist" }, [["schedule", "일정"], ["edu", "교육 기록"], ["roster", "봉사자 명단"], ["training", "기본 교육"], ["stock", "입출고 입력"], ["records", "완제품 기록"], ["inspect", "검수 관리"], ["team", "팀 봉사자"], ["deadlines", "데드라인 일정"], ["wbs", "묵주 WBS"], ["menu", "메뉴 공개"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "schedule" ? "#/volunteers" : `#/volunteers/${k}`) })));
     const dateAndTime = (date, start, end) => h("div", { class: "row2" }, [field("날짜", date), h("div", { class: "row2" }, [field("시작", start), end ? field("끝", end) : h("span")])]);
     const saveForm = (form, ok, err, send) => form.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -8601,6 +8609,7 @@
         h("div", { class: "filters" }, [seg, h("span", { class: "muted small", text: `봉사자 ${vols.length}명` })]),
         ["deadlines", "wbs", "edu", "roster"].includes(tab) ? extraView : tab === "inspect" ? ins.view() : tab === "team" ? teamAdminView() : tab === "stock" ? stockView : tab === "records" ? recView : tab === "menu" ? menuView : tab === "training" ? trainingView : scheduleView
       ]);
+      seg.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "center" }); // 좁은 화면: 고른 탭이 보이게
     };
     // ---- 팀 봉사자(교육·검수): 이슈 처리 · 자료실 · 수도회 연락처 (관리자만)
     function teamAdminView() {
@@ -8641,7 +8650,7 @@
         h("section", { class: "stack stack--sm" }, [h("h2", { class: "card__title", text: `이슈 (처리 전 ${open.length}건 / 전체 ${issues.length}건)` }), issues.length ? h("ul", { class: "stack stack--sm team-list" }, issues.map(issueRow)) : h("div", { class: "card empty", text: "아직 올라온 이슈가 없어요." })]),
         h("section", { class: "stack stack--sm" }, [
           h("div", { class: "card__head" }, [h("h2", { class: "card__title", text: "자료실" }), h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => docDialog(null) }, [icon("plus"), "자료 올리기"])]),
-          docs.length ? h("ul", { class: "stack stack--sm team-list" }, docs.map((d) => h("li", { class: "card team-doc stock-row", tabindex: "0", onclick: () => docDialog(d) }, [h("span", { class: "muted small", text: DOC_CAT[d.category] }), h("strong", { text: d.title }), d.url ? h("span", { class: "muted small", text: d.url }) : null]))) : h("div", { class: "card empty", text: "아직 올린 자료가 없어요." })
+          docs.length ? h("ul", { class: "stack stack--sm team-list" }, docs.map((d) => h("li", { class: "card team-doc stock-row", "data-ref": `docs:${d.id}`, tabindex: "0", onclick: () => docDialog(d) }, [h("span", { class: "muted small", text: DOC_CAT[d.category] }), h("strong", { text: d.title }), d.url ? h("span", { class: "muted small", text: d.url }) : null]))) : h("div", { class: "card empty", text: "아직 올린 자료가 없어요." })
         ]),
         h("section", { class: "stack stack--sm" }, [
           h("h2", { class: "card__title", text: "수도회 연락처" }),

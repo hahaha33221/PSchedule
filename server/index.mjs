@@ -3452,6 +3452,7 @@ function changeView(user, role) {
       const key = { vschedule: "schedule", vtraining: "training" }[menu];
       if (key && !menuOn.includes(key)) return null;
     }
+    if (role === "team" && !steps && ["shifts", "daily"].includes(c.topic)) return out(menu, `tinsp/${c.topic}`);
     return out(menu, link);
   };
 }

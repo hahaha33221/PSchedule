@@ -1761,6 +1761,7 @@ button.gantt__name:hover { background: var(--surface-2); }
 .qty-diff.is-need { color: var(--ink); }
 .qty-diff.is-done { color: var(--c1, #2f9e44); font-weight: 600; }
 .vol-more__table td, .vol-more__table th { font-size: 13px; }
+.vol-more__table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .vol-visits__input summary { margin-top: 4px; }
 .vol-visits__input[open] > .vol-visits__bigs { margin: 8px 0; }
 /* 제목 눌러 정렬 */
@@ -1974,10 +1975,10 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .vm-pick select { min-height: 44px; font-size: 16px; }
 .vm-sum { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
 .vm-sum__name { margin: 0; font-size: 16px; }
-.vm-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.vm-stat { display: flex; flex-direction: column; min-width: 0; padding: 10px; border-radius: 10px; background: var(--surface-2); }
+.vm-stats { display: flex; flex-wrap: wrap; gap: 8px; } /* 큰 수가 칸에 안 들어가면 숫자를 쪼개지 않고 다음 줄로 */
+.vm-stat { display: flex; flex-direction: column; flex: 1 1 28%; min-width: min-content; padding: 10px; border-radius: 10px; background: var(--surface-2); }
 .vm-stat span { font-size: 12px; color: var(--muted); word-break: keep-all; }
-.vm-stat strong { font-size: 21px; line-height: 1.25; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.vm-stat strong { font-size: 21px; line-height: 1.25; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .vm-stat small { font-size: 11px; color: var(--muted); }
 .vm-stat.is-warn strong { color: var(--danger); }
 .vm-opts summary { display: flex; gap: 8px; align-items: baseline; min-height: 32px; cursor: pointer; font-size: 14px; font-weight: 600; }
@@ -2128,6 +2129,7 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .ops-staffon { display: flex; align-items: center; gap: 10px; padding: 12px 14px; margin-bottom: 12px; }
 @media (max-width: 640px) { .ops-flow { grid-template-columns: repeat(2, minmax(0, 1fr)); } .ops-flow__arrow { display: none; } }
 .ops-tabs { display: flex; max-width: 100%; }
+.ops-tabs > button { flex: 0 0 auto; white-space: nowrap; }
 .ops-tabs .seg__link { flex: 0 0 auto; white-space: nowrap; min-height: 36px; display: inline-flex; align-items: center; }
 .ops-tabs .seg__link.is-active { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, .1); }
 
@@ -2260,3 +2262,7 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .is-flash { animation: ref-flash 2.4s ease-out; scroll-margin: 90px; }
 tr.is-flash { animation: none; outline: 3px solid var(--primary, #2f6fed); outline-offset: -3px; }
 @media (prefers-reduced-motion: reduce) { .is-flash { animation: none; outline: 3px solid var(--primary, #2f6fed); } }
+/* 좁은 화면: 긴 링크·제목 줄바꿈 */
+.team-doc > *, .team-issue > * { min-width: 0; overflow-wrap: anywhere; }
+.page-head h1 { word-break: keep-all; }
+@media (max-width: 600px) { .page-head:has(.vol-preview-btns) { flex-wrap: wrap; } }
