@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import crypto from "node:crypto";
 import { htmlToText } from "./ical.mjs";
+import { addEventEditTables } from "./event-edits.mjs";
 
 export function openDb(file) {
   mkdirSync(dirname(file), { recursive: true });
@@ -255,6 +256,7 @@ export function openDb(file) {
   cleanCalendarHtml(db);
   seedTags(db);
   addOpsTables(db);
+  addEventEditTables(db);
   return db;
 }
 

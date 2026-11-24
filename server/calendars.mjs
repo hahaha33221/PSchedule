@@ -2,10 +2,12 @@
  * 외부 캘린더 동기화 — 구글 캘린더 '비공개 주소(iCal 형식)' 를 주기적으로 읽어 calendar_events 에 저장
  *
  *   - 읽기 전용·한 방향 (PSchedule → 구글로는 아무것도 보내지 않음)
- *   - 다시 읽을 때마다 그 캘린더의 일정을 통째로 바꿔서, 고친 것·지운 것이 그대로 반영됨
+ *   - 다시 읽을 때마다 그 캘린더의 일정을 원본과 똑같이 맞춰서, 고친 것·지운 것이 그대로 반영됨 (같은 일정은 id 를 지킴)
+ *   - 바꾸기 전과 후를 견주어 무엇이 바뀌었는지 남김 (event-edits.mjs)
  *   - 주소는 비밀번호처럼 다룸: 로그·오류 메시지·API 응답에 전체 주소를 넣지 않음 (maskUrl 로만 보여 줌)
  */
 import { expandCalendar } from "./ical.mjs";
+import { urlMark } from "./event-edits.mjs";
 
 const FETCH_TIMEOUT_MS = 20_000;
 const MAX_BYTES = 10 * 1024 * 1024;
@@ -71,10 +73,13 @@ export function createCalendarSync(db, opts = {}) {
   const q = {
     all: db.prepare("SELECT * FROM calendars ORDER BY id"),
     one: db.prepare("SELECT * FROM calendars WHERE id = ?"),
-    clear: db.prepare("DELETE FROM calendar_events WHERE calendar_id = ?"),
-    add: db.prepare(`INSERT OR REPLACE INTO calendar_events (calendar_id, uid, inst, title, start_date, end_date, start_time, end_time, location, description)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-    ok: db.prepare("UPDATE calendars SET last_sync_at = datetime('now'), last_ok_at = datetime('now'), last_error = NULL, event_count = ? WHERE id = ?"),
+    old: db.prepare("SELECT * FROM calendar_events WHERE calendar_id = ?"),
+    del: db.prepare("DELETE FROM calendar_events WHERE id = ?"),
+    move: db.prepare("UPDATE calendar_events SET inst = ? WHERE id = ?"),
+    add: db.prepare(`INSERT INTO calendar_events (calendar_id, uid, inst, title, start_date, end_date, start_time, end_time, location, description, recur)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (calendar_id, uid, inst) DO UPDATE SET title = excluded.title, start_date = excluded.start_date, end_date = excluded.end_date,
+      start_time = excluded.start_time, end_time = excluded.end_time, location = excluded.location, description = excluded.description, recur = excluded.recur`),
+    ok: db.prepare("UPDATE calendars SET last_sync_at = datetime('now'), last_ok_at = datetime('now'), last_error = NULL, event_count = ?, edit_base = ? WHERE id = ?"),
     fail: db.prepare("UPDATE calendars SET last_sync_at = datetime('now'), last_error = ? WHERE id = ?")
   };
   const running = new Map(); // 같은 캘린더를 동시에 두 번 읽지 않게
@@ -85,16 +90,24 @@ export function createCalendarSync(db, opts = {}) {
       const cal = q.one.get(id);
       if (!cal) return null;
       try {
-        const text = await download(cal.url);
-        const list = expandCalendar(text, { from: seoulDay(-PAST_DAYS), to: seoulDay(FUTURE_DAYS) });
-        if (!q.one.get(id)) return null; // 읽는 사이 지워짐
+        const text = await (opts.download || download)(cal.url);
+        const range = { from: seoulDay(-PAST_DAYS), to: seoulDay(FUTURE_DAYS) }, feed = {};
+        const list = expandCalendar(text, range, feed);
+        if (!/END:VCALENDAR/i.test(text)) throw new Error("캘린더를 끝까지 읽지 못했어요.");
+        const cur = q.one.get(id);
+        if (!cur || cur.url !== cal.url) return null; // 읽는 사이 지워졌거나 주소가 바뀜
         db.exec("BEGIN");
         try {
-          q.clear.run(id);
+          for (const e of list) { e.uid = e.uid.slice(0, 500); e.title = e.title.slice(0, 200); e.location = e.location.slice(0, 200); }
+          const old = q.old.all(id);
+          const diff = opts.edits ? opts.edits.synced(cur, old, list, feed, range) : { moves: [] };
+          const keep = new Set(list.map((e) => e.uid + "|" + e.key)), moved = new Map(diff.moves.map((m) => [m.id, m.inst]));
+          for (const r of old) if (!moved.has(r.id) && !keep.has(r.uid + "|" + r.inst)) q.del.run(r.id);
+          for (const [rid, inst] of moved) q.move.run(inst, rid); // 시각을 옮긴 단발 일정은 같은 줄로
           for (const e of list) {
-            q.add.run(id, e.uid.slice(0, 500), e.key, e.title.slice(0, 200), e.startDate, e.endDate, e.startTime, e.endTime, e.location.slice(0, 200), e.description.slice(0, 5000));
+            q.add.run(id, e.uid, e.key, e.title, e.startDate, e.endDate, e.startTime, e.endTime, e.location, e.description.slice(0, 5000), e.recur);
           }
-          q.ok.run(list.length, id);
+          q.ok.run(list.length, urlMark(cal.url), id);
           db.exec("COMMIT");
         } catch (err) { db.exec("ROLLBACK"); throw err; }
         return { ok: true, count: list.length };

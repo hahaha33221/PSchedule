@@ -93,6 +93,23 @@ for (const [t, a, b] of [["[A501] 첫 회의 이름이 아주 길어서 잘려�
   ["[A603][가나다라마바사] 시험", "11:00", "12:00"], ["A604 앞에 적은 방", "", ""], ["괄호에 적은 방 (B204)", "12:00", "13:00"], ["[본관 아주긴이름의시험용건물 지하1층] 시험", "", ""], ["[커뮤회의실] 시험", "17:00", "18:00"], ["[경당] 시험", "", ""], ["[대회의실] 시험", "18:00", "21:30"], ["[읽지못하는아주긴표기이름의시험건물과사제관] 시험", "", ""]]) await rv(t, a || null, b || null);
 const cal = Number(db.prepare("INSERT INTO calendars (name, url, color) VALUES ('부재 알림', 'https://example.com/none.ics', 3)").run().lastInsertRowid);
 for (const [t, i] of [["[A302] 부재 시험", 1], ["[가나다] 부재 시험", 2]]) db.prepare("INSERT INTO calendar_events (calendar_id, uid, inst, title, start_date, end_date, start_time, end_time) VALUES (?, ?, 'x', ?, ?, ?, NULL, NULL)").run(cal, "u" + i, t, day(0), day(0));
+// 수정된 일정: 수정됨·날짜 바뀜, 시간 겹침과 함께, 옮김·취소 줄
+const evs = (await call(`/events?from=${day(0)}&to=${day(0)}`)).events, evId = (t) => evs.find((e) => e.title.includes(t)).id;
+await call(`/events/${evId("두 번째 시험")}`, "PATCH", { location: "본관 5층" });
+await call(`/events/${evId("겹치는 짧은")}`, "PATCH", { title: "[4A소회의실] 겹치는 짧은 회의 제목도 고침" });
+await call(`/events/${evId("[경당]")}`, "PATCH", { title: "[경당] 시험 제목 바꿈" });
+const mv = async (title, from, b, extra) => { const id = (await post("/events", { kind: "meeting", title, startDate: from, endDate: from, startTime: "19:00", endTime: "20:00", unitId: unit, ...extra })).event.id; if (b) await call(`/events/${id}`, "PATCH", b); else await call(`/events/${id}`, "DELETE"); return id; };
+// 내일 화면: 아직 안 끝난 일정이라 표시가 늘 보임 (오늘은 검사하는 시각에 따라 다름)
+for (const [t, a, b, p2] of [["[A501] 겹치고 고친 회의 이름이 아주 길어서 잘려야 함", "10:00", "11:00", { location: "본관 5층" }], ["[A501] 겹친 다른 회의", "10:30", "12:00", { endTime: "12:30" }], ["[A602] 같은 시험", "14:00", "15:00", { location: "본관" }], ["[A602] 같은 시험", "14:00", "15:00", null], ["[A301] 짧은 시험", "16:00", "16:15", { endTime: "16:20" }], ["[경당] 종일 시험", null, null, { title: "[경당] 종일 시험 이름 바꿈" }]]) {
+  const x = (await post("/events", { kind: "meeting", title: t, startDate: day(1), endDate: day(1), startTime: a, endTime: b, unitId: unit })).event.id;
+  if (p2) await call(`/events/${x}`, "PATCH", p2);
+}
+await mv("[A103] 내일로 옮겨 온 이재호 회의", day(5), { startDate: day(1), endDate: day(1) });
+await mv("내일에서 다른 날로 옮긴 아주 긴 제목의 회의 이름이 두 줄로 넘어가는지 보는 시험", day(1), { startDate: day(3), endDate: day(3) });
+await mv("내일 취소한 회의 시험", day(1));
+await mv("[A103] 옮겨 온 이재호 회의", day(2), { startDate: day(0), endDate: day(0), startTime: "21:00", endTime: "21:30" });
+await mv("다른 날로 옮긴 아주 긴 제목의 회의 이름이 두 줄로 넘어가는지 보는 시험", day(0), { startDate: day(3), endDate: day(3) }, { startTime: "23:00", endTime: "23:50" });
+await mv("취소한 회의 시험", day(0), null, { startTime: "23:00", endTime: "23:50" });
 await call("/admin/rooms", "PUT", { rooms: ["A604호", "A4 소회의실 = 4층 소회의실", "비어 있는 아주 긴 이름의 회의실 이름"], skip: [] });
 const setMenu = (steps) => call("/admin/vol-menu", "PUT", { menu: ["home", "schedule", "training", "notices", "wbs", "req", "in", "out", "recovery", "moves2", ...(steps ? ["steps2"] : [])] });
 
@@ -100,7 +117,7 @@ const setMenu = (steps) => call("/admin/vol-menu", "PUT", { menu: ["home", "sche
 const TEAM = ["thome", "alerts", "tcal", "tedu1", "tedu2", "tmake1", "tmake2", "tins1", "tins2", "tins3", "tins4", "tins5", "vschedule", "tissues", "vboard", `vboard/${bp}`, "vnotices", "vcontacts"];
 const DEPT = ["vhome", "alerts", "dr1", "dr2", "ds1", "ds2", "ds3", "df1", "df2", "vcontacts", "vtraining", "vissues", "vboard", "vnotices"];
 const OPS = ["dash", "mon", "ship-in", "ship-out", "stock", "cut", "buy", "contacts", "groups", "criteria", "duties"].map((k) => `ops/${k}`);
-const STAFF = ["today", "dashboard", "tasks", "meetings", "memos", "projects", `projects/${pj}`, "stock", `stock/${led.ledger.id}`, "alerts", "notices", "orgchart", "contacts"];
+const STAFF = ["today", `today/${day(1)}`, "dashboard", "tasks", "meetings", "memos", "projects", `projects/${pj}`, "stock", `stock/${led.ledger.id}`, "alerts", "notices", "orgchart", "contacts"];
 const RUNS = [
   ["leader", true, TEAM], ["team", true, ["tedu1", "tedu2", "tmake2", "tins1"]], ["dept", true, DEPT],
   ["admin", true, ["alerts", "members", "org", "backup", "board", "volunteers", ...["edu", "roster", "training", "stock", "records", "inspect", "team", "wbs", "menu"].map((k) => `volunteers/${k}`), ...OPS, "ops/perms", ...STAFF.slice(0, 9)]],

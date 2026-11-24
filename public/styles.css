@@ -1806,17 +1806,22 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .rooms__line { position: absolute; left: 0; right: 0; border-top: 1px solid var(--line-2); }
 .rooms__now { position: absolute; left: 0; right: 0; height: 2px; background: var(--danger); z-index: 2; }
 .rooms__ev { position: absolute; z-index: 1; display: flex; flex-direction: column; gap: 1px; padding: 3px 6px; overflow: hidden; border: 0; border-left: 3px solid var(--c); border-radius: 6px; background: color-mix(in srgb, var(--c) 18%, var(--surface)); color: var(--ink); font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; }
+.rooms__ev { line-height: 1.3; }
 .rooms__ev strong { font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rooms__ev span { color: var(--ink-2); white-space: nowrap; }
 .rooms__ev.is-ext { border-left-style: dashed; }
 .rooms__ev.is-clash, .rooms__ev.is-dup { outline: 2px solid var(--fc); outline-offset: -2px; }
 .rooms__ev.is-clash, .rooms__name.is-clash, .rooms__flag { --fc: var(--danger); }
 .rooms__ev.is-dup, .rooms__name.is-dup, .rooms__flag--dup { --fc: var(--warn); }
+.rooms__evflags { display: flex; flex-wrap: wrap; gap: 3px; max-width: 100%; flex: none; }
+.rooms__ev.is-short .rooms__evflags, .rooms__ev.is-mid .rooms__evflags { flex-wrap: nowrap; }
+.rooms__ev.is-mid { gap: 0; padding-block: 2px; }
+.rooms__ev.is-mid > span:not(.rooms__evflags) { display: none; }
 .rooms__evflag { align-self: flex-start; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 5px; border-radius: 4px; background: var(--fc); color: #fff; font-style: normal; font-size: 10.5px; font-weight: 700; line-height: 16px; }
 .rooms__ev.is-short { flex-direction: row; align-items: center; gap: 4px; padding-block: 0; }
 .rooms__ev.is-short .rooms__evflag { flex: none; align-self: center; }
 .rooms__ev.is-short strong { min-width: 0; }
-.rooms__ev.is-short > span { display: none; }
+.rooms__ev.is-short > span:not(.rooms__evflags) { display: none; }
 .rooms__name.is-clash, .rooms__name.is-dup { box-shadow: inset 0 3px 0 var(--fc); }
 .rooms__name b { color: var(--fc); }
 .rooms__name .small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -2288,3 +2293,27 @@ tr.is-flash { animation: none; outline: 3px solid var(--primary, #2f6fed); outli
 .team-doc > *, .team-issue > * { min-width: 0; overflow-wrap: anywhere; }
 .page-head h1 { word-break: keep-all; }
 @media (max-width: 600px) { .page-head:has(.vol-preview-btns) { flex-wrap: wrap; } }
+
+/* 수정된 일정 */
+:root { --edit: #5f3dc4; --edit-soft: #ece6ff; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --edit: #d0bfff; --edit-soft: #3b2f63; } }
+:root[data-theme="dark"] { --edit: #d0bfff; --edit-soft: #3b2f63; }
+.edit-tag { flex: none; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 6px; border: 1px solid var(--edit); border-radius: 4px; background: var(--edit-soft); color: var(--edit); font-size: 10.5px; font-weight: 700; line-height: 15px; font-style: normal; }
+.rooms__chip .edit-tag, .tl-allday .edit-tag { margin-right: 4px; }
+.edit-box { border: 1px solid var(--edit); border-radius: 10px; background: var(--edit-soft); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; color: var(--ink); }
+.edit-box__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.edit-box__head strong { color: var(--edit); }
+.edit-box p { margin: 0; }
+.edit-box ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; }
+.edit-box li { display: flex; gap: 8px; }
+.edit-box__label { flex: none; color: var(--muted); }
+.edit-box__val { min-width: 0; overflow-wrap: anywhere; }
+.edit-box s { color: var(--muted); }
+.tl-moved { margin: 0 0 8px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.tl-moved__row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding: 6px 10px; border-radius: 8px; background: var(--edit-soft); font-size: 13px; }
+.tl-moved__row.is-gone { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.tl-moved__what { font-weight: 700; color: var(--edit); }
+.tl-moved__row.is-gone .tl-moved__what { color: var(--danger); }
+.tl-moved__title { min-width: 0; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; text-align: left; overflow-wrap: anywhere; }
+button.tl-moved__title { cursor: pointer; }
+.tl__ev.is-short:has(.edit-tag) .tl__meta { flex-wrap: nowrap; overflow: hidden; min-width: 0; white-space: nowrap; }

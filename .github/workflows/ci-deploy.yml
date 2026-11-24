@@ -49,6 +49,9 @@ jobs:
       - name: 회의실 읽기 규칙 검사
         run: node tools/rooms-test.mjs
 
+      - name: 수정된 일정 표시 검사
+        run: node --disable-warning=ExperimentalWarning tools/edits-test.mjs
+
       - name: API 서버 동작 확인
         run: |
           mkdir -p /tmp/ps
@@ -572,6 +575,21 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$(bearer "$A1")" -XPUT -d '{"rooms":["A604호"]}' $B/admin/rooms)" = 403
           curl -fs -H "$H" -XPUT -d '{"rooms":["A604호"," A301호 ","A604호",""]}' $B/admin/rooms | grep -q '"rooms":\["A604호","A301호"\]'
           curl -fs -H "$(bearer "$A1")" $B/me | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.rooms.join()!=="A604호,A301호")process.exit(1)'
+          # 수정된 일정: 시각·장소가 바뀌면 수정됨(설명만은 아님), 옮김·취소는 하루를 볼 때만, 못 보는 사람에게는 안 나감, 이름으로 모아 보기·자세히 보기에도
+          ED=$(curl -fs -H "$H" -XPOST -d '{"title":"권구택 수정 시험","startDate":"2031-03-03","startTime":"10:00","endTime":"11:00"}' $B/events | node -pe 'JSON.parse(require("fs").readFileSync(0)).event.id')
+          curl -fs -H "$H" -XPATCH -d '{"description":"설명만"}' $B/events/$ED | node -e 'if(JSON.parse(require("fs").readFileSync(0)).event.edited)process.exit(1)'
+          curl -fs -H "$H" -XPATCH -d '{"startTime":"14:00","endTime":"15:00","location":"A501"}' $B/events/$ED | grep -qF '"from":"10:00~11:00","to":"14:00~15:00"'
+          curl -fs -H "$H" "$B/events?from=2031-03-03&to=2031-03-03" | grep -qF '"kind":"place"'
+          curl -fs -H "$H" "$B/today-search?date=2031-03-03" | grep -qF '"kind":"place"'
+          curl -fs -H "$H" "$B/events/$ED" | grep -qF '"kind":"place"'
+          curl -fs -H "$H" -XPATCH -d '{"startDate":"2031-03-05","endDate":"2031-03-05"}' $B/events/$ED >/dev/null
+          curl -fs -H "$H" "$B/events?from=2031-03-03&to=2031-03-03" | node -e 'const d=JSON.parse(require("fs").readFileSync(0));const m=d.moved.find(x=>x.id==='$ED');if(!m||m.what!=="moved"||!m.toDate.startsWith("3월 5일")||d.events.some(e=>e.id==='$ED'))process.exit(1)'
+          curl -fs -H "$H" "$B/events?from=2031-03-05&to=2031-03-05" | node -e 'const d=JSON.parse(require("fs").readFileSync(0));if(d.moved.length||!d.events.find(e=>e.id==='$ED').edited.changes.some(c=>c.kind==="date"))process.exit(1)'
+          curl -fs -H "$H" "$B/events?from=2031-03-01&to=2031-03-31" | node -e 'if(JSON.parse(require("fs").readFileSync(0)).moved)process.exit(1)'
+          curl -fs -H "$(bearer "$A1")" "$B/events?from=2031-03-03&to=2031-03-03" | node -e 'if(JSON.parse(require("fs").readFileSync(0)).moved.length)process.exit(1)'
+          curl -fs -H "$H" -XDELETE $B/events/$ED >/dev/null
+          curl -fs -H "$H" "$B/events?from=2031-03-05&to=2031-03-05" | node -e 'const m=JSON.parse(require("fs").readFileSync(0)).moved;if(m.length!==1||m[0].what!=="gone"||m[0].id!==null)process.exit(1)'
+          curl -fs -H "$(bearer "$A1")" "$B/events?from=2031-03-05&to=2031-03-05" | node -e 'if(JSON.parse(require("fs").readFileSync(0)).moved.length)process.exit(1)'
           # 방 별명과 '회의실 아님': 두 줄에 같은 표기는 거절, skip 을 안 보내면 그대로, 봉사자에게는 안 나감, 표기 하나씩도 관리자만
           curl -fs -H "$H" -XPUT -d '{"rooms":["A604호"," A4 소회의실 =A4소, 4A소,, A4소 ,4층 소회의실"],"skip":["A4소","가나다"," 가 나다 "]}' $B/admin/rooms | grep -qF '"rooms":["A604호","A4 소회의실 = A4소, 4A소, 4층 소회의실"],"skip":["가나다"]'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"rooms":["A604호","A4 소회의실 = A 604호"]}' $B/admin/rooms)" = 400

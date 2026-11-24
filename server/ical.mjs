@@ -278,7 +278,8 @@ function dateList(p, k) {
  * @param {string} icsText
  * @param {{ from: string, to: string }} range  'YYYY-MM-DD' (한국 날짜, 둘 다 포함)
  */
-export function expandCalendar(icsText, range) {
+// feed 를 주면 원본에 있는(취소 아닌) UID 와 지운 회차('uid|회차')를 담아 줌
+export function expandCalendar(icsText, range, feed) {
   if (!/BEGIN:VCALENDAR/i.test(icsText)) throw new Error("iCal 형식이 아니에요.");
   const fromUtc = Date.parse(range.from + "T00:00:00Z") - SEOUL_OFFSET;
   const toUtc = Date.parse(range.to + "T00:00:00Z") - SEOUL_OFFSET + DAY;
@@ -295,17 +296,20 @@ export function expandCalendar(icsText, range) {
   }
 
   const out = [];
-  const push = (p, uid, key, startUtc, len, allDay) => {
+  const uids = feed ? (feed.uids = new Set()) : null, cancelled = feed ? (feed.cancelled = new Set()) : null;
+  const cut = (uid) => uid.slice(0, 500);
+  // recur: 0 단발 · 1 반복 · 2 UID 가 없어 다음에 읽을 때 이어 볼 수 없음
+  const push = (p, uid, key, startUtc, len, allDay, recur) => {
     if (startUtc + Math.max(len, 1) <= fromUtc || startUtc >= toUtc) return;
     out.push({
-      uid, key, title: text(p, "SUMMARY") || "(제목 없음)", location: text(p, "LOCATION"), description: text(p, "DESCRIPTION"),
+      uid, key, recur: text(p, "UID") ? recur : 2, title: text(p, "SUMMARY") || "(제목 없음)", location: text(p, "LOCATION"), description: text(p, "DESCRIPTION"),
       allDay, ...toSeoul(startUtc, startUtc + len, allDay)
     });
   };
-  const emitOverride = (ov, uid, key) => {
-    if (/^CANCELLED$/i.test(text(ov, "STATUS"))) return;
+  const emitOverride = (ov, uid, key, recur) => {
+    if (/^CANCELLED$/i.test(text(ov, "STATUS"))) { cancelled?.add(cut(uid) + "|" + key); return; }
     const s = parseDateValue(first(ov, "DTSTART")?.value || "", first(ov, "DTSTART")?.params || {});
-    if (s) push(ov, uid, key, s.utc, eventLength(ov, s), s.allDay);
+    if (s) push(ov, uid, key, s.utc, eventLength(ov, s), s.allDay, recur);
   };
 
   for (const p of masters) {
@@ -314,12 +318,13 @@ export function expandCalendar(icsText, range) {
     const start = ds && parseDateValue(ds.value, ds.params);
     if (!start) continue;
     const uid = text(p, "UID") || `${text(p, "SUMMARY")}@${ds.value}`;
+    uids?.add(cut(uid));
     const len = eventLength(p, start);
     const rr = first(p, "RRULE");
     if (!rr) {
       const key = instanceKey(start);
       const ov = overrides.get(uid + "|" + key);
-      if (ov) emitOverride(ov, uid, key); else push(p, uid, key, start.utc, len, start.allDay);
+      if (ov) emitOverride(ov, uid, key, 1); else push(p, uid, key, start.utc, len, start.allDay, first(p, "RDATE") ? 1 : 0);
       continue;
     }
 
@@ -330,6 +335,7 @@ export function expandCalendar(icsText, range) {
     const exdates = new Set(dateList(p, "EXDATE").map(instanceKey));
     const lastDay = Math.floor(Math.min(toUtc + SEOUL_OFFSET, untilUtc + 2 * DAY) / DAY) + 1;
 
+    for (const k of exdates) cancelled?.add(cut(uid) + "|" + k);
     const starts = [];
     let n = 0;
     for (const d of ruleDays(rule, start, lastDay)) {
@@ -349,14 +355,14 @@ export function expandCalendar(icsText, range) {
       if (seen.has(key) || exdates.has(key)) continue;
       seen.add(key);
       const ov = overrides.get(uid + "|" + key);
-      if (ov) { overrides.delete(uid + "|" + key); emitOverride(ov, uid, key); }
-      else push(p, uid, key, s.utc, len, start.allDay);
+      if (ov) { overrides.delete(uid + "|" + key); emitOverride(ov, uid, key, 1); }
+      else push(p, uid, key, s.utc, len, start.allDay, 1);
     }
   }
   // 원래 회차를 못 찾은 변경 일정 (다른 날로 옮겨진 회차 등)도 보여 줌
   for (const [k, ov] of overrides) {
     const [uid, key] = [k.slice(0, k.lastIndexOf("|")), k.slice(k.lastIndexOf("|") + 1)];
-    if (masters.some((p) => text(p, "UID") === uid && first(p, "RRULE"))) emitOverride(ov, uid, key);
+    if (masters.some((p) => text(p, "UID") === uid && first(p, "RRULE"))) emitOverride(ov, uid, key, 1);
   }
   return out;
 }

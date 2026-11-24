@@ -280,6 +280,22 @@
   const evColor = (e) => (e.ext ? e.color : teamColor(e.unitId) ?? KIND[e.kind].color);
   // 구글 캘린더에서 우리 소속으로 넣은 일정: 'WYD 캘린더 백업' 표시 (원본은 달력·검색에서 숨김)
   const srcTag = (e, short) => (e.sourceName ? h("span", { class: "src-tag", title: `${e.sourceName} 캘린더 백업 (구글 캘린더에서 가져온 일정)`, text: short ? e.sourceName : `${e.sourceName} 캘린더 백업` }) : null);
+  // 수정된 일정: '수정됨'(날짜가 바뀌면 함께), 우리 소속으로 넣은 일정은 '원본 수정됨·원본 취소됨'
+  const changeLine = (c) => `${c.label} ${c.from} → ${c.to}`;
+  function editTag(e, cls) {
+    const x = e.edited || e.sourceEdited;
+    if (!x) return null;
+    const word = e.edited ? "수정됨" : x.gone ? "원본 취소됨" : "원본 수정됨";
+    const moved = x.changes.some((c) => c.kind === "date");
+    return h("span", { class: "edit-tag" + (cls ? " " + cls : ""), title: x.changes.map(changeLine).join("\n") || null, text: word + (moved ? " · 날짜 바뀜" : "") });
+  }
+  function editBox(e) {
+    return [["edited", e.edited], ["source", e.sourceEdited]].filter((x) => x[1]).map(([k, x]) => h("div", { class: "edit-box" }, [
+      h("div", { class: "edit-box__head" }, [h("strong", { text: k === "edited" ? "수정됨" : x.gone ? "원본 취소됨" : "원본 수정됨" }), h("span", { class: "muted small", text: `${ago(x.at)} ${e.ext || k === "source" ? "알게 됨" : "고침"}` })]),
+      k === "source" ? h("p", { class: "muted small", text: x.gone ? "구글 캘린더에서 지워졌어요. 이 일정은 그대로예요." : "구글 캘린더에서 바뀌었어요. 이 일정에는 아직 옮기지 않았어요." }) : null,
+      x.changes.length ? h("ul", {}, x.changes.map((c) => h("li", {}, [h("span", { class: "edit-box__label", text: c.label }), h("span", { class: "edit-box__val" }, [h("s", { text: c.from }), h("span", { "aria-label": "에서", text: " → " }), h("b", { text: c.to })])]))) : null
+    ]));
+  }
   const evDot = (e) => h("i", { class: `dot c${evColor(e)}` });
   const evKey = (e) => (e.ext ? "ext:" : "event:") + e.id;
   const openEv = (e) => openPeek(e.ext ? "ext" : "event", e.id);
@@ -800,6 +816,16 @@
   const seeMenu = (menu) => { const n = ++chgSeq; quiet(api(`/changes/seen${chgAs()}`, { method: "POST", body: { menu } }).then((r) => { if (n === chgSeq) setChg(r); })); };
   const checkChanges = () => { if (!state.token || !state.user || state.user.mustChangePassword || document.visibilityState !== "visible") return; const n = ++chgSeq; quiet(api(`/changes/counts${chgAs()}`).then((r) => { if (n === chgSeq) setChg(r); })); };
   setInterval(checkChanges, 120000);
+  // 열어 둔 '오늘' 화면: 2분마다, 그리고 다시 볼 때 새로 읽음 (구글 일정은 서버가 20분마다 읽음)
+  let autoAt = 0, autoBusy = false;
+  async function autoToday(min) {
+    if (!state.token || !state.user || !page?.auto || autoBusy || document.visibilityState !== "visible" || Date.now() - autoAt < min) return;
+    autoAt = Date.now(); autoBusy = true;
+    try { await page.auto(); } catch (e) { /* 다음 차례에 */ } finally { autoBusy = false; }
+  }
+  setInterval(() => autoToday(110000), 30000);
+  document.addEventListener("visibilitychange", () => autoToday(10000));
+  window.addEventListener("focus", () => autoToday(10000));
   document.addEventListener("visibilitychange", checkChanges);
   const checkNotices = () => { if (state.token && state.user && state.user.role !== "volunteer" && document.visibilityState === "visible") quiet(api("/notices/unread").then((r) => setUnreadNotices(r.unreadNotices))); };
   setInterval(checkNotices, 120000);
@@ -1347,6 +1373,7 @@
 
     const body = [
       facts,
+      ...editBox(e),
       e.source ? h("div", { class: "srcbox" + (e.source.status !== "same" ? " is-warn" : "") }, [
         h("span", {}, [icon("cal"), h("strong", { text: `${e.source.calendarName} 캘린더 백업` }), " · 구글 캘린더에서 가져온 일정이라 원본은 달력에서 숨겨요"]),
         e.source.status === "changed" ? h("span", { class: "srcbox__msg" }, [`원본이 바뀌었어요 (${e.source.changed.join(", ")})`,
@@ -1387,6 +1414,7 @@
         e.location ? h("li", {}, [icon("place"), h("span", { text: e.location })]) : null,
         e.categoryId ? h("li", {}, [icon("folder"), h("span", { class: "catpath", text: catLabel(e.categoryId) })]) : null
       ]),
+      ...editBox(e),
       e.description ? section("doc", "설명", null, h("p", { class: "prose ext-desc", text: e.description })) : null,
       h("p", { class: "notice-box small" }, [`구글 캘린더 '${e.calendarName}'에서 가져온 일정이에요. 고치려면 구글 캘린더에서 고쳐 주세요. `, e.syncedAt ? `(${ago(e.syncedAt)} 읽음)` : ""]),
       // 이미 우리 쪽에 넣었으면 열기, 아니면 넣기 (다른 팀에 또 넣는 건 허용)
@@ -2076,10 +2104,13 @@
     const findBox = h("section", { class: "card today-find" }, loading());
     let findDay = day; // 이 칸만 앞뒤 날짜로 옮겨 볼 수 있음 (아래 일정은 그대로)
     let findSeq = 0;
-    async function loadFind() {
+    async function loadFind(auto) {
       const seq = ++findSeq;
       const r = await api(`/today-search?date=${findDay}`);
       if (seq !== findSeq) return; // 날짜를 빨리 넘길 때 늦게 온 응답은 버림
+      const sig = JSON.stringify(r) + findDay;
+      if (auto === true && (sig === findSig || !calm())) return;
+      findSig = sig;
       const put = async (body) => { await act(() => api("/today-keywords", { method: "PUT", body })); quiet(loadFind()); };
       const save = (mine) => put({ keywords: mine });
       const saveEx = (ex) => put({ excludes: ex });
@@ -2108,6 +2139,7 @@
         return h("li", {}, h("button", { class: "today-find__row today-find__row--" + (FIND_KINDS[x.type] ? x.type : "event") + (x.clash ? " is-clash" : ""), type: "button", "data-peek": key, title: extra ? `${x.field}에 '${x.keyword || ""}'이(가) 들어 있어요` : null, onclick: () => { const [t, id] = key.split(":"); openPeek(t, t === "day" ? id : Number(id)); } }, [
           h("span", { class: "today-find__kind", text: kind.label }),
           x.clash ? h("span", { class: "today-find__clash", title: `${x.clash.join(", ")}와(과) 시간이 겹쳐요`, text: "시간 겹침" }) : null,
+          editTag(x),
           h("span", { class: "today-find__title", text: x.title }),
           extra ? h("span", { class: "today-find__plus", "aria-label": `${x.field}에서 찾음`, text: "+" }) : null,
           kind.when ? h("span", { class: "today-find__time", text: when }) : null
@@ -2258,21 +2290,21 @@
           ...Array.from({ length: endH - startH }, (_, i) => h("i", { class: "rooms__line", style: `top:${i * RH}px` })),
           nowTop != null ? h("i", { class: "rooms__now", style: `top:${nowTop}px` }) : null,
           ...items.map((it) => { const f = ov.of.get(it.e); return h("button", {
-            type: "button", class: `rooms__ev c${evColor(it.e)}` + (it.e.ext ? " is-ext" : "") + (f ? ` is-${f}` : "") + (it.en - it.s < 75 && f ? " is-short" : ""), "data-peek": evKey(it.e), onclick: () => openEv(it.e),
+            type: "button", class: `rooms__ev c${evColor(it.e)}` + (it.e.ext ? " is-ext" : "") + (f ? ` is-${f}` : "") + (f || editTag(it.e) ? (it.en - it.s < 55 ? " is-short" : it.en - it.s < 75 ? " is-mid" : "") : ""), "data-peek": evKey(it.e), onclick: () => openEv(it.e),
             title: `${f ? `[${FLAG[f]}] ` : ""}${it.e.title} · ${timeRange(it.e)}${it.e.location ? " · " + it.e.location : ""}`,
             style: `top:${((it.s - startH * 60) / 60) * RH}px;height:${Math.max(22, ((it.en - it.s) / 60) * RH - 2)}px;left:calc(100% * ${it.lane / lanes} + 2px);width:calc(100% / ${lanes} - 4px)`
-          }, [f ? h("em", { class: "rooms__evflag", text: FLAG[f] }) : null, h("strong", { text: it.e.title }), h("span", { text: timeRange(it.e).replace(/^[^·]*·\s*/, "") })]); })
+          }, [f || editTag(it.e) ? h("span", { class: "rooms__evflags" }, [f ? h("em", { class: "rooms__evflag", text: FLAG[f] }) : null, editTag(it.e)]) : null, h("strong", { text: it.e.title }), h("span", { text: timeRange(it.e).replace(/^[^·]*·\s*/, "") })]); })
         ]);
         const flag = ov.clash ? "clash" : ov.dup ? "dup" : "";
         return h("div", { class: "rooms__col" + (lanes > 1 ? " is-wide" : "") }, [
           h("div", { class: "rooms__name" + (flag ? ` is-${flag}` : "") }, [h("strong", { text: r, title: r }), h("span", { class: "muted small" }, [list.length ? `${list.length}건` : "비어 있음", flag ? h("b", { text: ` · ${FLAG[flag]}` }) : null])]),
-          allDay.length ? h("div", { class: "rooms__allday" }, allDay.map((e) => h("button", { type: "button", class: `rooms__chip c${evColor(e)}`, onclick: () => openEv(e), text: `종일 · ${e.title}` }))) : h("div", { class: "rooms__allday" }),
+          allDay.length ? h("div", { class: "rooms__allday" }, allDay.map((e) => h("button", { type: "button", class: `rooms__chip c${evColor(e)}`, onclick: () => openEv(e) }, [editTag(e), `종일 · ${e.title}`]))) : h("div", { class: "rooms__allday" }),
           body
         ]);
       };
       const cols = rooms.map(col);
       fill(roomBox, head, offNote,
-        h("div", { class: "rooms__scroll" }, h("div", { class: "rooms__grid", style: `grid-template-columns:52px ${cols.map((c, i) => (c.classList.contains("is-wide") ? "minmax(230px, 1.4fr)" : rooms[i].length > 9 ? "minmax(180px, 1fr)" : "minmax(130px, 1fr)")).join(" ")}` }, [
+        h("div", { class: "rooms__scroll" }, h("div", { class: "rooms__grid", style: `grid-template-columns:52px ${cols.map((c, i) => (c.classList.contains("is-wide") ? "minmax(270px, 1.4fr)" : rooms[i].length > 9 ? "minmax(180px, 1fr)" : "minmax(130px, 1fr)")).join(" ")}` }, [
           h("div", { class: "rooms__axiswrap" }, [h("div", { class: "rooms__name rooms__name--blank" }), h("div", { class: "rooms__allday" }), axis]),
           ...cols
         ])),
@@ -2282,22 +2314,46 @@
     }
     setMain("today", [quickbar, findBox, roomBox, h("div", { class: "today-grid" }, [timelineBox, h("div", { class: "today-side" }, [tasksBox, memoBox])])]);
 
-    async function load() {
-      quiet(loadFind().catch((e) => { if (e.status !== 401) fill(findBox, failed(e)); }));
+    let lastSig = "", findSig = "";
+    // auto: 저절로 새로 읽을 때. 달라진 것이 없으면 화면을 건드리지 않음
+    async function load(auto) {
+      auto = auto === true;
+      if (!auto) quiet(loadFind().catch((e) => { if (e.status !== 401) fill(findBox, failed(e)); }));
       const [ev, tk, mm] = await Promise.all([
         api(`/events?from=${day}&to=${day}`), api(`/tasks?date=${day}&today=${today()}`), api(`/memos?date=${day}`)
       ]);
+      const sig = JSON.stringify([ev, tk, mm]);
+      if (auto && (sig === lastSig || !calm())) return;
+      lastSig = sig;
       const inCat = catFilter();
       const events = dedupeImported(allEvents(ev).filter((e) => showEv(e) && inCat(e)));
-      drawTimeline(events);
+      const keep = roomBox.querySelector(".rooms__scroll")?.scrollLeft || 0;
+      drawTimeline(events, (ev.moved || []).filter((l) => showEv(l) && inCat(l)));
       // 회의실 예약은 분류 거르기와 관계없이 그날 일정 전부로 (끈 캘린더는 안에서 빼고 알려 줌)
       drawRooms(allEvents(ev));
+      const rs = roomBox.querySelector(".rooms__scroll");
+      if (rs && keep) rs.scrollLeft = keep;
       drawTasks(tk.tasks.filter(inCat));
       memoList.replaceChildren(memoRows(mm.memos.filter(inCat), { empty: "이 날 남긴 메모가 없어요." }));
       markPeeked();
     }
+    // 입력 중이거나 창·목록이 열려 있으면 다시 그리지 않고 다음 차례를 기다림 (빠른 메모·옆 패널은 다시 그리지 않으므로 괜찮음)
+    function calm() {
+      if (dialog.open || openPop) return false;
+      const at = document.activeElement;
+      if (/INPUT|TEXTAREA|SELECT/.test(at.tagName) && at.type !== "checkbox" && [findBox, roomBox, timelineBox, tasksBox, memoList].some((b) => b.contains(at))) return false;
+      return ![findBox, tasksBox].some((b) => [...b.querySelectorAll("input, textarea")].some((x) => x.type !== "checkbox" && x.value.trim()));
+    }
+    async function autoLoad() {
+      if (page?.reload !== load || document.visibilityState !== "visible" || !calm()) return;
+      // 자정이 지나면 '오늘'을 새 날짜로
+      if (day0 !== today() && day === day0 && /^#\/today\/?$/.test(location.hash || "#/today")) return pageToday();
+      await load(true);
+      await loadFind(true);
+    }
+    const day0 = today();
 
-    function drawTimeline(events) {
+    function drawTimeline(events, movedList) {
       const allDay = events.filter((e) => !e.startTime || e.startDate !== day);
       const timed = events.filter((e) => e.startTime && e.startDate === day);
       const head = h("div", { class: "card__head" }, [
@@ -2336,7 +2392,7 @@
           style: `top:${top}px;height:${height}px;left:calc(56px + (100% - 60px) * ${it.lane / it.lanes});width:calc((100% - 60px) / ${it.lanes} - 4px)`,
           onclick: () => openEv(e)
         }, [
-          h("div", { class: "tl__evtop" }, [h("strong", { text: e.title }), h("span", { class: "tl__tags" }, [srcTag(e, true), ...tagChips(e.tagIds)])]),
+          h("div", { class: "tl__evtop" }, [editTag(e), h("strong", { text: e.title }), h("span", { class: "tl__tags" }, [srcTag(e, true), ...tagChips(e.tagIds)])]),
           h("div", { class: "tl__meta" }, [
             h("span", { text: timeRange(e) }),
             e.location ? h("span", {}, [icon("place"), e.location]) : null,
@@ -2353,7 +2409,12 @@
       }
       const scroller = h("div", { class: "tl-scroll" }, grid);
       fill(timelineBox, head,
-        allDay.length ? h("div", { class: "tl-allday" }, [h("span", { class: "tl-allday__label", text: "종일" }), ...allDay.map((e) => h("button", { class: `chip c${evColor(e)}` + (e.ext ? " is-ext" : ""), type: "button", "data-peek": evKey(e), onclick: () => openEv(e) }, [srcTag(e, true), h("span", { text: e.title })]))]) : null,
+        movedList.length ? h("ul", { class: "tl-moved" }, movedList.map((l) => h("li", { class: `tl-moved__row is-${l.what}` }, [
+          h("span", { class: "tl-moved__what", text: l.what === "gone" ? "취소됨" : `옮김 → ${l.toDate}${l.toTime !== "종일" ? " " + l.toTime : ""}` }),
+          l.id ? h("button", { class: "tl-moved__title", type: "button", "data-peek": evKey(l), onclick: () => openEv(l) }, [h("s", { text: l.title })]) : h("span", { class: "tl-moved__title" }, h("s", { text: l.title })),
+          h("span", { class: "muted small", text: `원래 ${l.time}${l.ext ? " · " + l.calendarName : ""}` })
+        ]))) : null,
+        allDay.length ? h("div", { class: "tl-allday" }, [h("span", { class: "tl-allday__label", text: "종일" }), ...allDay.map((e) => h("button", { class: `chip c${evColor(e)}` + (e.ext ? " is-ext" : ""), type: "button", "data-peek": evKey(e), onclick: () => openEv(e) }, [editTag(e), srcTag(e, true), h("span", { text: e.title })]))]) : null,
         scroller,
         !events.length ? h("p", { class: "tl-empty muted", text: "일정이 없어요. 시간대를 두 번 눌러 바로 추가할 수 있어요." }) : null);
       grid.addEventListener("dblclick", (ev) => {
@@ -2398,7 +2459,7 @@
       );
     }
 
-    page = { name: "today", reload: load };
+    page = { name: "today", reload: load, auto: autoLoad };
     try { await load(); } catch (e) { if (e.status !== 401) timelineBox.replaceChildren(failed(e)); }
   }
 

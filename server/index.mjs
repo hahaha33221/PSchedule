@@ -20,6 +20,7 @@ import { autoEduDone, dropEduDone, eduStatus, EDU_STATUS_SQL, logMonStatus, setE
 import { actor, setActor } from "./ctx.mjs";
 import { KEEP_DAYS, TOPICS, makeChanges } from "./changes.mjs";
 import { createCalendarSync, checkUrl, maskUrl } from "./calendars.mjs";
+import { createEventEdits } from "./event-edits.mjs";
 import { startAutoBackup, listBackups, backupNow, pruneBackups } from "./backup.mjs";
 import { vapidKeys, sendPush, pushEndpointOk } from "./push.mjs";
 
@@ -71,7 +72,8 @@ const EXT_VIS = (c) => `(:admin = 1 OR ${c}.unit_id IS NULL OR ${IN_UNITS(`${c}.
 const extV = (v) => ({ admin: v.admin, units: v.units });
 const created = ensureAdmin(db);
 if (created) console.log(`관리자 계정을 만들었어요 → 아이디 ${created.login} / 비밀번호 ${created.password} (로그인 후 바로 바꿔 주세요)`);
-const calendarSync = createCalendarSync(db);
+const eventEdits = createEventEdits(db);
+const calendarSync = createCalendarSync(db, { edits: eventEdits });
 calendarSync.start(process.env.CALENDAR_SYNC_MINUTES);
 startAutoBackup(db, { dir: BACKUP_DIR, keepDays: BACKUP_KEEP_DAYS, hour: BACKUP_HOUR });
 
@@ -1076,7 +1078,7 @@ function itemUnit(b, user, cur, meetingId) {
 /* ----- 검색 (대시보드): 회의·일정·할 일·메모·가져온 일정의 안쪽 내용까지, 전체 기간 ----- */
 const SEARCH_LIMIT = 300;
 const searchQ = {
-  events: db.prepare("SELECT id, kind, title, start_date, end_date, start_time, end_time, location, description, agenda, category_id, unit_id, created_by, src_calendar_id, src_snapshot FROM events"),
+  events: db.prepare("SELECT id, kind, title, start_date, end_date, start_time, end_time, location, description, agenda, category_id, unit_id, created_by, src_calendar_id, src_uid, src_inst, src_snapshot FROM events"),
   attendees: db.prepare("SELECT a.event_id, a.user_id, u.name FROM event_attendees a JOIN users u ON u.id = a.user_id"),
   eventTags: db.prepare("SELECT x.event_id, t.name FROM event_tags x JOIN tags t ON t.id = x.tag_id"),
   links: db.prepare("SELECT event_id, title, url FROM event_links"),
@@ -1132,6 +1134,7 @@ function runSearch(q, kind, v, day) {
     return null;
   };
   const out = [];
+  const ed = day ? eventEdits.view(v) : null; // 하루를 볼 때(이름으로 모아 보기)만 수정됨 표시
   if (kind === "all" || kind === "meeting") {
     const att = group(searchQ.attendees.all(), "event_id", (r) => r);
     const tags = group(searchQ.eventTags.all(), "event_id", (r) => r.name);
@@ -1146,14 +1149,14 @@ function runSearch(q, kind, v, day) {
         ["분류", cats.get(e.category_id)], ...(att.get(e.id) || []).map((x) => ["참석자", x.name]), ...(guests.get(e.id) || []).map((x) => ["외부 참석자", x])];
       const h = hit(fields);
       if (h) out.push({ type: e.kind, id: e.id, title: e.title, date: e.start_date, endDate: e.end_date, time: e.start_time, endTime: e.end_time, sourceName: sourceName(e),
-        categoryId: e.category_id, unitId: e.unit_id, createdBy: e.created_by, attendeeIds: (att.get(e.id) || []).map((x) => x.user_id), ...h });
+        categoryId: e.category_id, unitId: e.unit_id, createdBy: e.created_by, attendeeIds: (att.get(e.id) || []).map((x) => x.user_id), ...(ed?.event(e.id) ? { edited: ed.event(e.id) } : ed?.source(e) ? { sourceEdited: ed.source(e) } : {}), ...h });
     }
     const imported = new Set(searchQ_vis.imported.all(v).map((k) => `${k.cal}|${k.uid_}|${k.inst}`));
     for (const x of searchQ.external.all()) {
       if (!seeCal.has(x.calendar_id) || imported.has(`${x.calendar_id}|${x.uid}|${x.inst}`)) continue;
       const h = hit([["제목", x.title], ["장소", x.location], ["설명", x.description]]);
       if (h) out.push({ type: "ext", id: x.id, title: x.title, date: x.start_date, endDate: x.end_date, time: x.start_time, endTime: x.end_time,
-        calendarId: x.calendar_id, calendarName: x.calendar_name, color: x.color, categoryId: x.category_id, ext: true, ...h });
+        calendarId: x.calendar_id, calendarName: x.calendar_name, color: x.color, categoryId: x.category_id, ext: true, ...(ed?.external(x) ? { edited: ed.external(x) } : {}), ...h });
     }
   }
   if (kind === "all" || kind === "task") {
@@ -1189,9 +1192,10 @@ const commentOut = (c, user) => ({
   canDelete: user.role === "admin" || c.user_id === user.id
 });
 
-function eventDetail(e, user) {
+function eventDetail(e, user, v) {
+  const ed = v && eventEdits.view(v), edited = ed?.event(e.id), sourceEdited = ed?.source(e);
   return {
-    event: { ...eventsOut([e], user)[0], description: e.description, agenda: parseAgenda(e.agenda), createdAt: e.created_at, updatedAt: e.updated_at, source: sourceInfo(e) },
+    event: { ...eventsOut([e], user)[0], ...(edited ? { edited } : {}), ...(sourceEdited ? { sourceEdited } : {}), description: e.description, agenda: parseAgenda(e.agenda), createdAt: e.created_at, updatedAt: e.updated_at, source: sourceInfo(e) },
     tasks: tasksOut(q.tasksMeeting.all(e.id), user),
     memos: q.memosMeeting.all(e.id).map((m) => memoOut(m, user)),
     links: q.links.all(e.id).map((l) => ({ id: l.id, title: l.title, url: l.url, createdAt: l.created_at })),
@@ -3853,7 +3857,12 @@ async function api(req, res, path) {
   if (path === "/api/events" && method === "GET") {
     const from = param("from"), to = param("to");
     if (!isDate(from) || !isDate(to) || to < from) return send(res, 400, { error: "기간을 확인해 주세요." });
-    return send(res, 200, { events: eventsOut(q.events.all(V, to, from), user), external: q.externalRange.all(V, to, from).map(externalOut) });
+    const ed = eventEdits.view(V), rows = q.events.all(V, to, from);
+    const out = eventsOut(rows, user);
+    // 수정된 일정 표시 (3일·일정이 끝날 때까지). 하루를 볼 때는 옮겨졌거나 취소된 일정도
+    rows.forEach((e, i) => { const a = ed.event(e.id), b = ed.source(e); if (a) out[i].edited = a; if (b) out[i].sourceEdited = b; });
+    const external = q.externalRange.all(V, to, from).map((x) => { const a = ed.external(x); return a ? { ...externalOut(x), edited: a } : externalOut(x); });
+    return send(res, 200, { events: out, external, ...(from === to ? { moved: ed.lines(from) } : {}) });
   }
   if (path === "/api/meetings/choices" && method === "GET") {
     const d = isDate(param("date")) ? param("date") : new Date().toISOString().slice(0, 10);
@@ -3890,8 +3899,9 @@ async function api(req, res, path) {
       const info = sourceInfo(e);
       if (!info || info.status === "deleted") throw bad("원본 일정을 찾을 수 없어요.");
       const c = info.current;
-      q.setEventFromSource.run(c.title, c.startDate, c.endDate, c.startTime, c.endTime, c.location, JSON.stringify(c), e.id);
-      return send(res, 200, eventDetail(q.event.get(e.id), user));
+      const m = eventEdits.mark(e);
+      inTx(() => { q.setEventFromSource.run(c.title, c.startDate, c.endDate, c.startTime, c.endTime, c.location, JSON.stringify(c), e.id); eventEdits.edited(m); });
+      return send(res, 200, eventDetail(q.event.get(e.id), user, V));
     }
     // 외부 참석자 넣기 (회의를 볼 수 있는 사람 누구나, 회의록을 함께 채우듯)
     if (em[2] === "guests") {
@@ -3910,7 +3920,7 @@ async function api(req, res, path) {
       return send(res, 201, { links: q.links.all(e.id).map((l) => ({ id: l.id, title: l.title, url: l.url, createdAt: l.created_at })) });
     }
     if (method === "GET") {
-      const d = eventDetail(e, user);
+      const d = eventDetail(e, user, V);
       // 같은 WYD 원본을 다른 팀도 넣었으면 (볼 수 있는 것만) 패널에서 서로 열 수 있게
       if (e.src_calendar_id) d.event.sameSource = q.importedFrom.all({ cal: e.src_calendar_id, uid_: e.src_uid, inst: e.src_inst, ...V }).filter((x) => x.id !== e.id).map((x) => ({ eventId: x.id, unitId: x.unit_id }));
       return send(res, 200, d);
@@ -3918,16 +3928,18 @@ async function api(req, res, path) {
     // 고치기는 팀 누구나 (회의록을 함께 채우므로), 지우기는 올린 사람·관리자
     if (method === "PATCH") {
       const b = await readJson(req);
+      const m = eventEdits.mark(e);
       inTx(() => {
         q.setEvent.run(...eventInput(b, e), e.id);
         if (has(b, "unitId")) q.setEventUnit.run(itemUnit(b, user, e), e.id);
         saveEventRelations(e.id, b);
+        eventEdits.edited(m);
       });
-      return send(res, 200, eventDetail(q.event.get(e.id), user));
+      return send(res, 200, eventDetail(q.event.get(e.id), user, V));
     }
     if (method === "DELETE") {
       if (!isAdmin && e.created_by !== user.id) return send(res, 403, { error: "직접 올린 일정만 지울 수 있어요." });
-      inTx(() => { q.delComments.run("event", e.id); q.delEvent.run(e.id); });
+      inTx(() => { eventEdits.removed(e); q.delComments.run("event", e.id); q.delEvent.run(e.id); });
       return send(res, 204);
     }
     return send(res, 405, { error: "Method not allowed" });
@@ -3967,7 +3979,8 @@ async function api(req, res, path) {
     if (!x || !q.extVis.get({ id: x.id, ...extV(V) })) return send(res, 404, { error: "가져온 일정을 찾을 수 없어요. 캘린더에서 지워졌을 수 있어요." });
     // 이미 우리 쪽에 넣은 것 (볼 수 있는 것만)
     const imported = q.importedFrom.all({ cal: x.calendar_id, uid_: x.uid, inst: x.inst, ...V }).map((e) => ({ eventId: e.id, unitId: e.unit_id }));
-    return send(res, 200, { event: { ...externalOut(x), description: x.description, syncedAt: x.last_ok_at, imported } });
+    const edited = eventEdits.view(V).external(x);
+    return send(res, 200, { event: { ...externalOut(x), ...(edited ? { edited } : {}), description: x.description, syncedAt: x.last_ok_at, imported } });
   }
 
   const gm = path.match(/^\/api\/guests\/(\d+)$/);
@@ -4967,6 +4980,7 @@ createServer(async (req, res) => {
   console.log(`P-Schedule 서버: http://localhost:${PORT}${STATIC_DIR ? " (정적 파일 포함)" : ""}`);
 });
 // 연락 후속 조치 알림: 한 시간마다 확인 (하루 한 번만 보냄)
+setInterval(() => { try { eventEdits.prune(); } catch (e) { console.log(`[edits] ${e.message}`); } }, 60 * 60 * 1000).unref();
 setInterval(() => { try { changeLog.prune(); } catch (e) { console.log(`[changes] ${e.message}`); } }, 60 * 60 * 1000).unref();
 setInterval(() => { try { const at = changeLog.logMax(), ids = autoEduDone(db); changeLog.statusLogs(at); if (ids.length) console.log(`[auto] 교육 날짜가 지난 수도회 ${ids.length}곳 → 교육 완료`); } catch (e) { console.log(`[auto] ${e.message}`); } }, 60 * 60 * 1000).unref();
 setInterval(() => { try { followupReminders(); } catch (e) { console.log(`[followup] ${e.message}`); } }, 60 * 60 * 1000).unref();
