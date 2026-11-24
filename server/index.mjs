@@ -1446,6 +1446,19 @@ const givenName = (name) => {
 const teamQty = (v, label) => { if (v === "" || v == null) return null; const n = Number(v); if (!Number.isInteger(n) || n < 0 || n > 100000000) throw bad(`${label}은 0 이상의 숫자로 적어 주세요.`); return n; };
 const optDate = (v, label) => { if (v === "" || v == null) return ""; if (!isDate(v)) throw bad(`${label}를 확인해 주세요.`); return v; };
 const optTime = (v) => { const t = v == null ? "" : String(v); if (t && !/^([01]\d|2[0-3]):[0-5]\d$/.test(t)) throw bad("시간을 확인해 주세요."); return t; };
+// 교육(방문 일정)에 이어진 기록: 지우면 함께 사라지거나 연결이 끊기는 것 → 하나라도 있으면 지우지 않음
+const EDU_LINKS = [["team_recovery", "회수 기록"], ["inspections", "검수 기록"], ["inspection_group_assigns", "검수 배정"], ["shipments", "택배"], ["contact_logs", "연락 기록"], ["vol_edu_helpers", "진행 봉사자"]];
+const linksText = (list) => list.map(([label, n]) => `${label} ${n}건`).join(", ");
+const eduLinksAll = () => { // 일정 id → [[이름, 건수], …]
+  const m = new Map();
+  for (const [t, label] of EDU_LINKS) for (const x of db.prepare(`SELECT schedule_id AS id, count(*) AS n FROM ${t} WHERE schedule_id IS NOT NULL GROUP BY schedule_id`).all()) { if (!m.has(x.id)) m.set(x.id, []); m.get(x.id).push([label, x.n]); }
+  return m;
+};
+function delSchedule(s) {
+  const links = eduLinksAll().get(s.id);
+  if (links) throw bad(`${linksText(links)}이(가) 이어져 있어 지울 수 없어요. 그 기록을 다른 교육으로 옮기거나 지운 뒤 다시 해 주세요.`);
+  q.delVolSchedule.run(s.id);
+}
 // 담당 수도회 = 묵주에 이어진 방문 일정(추가 전달 물량의 줄). 교육 순서는 날짜순 번호
 function teamOrgRows(admin) {
   const gid = rosaryGroupId();
@@ -1453,6 +1466,7 @@ function teamOrgRows(admin) {
   const infos = new Map(q.teamOrgInfos.all().map((x) => [x.schedule_id, x]));
   const inq = new Map(q.teamInqCounts.all().map((x) => [x.schedule_id, x]));
   const mons = new Map(db.prepare("SELECT id, name, phone, status FROM monasteries").all().map((m) => [m.id, m]));
+  const links = eduLinksAll();
   return q.volSchedulesOfItems.all().filter((s) => s.project_item_id === gid).map((s, i) => {
     const f = infos.get(s.id) || {}, c = inq.get(s.id), mon = mons.get(s.monastery_id);
     return {
@@ -1460,7 +1474,7 @@ function teamOrgRows(admin) {
       reqQty: s.qty, sumNote: s.sum_note || "", eduQty: s.edu_qty ?? null, threadQty: s.thread_qty ?? null, crossQty: s.cross_qty ?? null,
       monasteryId: s.monastery_id ?? null, monasteryStatus: mon?.status || "", contact: mon?.phone || f.contact || "", helper: f.helper || "", status: eduStatus(s.progress, f.status), attend: f.attend ?? null, resultNote: f.result_note || "", madeQty: f.made_qty ?? null, madeDue: f.made_due || "",
       updatedBy: f.updated_by || "", updatedAt: f.updated_at || null, inquiries: c?.n || 0, openInquiries: c?.open || 0, canContact: !!admin,
-      deletable: s.request_id == null && s.thread_qty == null && s.cross_qty == null && s.edu_qty == null
+      deletable: s.request_id == null && s.thread_qty == null && s.cross_qty == null && s.edu_qty == null && !links.has(s.id), linked: links.has(s.id) ? linksText(links.get(s.id)) : ""
     };
   });
 }
@@ -1524,7 +1538,7 @@ async function teamRoute(req, res, user, path, method) {
     if (!om[2] && method === "DELETE") {
       if (!leader) return ok(403, { error: "교육 지우기는 리더 봉사자와 관리자만 해요." });
       if (s.request_id != null || s.thread_qty != null || s.cross_qty != null || s.edu_qty != null) return ok(400, { error: "네이버폼 신청이나 출고·교육물량 기록이 있는 교육은 지울 수 없어요. 관리자에게 알려 주세요." });
-      q.delVolSchedule.run(s.id);
+      delSchedule(s);
       return ok(200, { orgs: teamOrgRows(admin) });
     }
     if (method === "PATCH") {
@@ -1613,11 +1627,12 @@ async function teamRoute(req, res, user, path, method) {
   // 교육 일정이 있는 날 (달력에 보이는 묵주 교육): 봉사 가능 신청·필요 인원은 이 날만
   const eduDays = () => new Set(teamOrgRows(admin).filter((o) => !o.tableOnly).map((o) => o.date));
   // 봉사 가능한 날: 날짜별로 성을 뺀 이름만 (팀 봉사자와 관리자에게만)
+  // 교육이 지워지거나 옮겨져 교육이 없어진 날의 필요 인원·신청은 보이지 않음 (기록은 남아 있어 그날 교육이 다시 생기면 보임)
   const availOut = () => {
-    const people = {};
-    for (const x of q.teamAvailPeople.all(today())) (people[x.date] ||= []).push(givenName(x.name));
-    const needs = Object.fromEntries(q.teamDayNeeds.all(today()).map((x) => [x.date, { need: x.need, note: x.note, by: x.updated_by }]));
-    return { mine: q.teamAvailMine.all(user.id, today()).map((x) => x.date), counts: Object.fromEntries(Object.entries(people).map(([d, l]) => [d, l.length])), people, needs, canSetNeed: leader, eduDays: [...eduDays()].filter((d) => d >= today()).sort() };
+    const people = {}, edu = eduDays();
+    for (const x of q.teamAvailPeople.all(today())) if (edu.has(x.date)) (people[x.date] ||= []).push(givenName(x.name));
+    const needs = Object.fromEntries(q.teamDayNeeds.all(today()).filter((x) => edu.has(x.date)).map((x) => [x.date, { need: x.need, note: x.note, by: x.updated_by }]));
+    return { mine: q.teamAvailMine.all(user.id, today()).map((x) => x.date).filter((d) => edu.has(d)), counts: Object.fromEntries(Object.entries(people).map(([d, l]) => [d, l.length])), people, needs, canSetNeed: leader, eduDays: [...edu].filter((d) => d >= today()).sort() };
   };
   if (path === "/api/team/avail" && method === "GET") return ok(200, availOut());
   if (path === "/api/team/avail" && method === "PUT") {
@@ -1914,7 +1929,7 @@ async function volunteerRoute(req, res, user, path, method, url) {
       inTx(() => { q.setVolSchedule.run(...fields, s.id); if (fields[7] !== s.qty) q.markVolQty.run(user.name, s.id); });
       return sendT(res, 200, { schedule: volScheduleOut(q.volSchedule.get(s.id)) });
     }
-    if (method === "DELETE") { q.delVolSchedule.run(s.id); return sendT(res, 204); }
+    if (method === "DELETE") { delSchedule(s); return sendT(res, 204); }
     return sendT(res, 405, { error: "Method not allowed" });
   }
   // 입출고: 묵주 묶음 대장에 기록 입력. 대장·품목은 못 바꾸고, 고치기·지우기는 자기가 입력한 기록만
@@ -3992,6 +4007,9 @@ async function api(req, res, path) {
       if (method === "PATCH") {
         const b2 = await readJson(req);
         const { fields, users } = adminVolFields(b2);
+        // 묵주 방문 연결을 끄면 팀 봉사자 화면에서 교육이 사라지므로, 이어진 기록이 있으면 막음
+        const links = s.project_item_id && !b2.project ? eduLinksAll().get(s.id) : null;
+        if (links) throw bad(`${linksText(links)}이(가) 이어져 있어 '묵주 프로젝트 방문'을 끌 수 없어요.`);
         inTx(() => {
           q.setVolSchedule.run(...fields, s.id);
           if (fields[7] !== s.qty) q.markVolQty.run(user.name, s.id);
@@ -4007,7 +4025,7 @@ async function api(req, res, path) {
         return send(res, 200, { schedule: volScheduleAdminOut(q.volSchedule.get(s.id)) });
       }
       if (method === "DELETE") {
-        q.delVolSchedule.run(s.id);
+        delSchedule(s);
         console.log(`[admin] ${user.login} → 봉사 일정 #${s.id} 삭제`);
         return send(res, 204);
       }

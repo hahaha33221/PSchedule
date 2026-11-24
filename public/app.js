@@ -6674,6 +6674,7 @@
         );
       };
       let changed = false;
+      const delWhy = o.linked ? `${o.linked}이(가) 이어져 있어요.` : "네이버폼 신청이나 출고·교육물량 기록이 있어요.";
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: "저장" });
       const form = h("form", { class: "stack", novalidate: true }, [
         h("p", { class: "muted small", text: [`교육 순서 ${o.no}`, o.fromForm ? "네이버폼 신청" : "신청서 없음", o.updatedBy ? `마지막 수정 ${o.updatedBy}` : ""].filter(Boolean).join(" · ") }),
@@ -6690,9 +6691,10 @@
         h("h3", { class: "team-sec", text: "연락처" }),
         contact ? field("연락처 (관리자 입력)", contact) : h("p", { class: "vol-pre small", text: o.contact || "관리자가 아직 적지 않았어요." }),
         h("h3", { class: "team-sec", text: "문의 대응 기록" }), inqBox,
+        canAdd && !o.deletable ? h("p", { class: "muted small", text: `이 교육은 지울 수 없어요: ${delWhy}` }) : null,
         err,
         h("div", { class: "actions" }, [
-          canAdd ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "교육 지우기", disabled: !o.deletable, title: o.deletable ? "" : "네이버폼 신청이나 출고·교육물량 기록이 있어 지울 수 없어요", onclick: async () => {
+          canAdd ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "교육 지우기", disabled: !o.deletable, title: o.deletable ? "" : delWhy, onclick: async () => {
             if (!confirm(`'${o.org}' 교육을 지울까요? 교육 결과·문의 기록도 함께 지워져요.`)) return;
             orgs = (await act(() => api(`/team/orgs/${o.id}`, { method: "DELETE" }), "교육을 지웠어요.")).orgs; closeDialog(); draw();
           } }) : null,
