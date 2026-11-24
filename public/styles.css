@@ -2138,3 +2138,9 @@ th.num .sort-th__btn { justify-content: flex-end; }
 .vol-pick.edu-pick { display: grid; grid-template-columns: 1fr; gap: 10px; max-height: 280px; overflow: auto; }
 .edu-pick__group { border: 0; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 2px 8px; }
 .edu-pick__group legend { grid-column: 1 / -1; padding: 0; margin-bottom: 2px; }
+
+/* 다른 화면에서 생긴 입출고 안내 · 수도회 이름 바꾸기 확인 */
+.ref-guide { padding: 10px 12px; border-radius: 10px; background: var(--surface-2); color: var(--ink); }
+.org-ask { padding: 12px 14px; border: 2px solid var(--ink); }
+.org-ask .actions { flex-wrap: wrap; }
+.org-ask .btn { white-space: normal; height: auto; min-height: 36px; text-align: left; }

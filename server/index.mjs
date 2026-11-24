@@ -1886,7 +1886,7 @@ function ledgerOut(l, p, user) {
     project: { id: p.id, name: p.name, unitId: p.unit_id }, itemName: item.name,
     options: q.stockOptions.all(l.id),
     moves: q.stockMoves.all(l.id).map((m) => ({
-      id: m.id, type: m.type, date: m.date, handler: m.handler, note: m.note, issue: m.issue || "", photos: photos.get(m.id) || [], inspectOk: m.inspect_ok ?? null, inspectBad: m.inspect_bad ?? null, qty: qty.get(m.id) || {}, mine: m.created_by === user.id,
+      id: m.id, type: m.type, date: m.date, handler: m.handler, note: m.note, issue: m.issue || "", photos: photos.get(m.id) || [], inspectOk: m.inspect_ok ?? null, inspectBad: m.inspect_bad ?? null, qty: qty.get(m.id) || {}, mine: m.created_by === user.id, refType: m.ref_type || "", guide: moveGuide(m, user),
       ...(user.volunteer ? {} : { enteredBy: (m.created_by && q.userById.get(m.created_by)?.name) || "" }) // 입력한 사람: 직원 화면만
     })),
     ...(user.volunteer ? {} : { history: q.stockHistory.all(l.id).map((h) => ({ id: h.id, action: h.action, summary: h.summary, by: h.user_name, at: h.created_at })) }) // 수정 기록: 직원 화면만
@@ -3086,6 +3086,7 @@ const volMenu = () => { try { const v = JSON.parse(q.setting.get("vol_menu")?.va
 // 기록 사진: 줄여 올린 JPG·PNG·WEBP 만, 기록당 4장까지
 const MOVE_PHOTO_MAX = 4;
 function addMovePhoto(m, l, b, user) {
+  guardRefMove(m, user, { photo: true });
   const buf = Buffer.from(String(b.data || ""), "base64");
   if (!buf.length) throw bad("사진을 골라 주세요.");
   if (buf.length > ITEM_IMAGE_MAX) throw bad("사진이 너무 커요.");
@@ -3098,8 +3099,20 @@ function sendPhoto(res, ph) {
   res.writeHead(200, { "Content-Type": ph.mime, "Content-Length": ph.data.length, "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": "default-src 'none'" });
   return res.end(Buffer.from(ph.data));
 }
-function delMovePhoto(ph, m, l, user) { inTx(() => { q.delPhoto.run(ph.id); logStock(l.id, "photo", `${moveKind(m)} 사진 삭제 (${m.date})`, user); }); }
+function delMovePhoto(ph, m, l, user) { guardRefMove(m, user, { photo: true }); inTx(() => { q.delPhoto.run(ph.id); logStock(l.id, "photo", `${moveKind(m)} 사진 삭제 (${m.date})`, user); }); }
+// 다른 화면(위치 이동·실사 조정·실자르기·타래 배분·구매)에서 생긴 입출고: 한쪽만 바뀌면 재고가 틀어져서 입출고 화면에서는 고치거나 지우지 않음
+//   구매 입고는 다시 만들어지지 않는 줄이라 비고·이슈·입고 검수·사진은 열어 둠 (나머지는 원래 화면에서 고치면 줄이 새로 만들어져 사라짐)
+const REF_INFO = { move: ["위치 이동으로", "재고·보관"], adjust: ["실사 조정으로", "재고·보관"], cutting: ["실자르기로", "실자르기·타래"], handout: ["타래 배분으로", "실자르기·타래"], purchase: ["구매 입고로", "재고·보관"] };
+function moveGuide(m, user) {
+  if (!m.ref_type) return "";
+  const [name, tab] = REF_INFO[m.ref_type] || ["다른 화면에서", ""];
+  const head = `${name} 생긴 기록이라 여기서는 ${m.ref_type === "purchase" ? "날짜·수량을 고치거나 지울" : "고치거나 지울"} 수 없어요.`;
+  if (user.volunteer || !tab || !opsRole(user).can(m.ref_type === "cutting" || m.ref_type === "handout" ? "cutting" : "stock", "e")) return `${head} 틀렸으면 관리자에게 알려 주세요.`;
+  return `${head} '수도회·물류 › ${tab}'에서 ${m.ref_type === "purchase" ? "'실사 조정'으로 맞춰" : "고쳐"} 주세요.`;
+}
+function guardRefMove(m, user, { photo = false } = {}) { if (m.ref_type && !(photo && m.ref_type === "purchase")) throw bad(moveGuide(m, user)); }
 function deleteStockMoveBy(m, l, user) {
+  guardRefMove(m, user);
   inTx(() => {
     logStock(l.id, "delete", `${moveKind(m)} 삭제 (${m.date}): ${qtyText(moveQty(m.id), optionNames(l.id))}`, user);
     q.delStockMove.run(m.id);
@@ -3111,6 +3124,10 @@ function patchStockMoveFrom(m, l, b, user) {
   const okN = m.type === "in" ? (has(b, "inspectOk") ? inspectInput(b.inspectOk, "합격") : m.inspect_ok ?? null) : null;
   const badN = m.type === "in" ? (has(b, "inspectBad") ? inspectInput(b.inspectBad, "불량") : m.inspect_bad ?? null) : null;
   const rows = has(b, "qty") ? stockQtyInput(l.id, b.qty) : null;
+  if (m.ref_type) {
+    const now = moveQty(m.id), same = !rows || (rows.length === now.size && rows.every(([o, n]) => now.get(o) === n));
+    if (m.ref_type !== "purchase" || date !== m.date || handler !== m.handler || !same) guardRefMove(m, user);
+  }
   inTx(() => {
     const before = moveQty(m.id), names = optionNames(l.id);
     q.setStockMove.run(date, handler, note, m.id);

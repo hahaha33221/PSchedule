@@ -4963,6 +4963,17 @@
     page = { name: "stock", reload: async () => { list = (await api("/stock")).ledgers; draw(); } };
     try { await page.reload(); } catch (e) { if (e.status !== 401) setMain("stock", failed(e)); }
   }
+  // 다른 화면(위치 이동·실사 조정·실자르기·타래 배분)에서 생긴 입출고: 보기만 하고 어디서 고치는지 안내
+  function refMoveInfo(m, data, img) {
+    const parts = data.options.filter((o) => Number(m.qty[o.id])).map((o) => `${o.name} ${fmtN(m.qty[o.id])}`).join(" · ");
+    openDialog(`${m.type === "in" ? "입고" : "출고"} 기록 · ${m.date}`, h("div", { class: "stack" }, [
+      h("p", { class: "ref-guide small", text: m.guide }),
+      h("strong", { text: `${parts || "수량 없음"}${parts ? ` ${data.ledger.unit}` : ""}` }),
+      m.note ? h("p", { class: "small", text: m.note }) : null, m.issue ? h("p", { class: "move-issue", text: `이슈: ${m.issue}` }) : null,
+      m.photos?.length ? h("div", { class: "move-photos" }, m.photos.map((pid) => img(pid))) : null,
+      h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "닫기", "data-close": true })])
+    ]));
+  }
   // vol 이 있으면 봉사자 화면: 기록 입력과 고치기·지우기 (대장은 못 바꿈, 누가 적은 기록이든 고침, 수정 기록에 남음), 그리는 곳도 봉사자 화면
   async function pageStock(id, vol) {
     const base = vol ? `/volunteer/stock/${id}` : `/stock/${id}`;
@@ -4988,6 +4999,8 @@
     const edit = (opts) => ledgerDialog(data, async (body) => { const r = await api(`/stock/${id}`, { method: "PATCH", body }); closeDialog(); apply(r); }, opts);
     const apply = (r) => { data = r; draw(); };
     function moveDialog(type, m) {
+      if (m?.refType && m.refType !== "purchase") return refMoveInfo(m, data, photoImg);
+      const lock = !!m?.refType; // 구매 입고: 날짜·수량·전달자는 못 고침 (비고·이슈·입고 검수·사진만)
       const err = errorLine();
       // 봉사자는 달력으로 고르기 (예전 기록의 '10월 이전' 같은 글자 날짜는 직원 화면에서만)
       const date = vol ? h("input", { type: "date", value: m?.date || today(), autofocus: true }) : h("input", { value: m?.date || today(), maxlength: "20", autofocus: true, placeholder: today() });
@@ -5031,8 +5044,10 @@
       const inputs = data.options.map((o) => ({ o, el: h("input", { type: "number", min: "0", inputmode: "numeric", value: m?.qty[o.id] || "", "aria-label": o.name, oninput: () => drawSum() }) }));
       const drawSum = () => { sum.textContent = `합계 ${fmtN(inputs.reduce((n, x) => n + (Number(x.el.value) || 0), 0))} ${data.ledger.unit}`; };
       drawSum();
+      if (lock) for (const el of [date, handler, ...inputs.map((x) => x.el)]) el.disabled = true;
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: m ? "저장" : "추가" });
       const form = h("form", { class: "stack", novalidate: true }, [
+        lock ? h("p", { class: "ref-guide small", text: m.guide }) : null,
         h("div", { class: "row2" }, [field(type === "in" ? "입고일" : "출고일", date), type === "out" ? field("전달자", handler) : null]),
         inputs.length ? h("div", { class: "stock-grid" }, inputs.map((x) => h("label", { class: "stock-grid__cell" }, [h("span", { class: "small", text: x.o.name }), x.el, h("span", { class: "muted stock-grid__left", text: `재고 ${fmtN(leftOf(x.o.id))}` })]))) : h("p", { class: "muted small", text: "먼저 1단계 기본 정보에서 품목 열을 추가해 주세요." }),
         sum, field("비고", note),
@@ -5042,7 +5057,7 @@
         m?.enteredBy ? h("p", { class: "muted small", text: `입력: ${m.enteredBy}` }) : null,
         err,
         h("div", { class: "actions" }, [
-          m ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
+          m && !lock ? h("button", { class: "btn btn--danger-outline btn--sm", type: "button", text: "지우기", onclick: async () => {
             if (!confirm(`${m.date} 기록을 지울까요?`)) return;
             const r = await act(() => api(moveUrl(m.id), { method: "DELETE" }));
             closeDialog(); apply(r);
@@ -5100,7 +5115,7 @@
         const body = list.map((m, i) => {
           const day = Object.values(m.qty).reduce((a, b) => a + b, 0);
           running += day;
-          const rowAttrs = canEditMove(m) ? { class: "stock-row", tabindex: "0", title: "눌러서 고치기", onclick: () => moveDialog(type, m), onkeydown: (e) => { if (e.key === "Enter") moveDialog(type, m); } } : {};
+          const rowAttrs = canEditMove(m) ? { class: "stock-row", tabindex: "0", title: m.refType ? "눌러서 보기" : "눌러서 고치기", onclick: () => moveDialog(type, m), onkeydown: (e) => { if (e.key === "Enter") moveDialog(type, m); } } : {};
           return h("tr", rowAttrs, [
             h("td", { class: "num muted", text: String(i + 1) }), h("td", { class: "nowrap", text: m.date }),
             ...options.map((o) => num(m.qty[o.id])), num(day, "stock-strong"), num(running),
@@ -5108,7 +5123,7 @@
             isOut ? null : h("td", { class: "nowrap", text: m.inspectOk != null || m.inspectBad != null ? `합격 ${fmtN(m.inspectOk || 0)} · 불량 ${fmtN(m.inspectBad || 0)}` : "-" }),
             h("td", { class: "stock-note move-issue", text: m.issue || "" }),
             h("td", { class: "nowrap" }, m.photos.length ? h("button", { class: "btn btn--ghost btn--sm move-photo-btn", type: "button", title: "사진 보기", onclick: (e) => { e.stopPropagation(); viewPhotos(m); } }, [icon("note"), String(m.photos.length)]) : h("span", { class: "muted", text: "-" })),
-            vol ? h("td", { class: "nowrap" }, h("button", { class: "btn btn--ghost btn--sm", type: "button", "aria-label": `${m.date} ${isOut ? "출고" : "입고"} 고치기`, onclick: (e) => { e.stopPropagation(); moveDialog(type, m); } }, "고치기")) : h("td", { class: "nowrap", text: m.enteredBy || "-" })
+            vol ? h("td", { class: "nowrap" }, h("button", { class: "btn btn--ghost btn--sm", type: "button", "aria-label": `${m.date} ${isOut ? "출고" : "입고"} 고치기`, onclick: (e) => { e.stopPropagation(); moveDialog(type, m); } }, m.refType && m.refType !== "purchase" ? "보기" : "고치기")) : h("td", { class: "nowrap", text: m.enteredBy || "-" })
           ]);
         });
         const colsAfter = (isOut ? 2 : 2) + 2 + 1;
@@ -6203,6 +6218,7 @@
         const parts = options.filter((o) => Number(m.qty[o.id])).map((o) => `${o.name} ${fmtN(m.qty[o.id])}`).join(" · ");
         const tags = [
           type === "out" && m.handler ? h("span", { class: "vm-tag", text: `전달 ${m.handler}` }) : null,
+          m.refType ? h("span", { class: "vm-tag", text: REF_LABEL[m.refType] || "연결된 기록" }) : null,
           m.mine ? h("span", { class: "vm-tag is-mine", text: "내 기록" }) : null,
           m.photos?.length ? h("span", { class: "vm-tag", text: `사진 ${m.photos.length}` }) : null,
           m.inspectBad ? h("span", { class: "vm-tag is-bad", text: `불량 ${fmtN(m.inspectBad)}` }) : null,
@@ -6220,12 +6236,14 @@
           h("button", { class: `btn btn--primary vm-add vm-add--${type}`, type: "button", onclick: () => sheet(null) }, [icon("plus"), `${label()} 적기`])]),
         list.length ? h("ul", { class: "vm-list" }, list.slice(0, shown).map(card)) : h("div", { class: "card empty", text: `아직 ${label()} 기록이 없어요. 아래 '${label()} 적기'를 눌러 첫 기록을 남겨 주세요.` }),
         list.length > shown ? h("button", { class: "btn btn--ghost vm-more", type: "button", text: `더 보기 (${list.length - shown}건 남음)`, onclick: () => { shown += VM_PAGE; draw(); } }) : null,
-        list.length ? h("p", { class: "muted small", text: "기록을 누르면 고치거나 지울 수 있어요. 누가 언제 고쳤는지 직원 화면에 남아요." }) : null
+        list.length ? h("p", { class: "muted small", text: "기록을 누르면 고치거나 지울 수 있어요 (실자르기·구매처럼 다른 화면에서 생긴 기록은 보기만 해요). 누가 언제 고쳤는지 직원 화면에 남아요." }) : null
       ]));
       box.replaceChildren(...kids);
     }
     // 입력 판: 휴대폰에서는 아래에서 올라오는 판, PC 에서는 가운데 창 (대화상자 하나를 같이 씀)
     function sheet(m) {
+      if (m?.refType && m.refType !== "purchase") return refMoveInfo(m, data, vmPhotoImg);
+      const lock = !!m?.refType; // 구매 입고: 날짜·수량은 못 고침
       const { ledger: l, options } = data;
       const t = type, lab = label(), unit = l.unit;
       const err = errorLine();
@@ -6293,7 +6311,9 @@
       }
       const extraOpen = !!(m && (m.note || m.issue || m.inspectOk != null || m.inspectBad != null));
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: m ? "저장하기" : `${lab} 저장하기` });
+      if (lock) { for (const el of [date, handler]) el.disabled = true; for (const x of rows) for (const el of x.el.querySelectorAll("input, button")) el.disabled = true; }
       const form = h("form", { class: "vm-form", novalidate: true }, [
+        lock ? h("p", { class: "ref-guide small", text: m.guide }) : null,
         h("div", { class: "row2" }, [field(`${lab}일`, date), t === "out" ? field("전달자", handler) : null]),
         h("div", { class: "field" }, [h("span", { class: "field__label", text: "수량" }),
           rows.length ? h("div", { class: "vm-rows" }, rows.map((x) => x.el)) : h("p", { class: "muted small", text: "아직 품목이 없어요. 관리자에게 문의해 주세요." }), total]),
@@ -6304,7 +6324,7 @@
           field("이슈 (문제가 된 점)", issue, "이 날짜·물량에 문제가 있었으면 적어 주세요.")
         ])]),
         h("div", { class: "vm-foot" }, [err, sumLine, h("div", { class: "vm-foot__btns" }, [
-          m ? h("button", { class: "btn btn--danger-outline", type: "button", text: "지우기", onclick: async () => {
+          m && !lock ? h("button", { class: "btn btn--danger-outline", type: "button", text: "지우기", onclick: async () => {
             if (!confirm(`${vmDay(m.date)} ${lab} 기록을 지울까요? 사진도 함께 지워져요.`)) return;
             const r = await act(() => api(`/volunteer/stock-moves/${m.id}`, { method: "DELETE" }));
             closeDialog(); apply(r); toast(`${lab} 기록을 지웠어요.`);
