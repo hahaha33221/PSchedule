@@ -2346,3 +2346,22 @@ button.tl-moved__title { cursor: pointer; }
 .cal-gone { display: none; }
 @media (max-width: 640px) { .cal-gone { display: block; max-width: 100%; overflow: hidden; border-radius: 3px; background: var(--danger); color: #fff; font-size: 9px; font-weight: 700; line-height: 13px; padding: 0 2px; white-space: nowrap; } }
 @media (max-width: 640px) and (prefers-color-scheme: dark) { .cal-gone { color: #1b1e26; } }
+
+/* 봉사자 계정 일괄 발급 */
+.issue-card { padding: 16px; }
+.issue-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.issue-row { padding: 12px; display: flex; flex-direction: column; gap: 8px; border-left: 4px solid var(--line); }
+.issue-row.is-new { border-left-color: #2b8a3e; }
+.issue-row.is-ask { border-left-color: var(--warn); }
+.issue-row.is-fix { border-left-color: var(--danger); }
+.issue-row__head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.issue-row__head .icon-btn { margin-left: auto; }
+.issue-row__why { margin: 0; overflow-wrap: anywhere; }
+.issue-row__grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 125px), 1fr)); gap: 8px 10px; }
+.issue-row__grid .field, .issue-row__grid input, .issue-row__grid select { min-width: 0; width: 100%; }
+.is-issue-new { background: #d3f9d8; color: #2b8a3e; }
+.is-issue-exists { background: var(--surface-2); color: var(--muted); }
+.is-issue-ask { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.is-issue-fix { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
+.issue-warn { margin: 0; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--danger) 10%, transparent); font-weight: 600; }
+.issue-save { flex-wrap: wrap; }

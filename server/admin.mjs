@@ -46,7 +46,7 @@ switch (cmd) {
 
   case "add": {
     const [raw, name, role] = args;
-    const login = String(raw || "").trim().toLowerCase();
+    const login = String(raw || "").normalize("NFC").trim().toLowerCase();
     if (!/^[a-z0-9._-]{3,20}$/.test(login) || !name) { console.error("사용법: add <아이디(영문 3~20자)> <이름> [admin]"); process.exit(1); }
     if (db.prepare("SELECT 1 FROM users WHERE login = ?").get(login)) { console.error(`'${login}' 은 이미 있는 아이디예요.`); process.exit(1); }
     const temp = tempPassword();
@@ -56,7 +56,7 @@ switch (cmd) {
   }
 
   case "reset-password": {
-    const login = String(args[0] || "").trim().toLowerCase();
+    const login = String(args[0] || "").normalize("NFC").trim().toLowerCase();
     const user = login && db.prepare("SELECT * FROM users WHERE login = ?").get(login);
     if (!user) { console.error(`아이디 '${args[0] ?? ""}' 를 찾을 수 없어요.`); process.exit(1); }
     const temp = tempPassword();
@@ -70,7 +70,7 @@ switch (cmd) {
   case "view":
   case "view-add":
   case "view-remove": {
-    const u = db.prepare("SELECT * FROM users WHERE login = ?").get(String(args[0] || "").trim().toLowerCase());
+    const u = db.prepare("SELECT * FROM users WHERE login = ?").get(String(args[0] || "").normalize("NFC").trim().toLowerCase());
     if (!u) { console.error(`아이디 '${args[0] ?? ""}' 를 찾을 수 없어요.`); process.exit(1); }
     const units = db.prepare("SELECT id, parent_id, name FROM org_units").all();
     const byId = new Map(units.map((x) => [x.id, x]));

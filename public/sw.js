@@ -1,7 +1,7 @@
 // P-Schedule 서비스 워커: 앱 설치(홈 화면·안드로이드 앱)와 알림(웹 푸시)
 // 화면·데이터는 늘 서버에서 새로 받음 (캐시는 인터넷이 끊겼을 때 첫 화면만)
-const CACHE = "ps-shell-v2";
-const SHELL = ["/", "/index.html", "/styles.css", "/app.js", "/rooms.js", "/favicon.svg", "/icons/icon-192.png"];
+const CACHE = "ps-shell-v3";
+const SHELL = ["/", "/index.html", "/styles.css", "/app.js", "/rooms.js", "/vol-accounts.js", "/favicon.svg", "/icons/icon-192.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).catch(() => {}));

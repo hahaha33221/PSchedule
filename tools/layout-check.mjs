@@ -132,7 +132,7 @@ const OPS = ["dash", "mon", "ship-in", "ship-out", "stock", "cut", "buy", "conta
 const STAFF = ["today", `today/${day(1)}`, `today/${day(2)}`, `today/${day(6)}`, "dashboard", "tasks", "meetings", "memos", "projects", `projects/${pj}`, "stock", `stock/${led.ledger.id}`, "alerts", "notices", "orgchart", "contacts"];
 const RUNS = [
   ["leader", true, TEAM], ["team", true, ["tedu1", "tedu2", "tmake2", "tins1"]], ["dept", true, DEPT],
-  ["admin", true, ["alerts", "members", "org", "backup", "board", "volunteers", ...["edu", "roster", "training", "stock", "records", "inspect", "team", "wbs", "menu"].map((k) => `volunteers/${k}`), ...OPS, "ops/perms", ...STAFF.slice(0, 9)]],
+  ["admin", true, ["alerts", "members", "org", "backup", "board", "volunteers", ...["edu", "roster", "issue", "training", "stock", "records", "inspect", "team", "wbs", "menu"].map((k) => `volunteers/${k}`), ...OPS, "ops/perms", ...STAFF.slice(0, 9)]],
   ["staff", true, [...STAFF, ...OPS.slice(0, 5)]],
   ["leader", false, ["thome", "alerts", "torgs", "trecov", "tinsp/records", "tinsp/shifts", "tissues", "tinsp/guide"]],
   ["dept", false, ["vhome", "alerts", "vschedule", "vp/rosary", "vp/rosary/in", "vp/rosary/out", "vp/rosary/req", "vp/rosary/wbs", "vp/rosary/recovery", "vp/cross/recovery", "vstock"]]

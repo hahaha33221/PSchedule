@@ -21,6 +21,7 @@ import { actor, setActor } from "./ctx.mjs";
 import { KEEP_DAYS, TOPICS, makeChanges } from "./changes.mjs";
 import { createCalendarSync, checkUrl, maskUrl } from "./calendars.mjs";
 import { createEventEdits, isAbsence } from "./event-edits.mjs";
+import { normalizeLogin, loginProblem, hasHangul, logLogin, createVolAccounts } from "./vol-accounts.mjs";
 import { createEventSources } from "./event-source.mjs";
 import { parseAbsence } from "./absence.mjs";
 import { startAutoBackup, listBackups, backupNow, pruneBackups } from "./backup.mjs";
@@ -570,8 +571,8 @@ setInterval(() => {
 
 /* ---------- 유틸 ---------- */
 const sha256 = (s) => crypto.createHash("sha256").update(s).digest("hex");
-const normalizeLogin = (s) => String(s || "").normalize("NFC").trim().toLowerCase();
 const bad = (message, field) => Object.assign(new Error(message), { status: 400, expose: true, field });
+const volAccounts = createVolAccounts(db, { fail: (m) => bad(m) });
 
 // nginx 가 직접 넣는 접속지 (요청자가 보낸 같은 이름 헤더는 nginx 가 덮어씀). 로컬 개발에는 nginx 가 없어 소켓 주소
 const realIp = (req) => String(req.headers["x-real-ip"] || req.socket.remoteAddress || "");
@@ -4618,7 +4619,8 @@ async function api(req, res, path) {
     if (path === "/api/admin/users" && method === "POST") {
       const b = await readJson(req);
       const login = normalizeLogin(b.login);
-      if (!/^[a-z0-9._-]{3,20}$/.test(login)) throw bad("아이디는 영문 소문자·숫자·._- 로 3~20자로 정해 주세요.", "login");
+      const problem = loginProblem(login, b.role === "volunteer" || b.role === "team");
+      if (problem) throw bad(problem, "login");
       const name = text(b.name, LIMITS.name, "이름", true);
       const volunteer = b.role === "volunteer" || b.role === "team" ? 1 : 0;
       const kindsNew = volunteer ? volKindsInput(b) : "dept";
@@ -4628,15 +4630,23 @@ async function api(req, res, path) {
       if (q.userByLogin.get(login)) throw bad("이미 있는 아이디예요.", "login");
       const password = tempPassword();
       const note = text(b.note, LIMITS.userNote, "메모"), hash = hashPassword(password);
-      inTx(() => {
+      const id = inTx(() => {
         const id = Number(q.addUser.run(login, hash, role, name, unit, note).lastInsertRowid);
         if (director) q.setUserDirector.run(1, id);
         if (volunteer) q.setUserVolunteer.run(1, id);
         if (volunteer) q.setUserVolKind.run(kindsNew, id);
         if (volunteer && b.volLeader && kindsNew !== "dept") q.setUserVolLeader.run(1, id);
+        return id;
       });
-      console.log(`[admin] ${user.login} → ${login} 계정 발급`);
+      console.log(`[admin] ${user.login} → ${logLogin({ id, login })} 계정 발급`);
       return send(res, 201, { login, name, password });
+    }
+    /* 봉사자 계정 일괄 발급 (vol-accounts.mjs): 미리 보기 → 발급. 임시 비밀번호는 이 응답에서 한 번만 */
+    if (path === "/api/admin/vol-accounts/preview" && method === "POST") return send(res, 200, { rows: volAccounts.plan((await readJson(req)).rows) });
+    if (path === "/api/admin/vol-accounts" && method === "POST") {
+      const r = volAccounts.issue((await readJson(req)).rows);
+      console.log(`[admin] ${user.login} → 봉사자 계정 ${r.accounts.length}개 일괄 발급 (명단 연결 ${r.linked}개)`);
+      return send(res, 201, r);
     }
     /* 외부 캘린더 (구글 캘린더 비공개 iCal 주소) — 주소는 응답·로그에 가려서만 */
     if (path === "/api/admin/calendars" && method === "GET") {
@@ -4899,7 +4909,7 @@ async function api(req, res, path) {
         const password = tempPassword();
         q.resetPassword.run(hashPassword(password), target.id);
         q.delUserSessions.run(target.id);
-        console.log(`[admin] ${user.login} → ${target.login} 임시 비밀번호 발급`);
+        console.log(`[admin] ${user.login} → ${logLogin(target)} 임시 비밀번호 발급`);
         return send(res, 200, { login: target.login, name: target.name, password });
       }
       const lastAdmin = target.role === "admin" && q.adminCount.get().n <= 1;
@@ -4914,6 +4924,7 @@ async function api(req, res, path) {
         const volunteer = isVol ? 1 : b.role === "admin" || b.role === "member" || b.role === "director" ? 0 : target.volunteer;
         // volKinds 를 안 보내면(예전 화면) 봉사자 권한은 그대로
         const volKind = isVol ? (Array.isArray(b.volKinds) || b.role === "team" || !target.volunteer ? volKindsInput(b) : target.vol_kind || "dept") : target.vol_kind || "dept";
+        if (!volunteer && hasHangul(target.login)) throw bad("한글 아이디는 봉사자만 쓸 수 있어요. 직원으로 바꾸려면 영문 아이디로 새로 발급해 주세요.");
         if (lastAdmin && role !== "admin") throw bad("관리자가 한 명은 있어야 해요.");
         // 추가로 볼 수 있는 조직: [{ unitId, sub }] 로 통째로 바꿈
         let grants = null;
@@ -4932,7 +4943,7 @@ async function api(req, res, path) {
           if (grants && !volunteer) for (const g of grants) q.addViewUnit.run(target.id, g.unit, g.sub);
           if (volunteer) q.unlinkUserPositions.run(target.id); // 봉사자는 조직도 자리에 연결하지 않음
         });
-        if (grants) console.log(`[admin] ${user.login} → ${target.login} 추가로 볼 조직 ${grants.length}개`);
+        if (grants) console.log(`[admin] ${user.login} → ${logLogin(target)} 추가로 볼 조직 ${grants.length}개`);
         return send(res, 200, { ok: true, viewUnits: viewUnitsOut(target.id) });
       }
       if (!um[2] && method === "DELETE") {

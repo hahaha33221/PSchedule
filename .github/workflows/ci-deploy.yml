@@ -33,7 +33,7 @@ jobs:
 
       - name: 문법 검사
         run: |
-          for f in public/app.js public/rooms.js public/sw.js server/*.mjs tools/*.mjs; do node --check "$f"; done
+          for f in public/app.js public/rooms.js public/vol-accounts.js public/sw.js server/*.mjs tools/*.mjs; do node --check "$f"; done
           # 알림 종류(서버 PUSH_KINDS)와 화면 이름표(PUSH_KIND_LABEL)가 어긋나면 막음
           node -e '
             const fs = require("fs"), a = fs.readFileSync("public/app.js", "utf8"), s = fs.readFileSync("server/index.mjs", "utf8");
@@ -57,6 +57,11 @@ jobs:
 
       - name: 구글 원본이 지워졌는지 판단 검사
         run: node --disable-warning=ExperimentalWarning tools/source-test.mjs
+
+      - name: 봉사자 계정 일괄 발급 검사
+        run: |
+          node --disable-warning=ExperimentalWarning tools/accounts-test.mjs
+          node tools/accounts-sheet-test.mjs
 
       - name: API 서버 동작 확인
         run: |
@@ -643,6 +648,29 @@ jobs:
           SQ "DELETE FROM calendar_events WHERE id = $SY" >/dev/null; SQ "UPDATE events SET src_state = 'gone' WHERE id = $SE" >/dev/null
           curl -fs -H "$H" -XDELETE $B/admin/calendars/$SC; test "$(SG) $(ST)" = "false unknown/unlinked/false"
           curl -fs -H "$H" -XDELETE $B/events/$SE
+          # 봉사자 한글 아이디·일괄 발급: 봉사자만 한글, 풀어쓴 한글로 로그인돼도 같은 아이디, 처음엔 비밀번호를 바꾸게, 관리자만, 모두 되거나 안 되거나, 직원으로 못 바꿈, 로그인 제한
+          SC_() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          test "$(SC_ -H "$H" -XPOST -d '{"name":"시험직원","login":"시험직원"}' $B/admin/users)" = 400
+          test "$(SC_ -H "$H" -XPOST -d '{"name":"시험직원","login":"시험직원","role":"admin"}' $B/admin/users)" = 400
+          curl -fs -H "$H" -XPOST -d '{"name":"시험하나","login":"시험하나","role":"volunteer","volKinds":["team"]}' $B/admin/users | grep -q '"login":"시험하나"'
+          for X in "$(bearer "$A1")" "$VH" "Authorization: Bearer none"; do for P in "" /preview; do C=$(SC_ -H "$X" -XPOST -d '{"rows":[{"name":"시험나쁨"}]}' $B/admin/vol-accounts$P); test "$C" = 403 -o "$C" = 401; done; done
+          curl -fs -H "$H" -XPOST -d '{"rows":[{"name":"시험하나"},{"name":"시험둘"},{"name":""},{"name":"수녀님들"}]}' $B/admin/vol-accounts/preview | node -e 'const r=JSON.parse(require("fs").readFileSync(0)).rows.map(x=>x.status).join();if(r!=="exists,new,fix,ask")process.exit(1)'
+          test "$(SC_ -H "$H" -XPOST -d '{"rows":[{"name":"시험둘"},{"name":"시험하나"}]}' $B/admin/vol-accounts)" = 400
+          if curl -fs -H "$H" $B/admin/users | grep -q '"login":"시험둘"'; then echo "일부만 만들어졌어요"; exit 1; fi
+          IS=$(curl -fs -H "$H" -XPOST -d '{"rows":[{"name":"시험둘","affiliation":"어느 본당"},{"name":"시험셋","kinds":["dept"]}]}' $B/admin/vol-accounts)
+          test "$(SC_ -H "$H" -XPOST -d '{"rows":[{"name":"시험둘"}]}' $B/admin/vol-accounts)" = 400
+          IPW=$(node -pe 'JSON.parse(process.argv[1]).accounts[0].password' "$IS")
+          NFD=$(node -pe 'JSON.stringify({login:"시험둘".normalize("NFD"),password:process.argv[1],as:"team"})' "$IPW")
+          curl -fs -XPOST -H 'content-type: application/json' -d "$NFD" $B/login | node -e 'const u=JSON.parse(require("fs").readFileSync(0)).user;if(u.login!=="시험둘"||!u.mustChangePassword||u.volKinds.join()!=="team"||u.volLeader)process.exit(1)'
+          J="{\"login\":\"시험둘\",\"password\":\"$IPW\",\"as\":\"staff\"}"; test "$(SC_ -XPOST -H 'content-type: application/json' -d "$J" $B/login)" = 403
+          UID2=$(curl -fs -H "$H" $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).users.find(u=>u.login==="시험둘").id')
+          if curl -fs -H "$H" $B/admin/users | grep -q "$IPW"; then echo "비밀번호가 남아 있어요"; exit 1; fi
+          for R in member director admin; do J="{\"role\":\"$R\"}"; test "$(SC_ -H "$H" -XPATCH -d "$J" $B/admin/users/$UID2)" = 400; done
+          curl -fs -H "$H" -XPOST $B/admin/users/$UID2/reset-password | grep -q '"login":"시험둘"'
+          NFD3=$(node -pe 'JSON.stringify({login:"시험셋".normalize("NFD"),password:"틀림"})')
+          for i in $(seq 1 10); do SC_ -XPOST -H 'content-type: application/json' -H "x-real-ip: 10.9.9.99" -d '{"login":"시험셋","password":"틀림"}' $B/login >/dev/null; done
+          test "$(SC_ -XPOST -H 'content-type: application/json' -H 'x-real-ip: 10.9.9.99' -d "$NFD3" $B/login)" = 429
+          for L in 시험하나 시험둘 시험셋; do curl -fs -H "$H" -XDELETE $B/admin/users/$(curl -fs -H "$H" $B/admin/users | node -pe 'JSON.parse(require("fs").readFileSync(0)).users.find(u=>u.login===process.argv[1]).id' $L); done
           # 방 별명과 '회의실 아님': 두 줄에 같은 표기는 거절, skip 을 안 보내면 그대로, 봉사자에게는 안 나감, 표기 하나씩도 관리자만
           curl -fs -H "$H" -XPUT -d '{"rooms":["A604호"," A4 소회의실 =A4소, 4A소,, A4소 ,4층 소회의실"],"skip":["A4소","가나다"," 가 나다 "]}' $B/admin/rooms | grep -qF '"rooms":["A604호","A4 소회의실 = A4소, 4A소, 4층 소회의실"],"skip":["가나다"]'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"rooms":["A604호","A4 소회의실 = A 604호"]}' $B/admin/rooms)" = 400

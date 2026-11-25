@@ -785,6 +785,7 @@
     state.user = null;
     state.peek = null;
     state.volMenu = null;
+    clearIssue();
     tokenStore.clear();
     closeDialog();
     closePop();
@@ -3178,7 +3179,7 @@
     const submit = h("button", { class: "btn btn--admin", type: "submit", text: "발급" });
     const form = h("form", { class: "stack", novalidate: true }, [
       h("div", { class: "row2" }, [field("이름", name), field("소속", unitButton(unitId, (id) => { unitId = id; }), "조직도에서 고르기 (나중에 정해도 돼요)")]),
-      field("아이디", login, "영문 소문자·숫자·._- 3~20자"),
+      field("아이디", login, "영문 소문자·숫자·._- 3~20자. 봉사자는 한글 이름도 돼요 (2~20자)"),
       field("권한", role, "봉사자는 봉사자 전용 화면만 보고 소속 없이 관리돼요. 관리자는 조직도·멤버·분류·캘린더·백업 관리와 공지 쓰기를 할 수 있어요. 본부장은 맡은 조직(소속·연결한 조직도 자리)과 그 아래 조직의 회의·할 일·메모·연락처를 봐요. 관리 기능은 없어요"),
       vk.el,
       err,
@@ -8568,18 +8569,141 @@
     draw();
     return box;
   }
+  // ---- 봉사자 계정 일괄 발급. 결과(임시 비밀번호)는 이 변수에만 두고 저장하지 않음: 로그아웃·새로고침·30분 뒤 사라짐
+  const ISSUE_SITE = "https://pschedule.vercel.app";
+  let issueResult = null, issueTimer = null;
+  function clearIssue() { issueResult = null; clearTimeout(issueTimer); }
+  window.addEventListener("beforeunload", (e) => { if (issueResult && !issueResult.saved) { e.preventDefault(); e.returnValue = ""; } });
+  function adminIssue() {
+    const A = window.PSAccounts, box = h("div", { class: "stack" });
+    if (!A) return h("p", { class: "muted", text: "새 버전이 나왔어요. 화면을 새로 고치면 보여요." });
+    const STATUS = { new: "새로 만듦", exists: "이미 있음 (건너뜀)", ask: "골라야 만듦", fix: "고쳐야 함" };
+    const toServer = (r) => ({ name: r.name, login: r.login, affiliation: r.affiliation, kinds: r.kinds }); // 세례명은 보내지 않음
+    let rows = null, plan = [], seq = 0;
+    const willMake = (i) => plan[i] && (plan[i].status === "new" ? rows[i].on !== false : plan[i].status === "ask" && rows[i].on === true);
+    async function check() {
+      const n = ++seq;
+      const r = await api("/admin/vol-accounts/preview", { method: "POST", body: { rows: rows.map(toServer) } });
+      if (n !== seq) return;
+      // 상태가 바뀐 줄은 고른 것을 처음으로
+      r.rows.forEach((p, i) => { if (plan[i] && plan[i].status !== p.status) rows[i].on = undefined; });
+      plan = r.rows; drawPreview();
+    }
+    function drawInput(keep) {
+      const err = errorLine(), file = h("input", { type: "file", accept: ".xlsx" }), sheetSel = h("select", { "aria-label": "시트", hidden: true });
+      const paste = h("textarea", { rows: "8", placeholder: "엑셀에서 표를 복사해 붙여 넣어 주세요 (머리줄 포함)\n이름\t세례명\t소속\t아이디\t로그인 구분" }, keep || "");
+      const ok = h("button", { class: "btn btn--primary", type: "button", text: "미리 보기" });
+      let sheets = [];
+      file.addEventListener("change", () => busy(ok, async () => {
+        try {
+          sheets = file.files[0] ? await readXlsx(file.files[0]) : [];
+          sheetSel.replaceChildren(...sheets.map((s, i) => h("option", { value: String(i), text: s.name })));
+          const good = sheets.findIndex((s) => { try { return A.parseRows(s.rows).length; } catch { return false; } });
+          sheetSel.value = String(Math.max(0, good)); sheetSel.hidden = sheets.length < 2; showError(err, "");
+        } catch (ex) { sheets = []; showError(err, ex.message); }
+      }));
+      ok.addEventListener("click", () => busy(ok, async () => {
+        try {
+          const list = A.parseRows(sheets.length ? sheets[Number(sheetSel.value)].rows : paste.value.split(/\r?\n/).map((l) => l.split("\t")));
+          if (!list.length) throw new Error("이름이 있는 줄이 없어요.");
+          if (list.length > 100) throw new Error(`한 번에 100명까지 할 수 있어요. 지금은 ${list.length}줄이에요.`);
+          rows = list; plan = []; await check();
+        } catch (ex) { showError(err, ex.message); }
+      }));
+      fill(box,
+        opsHint("명단을 붙여 넣으면 봉사자 계정을 한꺼번에 만들어요. 이미 있는 계정은 고치지 않아요. 만들기 전에 줄마다 어떻게 되는지 먼저 보여 줘요."),
+        h("section", { class: "card stack issue-card" }, [
+          h("p", { class: "muted small", text: "칸: 이름(필수), 세례명, 소속, 아이디(비우면 이름), 로그인 구분(비우면 팀 봉사자). 다른 칸(연락처 등)은 읽지 않아요. 세례명은 결과 엑셀에만 들어가고 서버로 보내지 않아요. 파일도 이 브라우저 안에서만 읽어요." }),
+          field("엑셀 파일 (.xlsx)", file), sheetSel, field("또는 표 붙여넣기", paste), err,
+          h("div", { class: "actions actions--start" }, ok)
+        ]));
+    }
+    function drawPreview() {
+      const err = errorLine(), count = (s) => plan.filter((p) => p.status === s).length;
+      const makeN = () => rows.filter((_, i) => willMake(i)).length;
+      const ok = h("button", { class: "btn btn--primary", type: "button" });
+      const sync = () => { ok.textContent = `${makeN()}명 계정 만들기`; ok.disabled = !makeN(); };
+      const recheck = () => check().catch((ex) => showError(err, ex.message));
+      const line = (r, i) => {
+        const p = plan[i];
+        const inp = (k, label, max) => { const x = h("input", { value: r[k] || "", maxlength: String(max), "aria-label": `${i + 1}번째 줄 ${label}` }); x.addEventListener("change", () => { r[k] = x.value.normalize("NFC").replace(/\s+/g, " ").trim(); if (k === "baptism") return; recheck(); }); return field(label, x); };
+        const login = h("input", { value: r.login || "", maxlength: "20", placeholder: p.login, autocapitalize: "none", spellcheck: "false", "aria-label": `${i + 1}번째 줄 아이디` });
+        login.addEventListener("change", () => { r.login = login.value.trim(); recheck(); });
+        const kind = h("select", { "aria-label": `${i + 1}번째 줄 로그인 구분` }, [["", "고르기"], ["team", "팀 봉사자"], ["dept", "부서 봉사자"], ["dept,team", "팀·부서 둘 다"]].map(([v, t]) => h("option", { value: v, text: t })));
+        kind.value = r.kinds.join(",");
+        kind.addEventListener("change", () => { r.kinds = kind.value ? kind.value.split(",") : []; recheck(); });
+        const pick = p.status === "new" || p.status === "ask" ? h("input", { type: "checkbox", checked: willMake(i) }) : null;
+        if (pick) pick.addEventListener("change", () => { r.on = pick.checked; sync(); });
+        const link = p.roster ? h("input", { type: "checkbox", checked: r.link !== false }) : null;
+        if (link) link.addEventListener("change", () => { r.link = link.checked; });
+        return h("li", { class: `card issue-row is-${p.status}` }, [
+          h("div", { class: "issue-row__head" }, [h("span", { class: "muted small", text: `${i + 1}` }), statusTag(STATUS[p.status], `is-issue-${p.status}`),
+            pick ? h("label", { class: "check small" }, [pick, p.status === "ask" ? "그래도 새로 만들기" : "만들기"]) : null,
+            h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": `${i + 1}번째 줄 빼기`, title: "이 줄 빼기", html: ICON.close, onclick: () => { rows.splice(i, 1); plan.splice(i, 1); if (!rows.length) return drawInput(); recheck(); } })]),
+          p.reason ? h("p", { class: "issue-row__why small", text: p.reason }) : null,
+          h("div", { class: "issue-row__grid" }, [inp("name", "이름", 40), inp("baptism", "세례명", 40), inp("affiliation", "소속", 100), field("아이디", login), field("로그인 구분", kind)]),
+          link ? h("label", { class: "check small" }, [link, `봉사자 명단의 '${p.roster.call}'과(와) 잇기`]) : null
+        ]);
+      };
+      ok.addEventListener("click", () => {
+        const at = rows.map((_, i) => i).filter(willMake);
+        if (!confirm(`봉사자 계정 ${at.length}개를 만들까요? 임시 비밀번호는 다음 화면에서 한 번만 볼 수 있어요.`)) return;
+        busy(ok, async () => {
+          try {
+            const r = await api("/admin/vol-accounts", { method: "POST", body: { rows: at.map((i) => ({ ...toServer(rows[i]), force: rows[i].on === true, link: rows[i].link !== false })) } });
+            const list = rows.map((x, i) => { const k = at.indexOf(i), a = k >= 0 ? r.accounts[k] : null; const old = !a && plan[i].account; return a ? { name: a.name, baptism: x.baptism, affiliation: x.affiliation, login: a.login, password: a.password, kinds: a.kinds } : old ? { name: x.name, baptism: x.baptism, affiliation: x.affiliation, login: old.login, password: null, kinds: old.kinds, old: true } : null; });
+            issueResult = { list: list.filter(Boolean), made: r.accounts.length, linked: r.linked, left: list.filter((x) => !x).length, saved: false };
+            clearTimeout(issueTimer); issueTimer = setTimeout(() => { clearIssue(); if (box.isConnected) drawInput(); }, 30 * 60000);
+            rows = null; plan = []; drawResult();
+          } catch (ex) { showError(err, ex.message); ok.disabled = false; }
+        });
+      });
+      fill(box,
+        h("div", { class: "vm-stats" }, [vmStat("새로 만듦", count("new")), vmStat("골라야 만듦", count("ask")), vmStat("고쳐야 함", count("fix")), vmStat("이미 있음", count("exists"))]),
+        opsHint("칸을 고치고 벗어나면 다시 확인해요. '고쳐야 함'과 '이미 있음'은 만들지 않고, '골라야 만듦'은 체크한 줄만 만들어요."),
+        h("ul", { class: "issue-list" }, rows.map(line)), err,
+        h("div", { class: "actions actions--start" }, [h("button", { class: "btn btn--ghost", type: "button", text: "처음부터", onclick: () => { rows = null; plan = []; drawInput(); } }), ok]));
+      sync();
+    }
+    function drawResult() {
+      const r = issueResult, day = today().replaceAll("-", "");
+      const oldN = r.list.filter((x) => x.old).length;
+      const withOld = h("input", { type: "checkbox", checked: true });
+      const save = (pw) => { saveBlob(new Blob(A.makeXlsx(A.accountSheets(r.list.filter((x) => withOld.checked || !x.old), ISSUE_SITE, pw)), { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), pw ? `봉사자계정_관리자용_비밀번호포함_${day}.xlsx` : `봉사자계정_공유용_${day}.xlsx`); if (pw) r.saved = true; };
+      let show = false;
+      const tbody = h("tbody"), eye = h("button", { class: "btn btn--ghost btn--sm", type: "button" });
+      const drawRows = () => { eye.textContent = show ? "비밀번호 가리기" : "비밀번호 보기"; tbody.replaceChildren(...r.list.map((x, i) => h("tr", {}, [h("td", { class: "num", text: String(i + 1) }), h("td", { text: x.name }), h("td", { text: x.baptism || "-" }), h("td", { text: x.affiliation || "-" }), h("td", { class: "mono", text: x.login }), h("td", { class: "mono", text: x.old ? "이미 쓰는 비밀번호" : show ? x.password : "••••••••" }), h("td", { text: A.kindLabel(x.kinds) })]))); };
+      eye.addEventListener("click", () => { show = !show; drawRows(); });
+      drawRows();
+      fill(box,
+        h("section", { class: "card stack issue-card" }, [
+          h("h2", { class: "card__title", text: `봉사자 계정 ${r.made}개를 만들었어요` }),
+          h("p", { class: "issue-warn", text: "비밀번호가 든 파일은 단체방에 올리지 말고 한 명씩 전달해 주세요. 임시 비밀번호는 이 화면에서만 볼 수 있어요. 로그아웃하거나 새로 고치면, 또는 30분이 지나면 사라져요." }),
+          h("p", { class: "muted small", text: [r.linked ? `봉사자 명단과 ${r.linked}명을 이었어요.` : "", r.left ? `만들지 않은 ${r.left}줄은 엑셀에 넣지 않았어요.` : "", "처음 로그인하면 비밀번호를 바꾸게 돼요."].filter(Boolean).join(" ") }),
+          oldN ? h("label", { class: "check" }, [withOld, `이미 있던 계정 ${oldN}명도 엑셀에 넣기 (비밀번호 없이)`]) : null,
+          h("div", { class: "actions actions--start issue-save" }, [
+            h("button", { class: "btn btn--primary", type: "button", onclick: () => save(true) }, "관리자용 엑셀 (비밀번호 포함)"),
+            h("button", { class: "btn btn--ghost", type: "button", onclick: () => save(false) }, "공유용 엑셀 (비밀번호 없음)"), eye,
+            h("button", { class: "btn btn--ghost", type: "button", text: "다 받았어요 · 지우기", onclick: () => { if (!confirm(r.saved ? "이 화면의 임시 비밀번호를 지울까요?" : "관리자용 엑셀을 아직 받지 않았어요. 지우면 임시 비밀번호를 다시 볼 수 없어요. 지울까요?")) return; clearIssue(); drawInput(); } })
+          ])
+        ]),
+        h("div", { class: "card table-wrap" }, h("table", { class: "table" }, [h("thead", {}, h("tr", {}, ["번호", "이름", "세례명", "소속", "아이디", "임시 비밀번호", "로그인 구분"].map((t) => h("th", { text: t })))), tbody])));
+    }
+    if (issueResult) drawResult(); else drawInput();
+    return box;
+  }
   async function pageVolAdmin() {
     if (!isAdmin()) return go("#/today");
     document.title = `봉사자 관리 · ${TITLE}`;
     drawMini(null);
     setMain("volunteers", loading());
     if (route().id === "deadlines") return location.replace("#/volunteers"); // 없앤 탭의 예전 주소
-    const tab = ["training", "stock", "records", "inspect", "team", "menu", "wbs", "edu", "roster"].includes(route().id) ? route().id : "schedule";
+    const tab = ["training", "stock", "records", "inspect", "team", "menu", "wbs", "edu", "roster", "issue"].includes(route().id) ? route().id : "schedule";
     let extraView = null; // 묵주 WBS·교육 기록·봉사자 명단 탭 (비동기로 그린 화면)
     let teamData = null; // 팀 봉사자 탭: { issues, docs, orgs }
     const ins = inspModule("/admin", () => draw(), "검수할 때마다 한 줄씩 적고, 거른 기록을 업체 클레임 근거로 CSV·인쇄로 내보내요. 샘플링이면 불량률은 샘플 수 기준이에요. 팀 봉사자가 적은 기록도 여기에 함께 보여요.");
     let vols = [], schedules = [], trainings = [], stockMoves = [], volRecords = [], volMenuSet = null;
-    const seg = h("div", { class: "seg ops-tabs", role: "tablist" }, [["schedule", "일정"], ["edu", "교육 기록"], ["roster", "봉사자 명단"], ["training", "기본 교육"], ["stock", "입출고 입력"], ["records", "완제품 기록"], ["inspect", "검수 관리"], ["team", "팀 봉사자"], ["wbs", "묵주 WBS"], ["menu", "메뉴 공개"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "schedule" ? "#/volunteers" : `#/volunteers/${k}`) })));
+    const seg = h("div", { class: "seg ops-tabs", role: "tablist" }, [["schedule", "일정"], ["edu", "교육 기록"], ["roster", "봉사자 명단"], ["issue", "계정 일괄 발급"], ["training", "기본 교육"], ["stock", "입출고 입력"], ["records", "완제품 기록"], ["inspect", "검수 관리"], ["team", "팀 봉사자"], ["wbs", "묵주 WBS"], ["menu", "메뉴 공개"]].map(([k, label]) => h("button", { type: "button", role: "tab", "aria-selected": String(k === tab), text: label, onclick: () => go(k === "schedule" ? "#/volunteers" : `#/volunteers/${k}`) })));
     const dateAndTime = (date, start, end) => h("div", { class: "row2" }, [field("날짜", date), h("div", { class: "row2" }, [field("시작", start), end ? field("끝", end) : h("span")])]);
     const saveForm = (form, ok, err, send) => form.addEventListener("submit", (e) => {
       e.preventDefault();
@@ -8708,10 +8832,10 @@
         h("div", { class: "page-head" }, [
           h("h1", { text: "봉사자 관리" }),
           h("span", { class: "actions vol-preview-btns" }, [h("button", { class: "btn btn--ghost btn--sm", type: "button", title: "관리자 계정으로 부서 봉사자 화면(단계형 메뉴)을 미리 봐요", onclick: () => startVolPreview("dept") }, "부서 봉사자 화면 미리보기"), h("button", { class: "btn btn--ghost btn--sm", type: "button", title: "관리자 계정으로 팀 봉사자 화면(단계형 메뉴)을 미리 봐요", onclick: () => startVolPreview("team") }, "팀 봉사자 화면 미리보기")]),
-          tab === "inspect" ? h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => ins.dialog(null) }, [icon("plus"), "검수 기록"]) : ["stock", "records", "menu", "team", "wbs", "edu", "roster"].includes(tab) ? null : h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => (tab === "training" ? trainingDialog() : scheduleDialog()) }, [icon("plus"), tab === "training" ? "교육 등록" : "일정 등록"])
+          tab === "inspect" ? h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => ins.dialog(null) }, [icon("plus"), "검수 기록"]) : ["stock", "records", "menu", "team", "wbs", "edu", "roster", "issue"].includes(tab) ? null : h("button", { class: "btn btn--primary page-head__end", type: "button", onclick: () => (tab === "training" ? trainingDialog() : scheduleDialog()) }, [icon("plus"), tab === "training" ? "교육 등록" : "일정 등록"])
         ]),
         h("div", { class: "filters" }, [seg, h("span", { class: "muted small", text: `봉사자 ${vols.length}명` })]),
-        ["wbs", "edu", "roster"].includes(tab) ? extraView : tab === "inspect" ? ins.view() : tab === "team" ? teamAdminView() : tab === "stock" ? stockView : tab === "records" ? recView : tab === "menu" ? menuView : tab === "training" ? trainingView : scheduleView
+        ["wbs", "edu", "roster", "issue"].includes(tab) ? extraView : tab === "inspect" ? ins.view() : tab === "team" ? teamAdminView() : tab === "stock" ? stockView : tab === "records" ? recView : tab === "menu" ? menuView : tab === "training" ? trainingView : scheduleView
       ]);
       seg.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "center" }); // 좁은 화면: 고른 탭이 보이게
     };
@@ -8770,6 +8894,7 @@
       if (tab === "wbs") extraView = await adminWbs();
       if (tab === "edu") extraView = await adminRosaryEdu();
       if (tab === "roster") extraView = await adminRoster();
+      if (tab === "issue" && !extraView) extraView = adminIssue(); // 적던 것을 잃지 않게 한 번만 만듦
       if (tab === "team") { const [i, d, o] = await Promise.all([api("/team/issues"), api("/team/docs"), api("/team/orgs")]); teamData = { issues: i.issues, docs: d.docs.filter((x) => x.category === "inspect"), orgs: o.orgs }; }
       draw();
     } };
