@@ -1599,7 +1599,17 @@ button.gantt__name:hover { background: var(--surface-2); }
 .today-find__chip.is-mine { background: var(--primary-soft); color: var(--primary); }
 .today-find__chip.is-ex { gap: 3px; background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
 .today-find__day { display: inline-flex; align-items: center; gap: 2px; margin-left: 8px; }
-.today-find__date { min-width: 96px; text-align: center; font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.today-find__date { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-width: 96px; min-height: 28px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; font-size: 13.5px; font-weight: 600; font-variant-numeric: tabular-nums; cursor: pointer; }
+.today-find__date svg { flex: none; width: 15px; height: 15px; }
+.today-find__date:hover { background: var(--surface-2); }
+.daypop.mini { width: 276px; max-width: 100%; padding: 2px; background: none; }
+.daypop .mini__d { height: 36px; padding: 0; border: 0; background: none; color: inherit; font: inherit; font-size: 13px; cursor: pointer; }
+.daypop .mini__d:hover { background: var(--surface-3); }
+.daypop .mini__d.is-out { color: var(--muted); }
+.daypop .mini__d.is-today { color: var(--primary); font-weight: 800; }
+.daypop .mini__d.is-sel { background: var(--dark); color: var(--dark-ink); font-weight: 700; }
+.daypop__today { width: 100%; margin-top: 6px; }
+@media (pointer: coarse) { .today-find__date { min-height: 36px; } .daypop .mini__d { height: 40px; } .daypop .icon-btn--xs { width: 36px; height: 36px; } }
 .today-find__date.is-today { color: var(--primary); }
 .today-find input.today-find__add { width: 140px; flex: none; height: 28px; padding: 3px 10px; border-radius: 999px; font-size: 13px; }
 .today-find__groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px 16px; }

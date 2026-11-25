@@ -1121,23 +1121,52 @@
     );
   }
 
+  // 작은 달력의 날짜 칸들: 그 달이 들어가는 5~6주
+  function miniDays(m, selected) {
+    const start = addDays(m, -m.getDay()), t = today(), out = [];
+    for (let i = 0; i < 42; i++) {
+      const d = addDays(start, i);
+      if (i === 35 && d.getMonth() !== m.getMonth()) break;
+      const s = ymd(d), isOut = d.getMonth() !== m.getMonth();
+      out.push({ s, n: d.getDate(), isOut, cls: "mini__d" + (isOut ? " is-out" : "") + (s === t ? " is-today" : "") + (s === selected ? " is-sel" : "") });
+    }
+    return out;
+  }
+  // 누르면 열리는 작은 달력: 날짜를 고르면 닫히고 pick(날짜). 화살표 키로 하루·한 주, PageUp·PageDown 으로 한 달씩 옮김
+  function dayPop(anchor, selected, pick) {
+    let at = selected;
+    const box = h("div", { class: "daypop mini" });
+    const done = (s) => { closePop(); pick(s); };
+    const month = (n) => { const d = parseYmd(at), last = new Date(d.getFullYear(), d.getMonth() + n + 1, 0).getDate(); return ymd(new Date(d.getFullYear(), d.getMonth() + n, Math.min(d.getDate(), last))); };
+    const draw = (focus) => {
+      const d = parseYmd(at), m = new Date(d.getFullYear(), d.getMonth(), 1), t = today();
+      const go = (n, label, svg) => h("button", { class: "icon-btn icon-btn--xs", type: "button", "data-go": String(n), "aria-label": label, title: label, html: svg, onclick: () => { at = month(n); draw(`[data-go="${n}"]`); } });
+      fill(box,
+        h("div", { class: "mini__head" }, [go(-1, "이전 달", ICON.left), h("strong", { "aria-live": "polite", text: `${m.getFullYear()}년 ${m.getMonth() + 1}월` }), go(1, "다음 달", ICON.right)]),
+        h("div", { class: "mini__grid" }, [...WEEKDAYS.map((w) => h("span", { class: "mini__w", text: w })), ...miniDays(m, selected).map(({ s, cls, n }) => h("button", {
+          class: cls, type: "button", "data-day": s, tabindex: s === at ? "0" : "-1", text: n, "aria-label": `${dateLabel(s)}${s === t ? " 오늘" : ""}`, "aria-pressed": String(s === selected), onclick: () => done(s)
+        }))]),
+        h("button", { class: "btn btn--ghost btn--sm daypop__today", type: "button", text: "오늘로", onclick: () => done(t) })
+      );
+      box.querySelector(focus || `[data-day="${at}"]`)?.focus();
+    };
+    box.addEventListener("keydown", (e) => {
+      if (!e.target.dataset.day) return;
+      const n = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[e.key];
+      if (n) at = shiftYmd(at, n); else if (e.key === "PageUp") at = month(-1); else if (e.key === "PageDown") at = month(1); else return;
+      e.preventDefault(); draw();
+    });
+    draw();
+    popover(anchor, box);
+    box.querySelector(`[data-day="${at}"]`)?.focus();
+  }
+
   // 작은 달력 (날짜를 누르면 그날 '오늘' 화면)
   let miniMonth = null;
   function drawMini(selected) {
     if (!miniMonth) miniMonth = parseYmd(selected || today());
     const m = new Date(miniMonth.getFullYear(), miniMonth.getMonth(), 1);
-    const start = addDays(m, -m.getDay());
-    const t = today();
-    const cells = [];
-    for (let i = 0; i < 42; i++) {
-      const d = addDays(start, i);
-      if (i === 35 && d.getMonth() !== m.getMonth()) break;
-      const s = ymd(d);
-      cells.push(h("a", {
-        class: "mini__d" + (d.getMonth() !== m.getMonth() ? " is-out" : "") + (s === t ? " is-today" : "") + (s === selected ? " is-sel" : ""),
-        href: `#/today/${s}`, text: d.getDate(), "aria-label": dateLabel(s), onclick: () => toggleNav(false)
-      }));
-    }
+    const cells = miniDays(m, selected).map(({ s, cls, n }) => h("a", { class: cls, href: `#/today/${s}`, text: n, "aria-label": dateLabel(s), onclick: () => toggleNav(false) }));
     layout.mini.replaceChildren(
       h("div", { class: "mini__head" }, [
         h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "이전 달", html: ICON.left, onclick: () => { miniMonth = new Date(m.getFullYear(), m.getMonth() - 1, 1); drawMini(selected); } }),
@@ -2127,7 +2156,7 @@
       const put = async (body) => { await act(() => api("/today-keywords", { method: "PUT", body })); quiet(loadFind()); };
       const save = (mine) => put({ keywords: mine });
       const saveEx = (ex) => put({ excludes: ex });
-      const moveDay = (d) => { findDay = d; quiet(loadFind()); };
+      const moveDay = (d, back) => { if (d === findDay) return back && findBox.querySelector(".today-find__date")?.focus(); const was = findDay; findDay = d; loadFind().then(() => back && findDay === d && findBox.querySelector(".today-find__date")?.focus(), (ex) => { if (findDay !== d) return; findDay = was; if (ex.status !== 401) toast("그날을 불러오지 못했어요. 잠시 뒤 다시 눌러 주세요."); }); };
       const me = state.user.name;
       const hasMe = r.common.includes(me) || r.mine.includes(me);
       const add = h("input", { class: "today-find__add", maxlength: "30", placeholder: "검색어 추가", "aria-label": "검색어 추가" });
@@ -2138,7 +2167,7 @@
       const t0 = today();
       const dayNav = h("div", { class: "today-find__day" }, [
         h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "전날", title: "전날", html: ICON.left, onclick: () => moveDay(shiftYmd(findDay, -1)) }),
-        h("span", { class: "today-find__date" + (findDay === t0 ? " is-today" : ""), text: dateLabel(findDay) }),
+        h("button", { class: "today-find__date" + (findDay === t0 ? " is-today" : ""), type: "button", title: "달력에서 날짜 고르기", "aria-haspopup": "dialog", "aria-label": `${dateLabel(findDay)}, 달력에서 날짜 고르기`, onclick: (e) => { if (openPop && openPop.anchor === e.currentTarget) return closePop(); dayPop(e.currentTarget, findDay, (d) => moveDay(d, true)); } }, [icon("cal"), h("span", { text: dateLabel(findDay) })]),
         h("button", { class: "icon-btn icon-btn--xs", type: "button", "aria-label": "다음 날", title: "다음 날", html: ICON.right, onclick: () => moveDay(shiftYmd(findDay, 1)) }),
         findDay !== t0 ? h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "오늘", onclick: () => moveDay(t0) }) : null
       ]);
