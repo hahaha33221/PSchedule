@@ -3318,6 +3318,26 @@ const roomSkip = () => { try { const v = JSON.parse(q.setting.get("meeting_rooms
 const roomKey = (x) => String(x ?? "").normalize("NFKC").replace(/\s+/g, "").toLowerCase(); // public/rooms.js 의 key 와 같음
 const roomParse = (line) => { const [name, ...rest] = String(line).split("="); return { name: name.trim(), alias: rest.join(",").split(/[,，]/).map((x) => x.trim()).filter(Boolean) }; };
 const roomWord = (v, max, label) => { const s = text(v, max, label).replace(/\s+/g, " "); if (/[=,，]/.test(s)) throw bad(`${label}에는 = 와 쉼표를 쓸 수 없어요.`); return s; };
+/*
+ * 방 정보 (settings.meeting_rooms_info): [{ name, floor, monitor, seats, note }]
+ *   name 회의실 목록에 적은 이름 · floor 층(정수, 지하는 음수, 모르면 null) · monitor "yes" | "no" | "check"(확인 필요) | ""(모름) · seats 수용 인원 글자 · note 비고
+ */
+const ROOM_MONITOR = ["yes", "no", "check", ""];
+const roomInfo = () => { try { const v = JSON.parse(q.setting.get("meeting_rooms_info")?.value || "[]"); return Array.isArray(v) ? v.filter((x) => x && typeof x.name === "string") : []; } catch { return []; } };
+function roomInfoInput(list, rooms) {
+  if (!Array.isArray(list) || list.length > 60) throw bad("방 정보를 확인해 주세요.");
+  const names = new Map(rooms.map((r) => { const n = roomParse(r).name; return [roomKey(n), n]; })), out = new Map();
+  for (const x of list) {
+    const k = roomKey(x?.name);
+    if (!names.has(k)) continue; // 목록에서 뺀 방
+    const floor = x.floor === null || x.floor === undefined || x.floor === "" ? null : Number(x.floor);
+    if (floor !== null && (!Number.isInteger(floor) || floor === 0 || floor < -10 || floor > 99)) throw bad(`'${names.get(k)}'의 층은 숫자로 적어 주세요 (지하 1층은 -1).`);
+    if (!ROOM_MONITOR.includes(x.monitor ?? "")) throw bad(`'${names.get(k)}'의 모니터를 골라 주세요.`);
+    const row = { name: names.get(k), floor, monitor: x.monitor ?? "", seats: text(x.seats, 20, "수용 인원"), note: text(x.note, 100, "비고").replace(/\s+/g, " ") };
+    if (row.floor !== null || row.monitor || row.seats || row.note) out.set(k, row); else out.delete(k);
+  }
+  return [...out.values()];
+}
 function roomLines(list) {
   if (!Array.isArray(list) || list.length > 60) throw bad("회의실은 30개까지 등록할 수 있어요.");
   const out = [], seen = new Map();
@@ -3347,8 +3367,8 @@ function roomSkipInput(list, rooms) {
   if (out.size > 300) throw bad("회의실 아님 표기는 300개까지 기억해요.");
   return [...out.values()];
 }
-function saveRooms(user, rooms, skip) {
-  inTx(() => { q.setSetting.run("meeting_rooms", JSON.stringify(rooms)); q.setSetting.run("meeting_rooms_skip", JSON.stringify(skip)); });
+function saveRooms(user, rooms, skip, info) {
+  inTx(() => { if (info) q.setSetting.run("meeting_rooms_info", JSON.stringify(info)); q.setSetting.run("meeting_rooms", JSON.stringify(rooms)); q.setSetting.run("meeting_rooms_skip", JSON.stringify(skip)); });
   console.log(`[admin] ${user.login} → 회의실 목록 ${rooms.length}개 · 회의실 아님 ${skip.length}개`);
 }
 const volMenu = () => { try { const v = JSON.parse(q.setting.get("vol_menu")?.value || "null"); return Array.isArray(v) ? v.filter((k) => VOL_MENU_KEYS.includes(k)) : VOL_MENU_DEFAULT; } catch { return VOL_MENU_DEFAULT; } };
@@ -3714,7 +3734,7 @@ async function api(req, res, path) {
 
   // 화면을 그리는 데 늘 필요한 것: 나, 팀원, 태그, 분류
   if (path === "/api/me" && method === "GET") {
-    return send(res, 200, { user: publicUser(user), team: teamOut(), units: unitsOut(), tags: q.tags.all(), categories: categoriesOut(), calendars: calendarsPublic(), rooms: meetingRooms(), roomSkip: roomSkip(), unreadNotices: unreadOf(user) });
+    return send(res, 200, { user: publicUser(user), team: teamOut(), units: unitsOut(), tags: q.tags.all(), categories: categoriesOut(), calendars: calendarsPublic(), rooms: meetingRooms(), roomSkip: roomSkip(), roomInfo: roomInfo(), unreadNotices: unreadOf(user) });
   }
 
   // 비밀번호 변경 (본인)
@@ -4555,8 +4575,9 @@ async function api(req, res, path) {
     if (path === "/api/admin/rooms" && method === "PUT") {
       const b = await readJson(req);
       const rooms = roomLines(b.rooms), skip = has(b, "skip") ? roomSkipInput(b.skip, rooms) : roomSkip();
-      saveRooms(user, rooms, skip);
-      return send(res, 200, { rooms, skip });
+      const info = has(b, "info") ? roomInfoInput(b.info, rooms) : roomInfo(); // 안 보내면(예전 화면) 그대로
+      saveRooms(user, rooms, skip, has(b, "info") ? info : null);
+      return send(res, 200, { rooms, skip, info });
     }
     // 읽지 못한 표기 하나를 방 별명에 넣거나(room) '회의실 아님'으로 기억
     if (path === "/api/admin/rooms/word" && method === "POST") {
@@ -4573,7 +4594,7 @@ async function api(req, res, path) {
         skip = roomSkipInput(skip.filter((x) => roomKey(x) !== roomKey(room)), rooms);
       } else skip = roomSkipInput([...skip, word], rooms);
       saveRooms(user, rooms, skip);
-      return send(res, 200, { rooms, skip });
+      return send(res, 200, { rooms, skip, info: roomInfo() });
     }
     // 봉사자 메뉴 공개 범위
     if (path === "/api/admin/vol-menu" && method === "GET") return send(res, 200, { menu: volMenu(), keys: VOL_MENU_KEYS });

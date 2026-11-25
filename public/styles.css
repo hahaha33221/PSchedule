@@ -2365,3 +2365,36 @@ button.tl-moved__title { cursor: pointer; }
 .is-issue-fix { background: color-mix(in srgb, var(--danger) 14%, transparent); color: var(--danger); }
 .issue-warn { margin: 0; padding: 10px 12px; border-radius: 10px; background: color-mix(in srgb, var(--danger) 10%, transparent); font-weight: 600; }
 .issue-save { flex-wrap: wrap; }
+
+/* 회의실 정보 */
+.rooms__namebtn { align-self: flex-start; max-width: 100%; padding: 0; border: 0; background: none; color: var(--ink); font: inherit; font-size: 13px; font-weight: 700; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+.rooms__info { height: 26px; display: flex; align-items: center; justify-content: center; padding: 0 6px; border-bottom: 1px solid var(--line-2); font-size: 12.5px; }
+.rooms__col .rooms__info { width: 0; min-width: 100%; }
+.rooms__info--head { color: var(--muted); }
+.rooms__info--head svg { width: 16px; height: 16px; }
+.rooms__mon { font-weight: 700; }
+.rooms__mon.is-yes { color: #2b8a3e; }
+@media (prefers-color-scheme: dark) { .rooms__mon.is-yes { color: #8ce99a; } }
+.rooms__mon.is-no { color: var(--danger); }
+.rooms__mon.is-check { color: var(--warn); }
+.rooms__mon.is-none, .rooms__seats { color: var(--ink-2); }
+.rooms__seats { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rooms__pop { display: flex; flex-direction: column; gap: 6px; padding: 4px; max-width: 260px; }
+.rooms__pop dl { margin: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; font-size: 13.5px; }
+.rooms__pop dt { color: var(--muted); }
+.rooms__pop dd { margin: 0; overflow-wrap: anywhere; }
+.rooms__infolist { margin: 8px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.rooms__inforow { display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--line-2); border-radius: 10px; }
+.rooms__infogrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 110px), 1fr)); gap: 8px; }
+.rooms__infogrid .field, .rooms__infogrid input, .rooms__infogrid select { min-width: 0; width: 100%; }
+/* 오늘의 할 일 등록 칸 · 부재 접기 · 제외어 설명 */
+.today-tasks__form { align-items: center; margin-top: 4px; }
+.today-tasks__form .today-tasks__input { flex: 1; min-width: 0; height: 36px; }
+.today-tasks__where { margin: 0; }
+.ttask.is-new { background: var(--primary-soft); border-radius: 8px; }
+.today-away__toggle { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-height: 32px; padding: 0; border: 0; background: none; color: inherit; font: inherit; font-weight: 700; cursor: pointer; }
+.today-away__hint { text-decoration: underline; }
+.today-away h3 { margin-bottom: 0; }
+.today-away ul, .today-away > p { margin-top: 6px; }
+.today-find__exhint { flex: 1 1 220px; }
+.rooms__infogrid .field:last-child { grid-column: 1 / -1; }

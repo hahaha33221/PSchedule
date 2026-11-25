@@ -122,7 +122,7 @@ await mv("내일 취소한 회의 시험", day(1));
 await mv("[A103] 옮겨 온 이재호 회의", day(2), { startDate: day(0), endDate: day(0), startTime: "21:00", endTime: "21:30" });
 await mv("다른 날로 옮긴 아주 긴 제목의 회의 이름이 두 줄로 넘어가는지 보는 시험", day(0), { startDate: day(3), endDate: day(3) }, { startTime: "23:00", endTime: "23:50" });
 await mv("취소한 회의 시험", day(0), null, { startTime: "23:00", endTime: "23:50" });
-await call("/admin/rooms", "PUT", { rooms: ["A604호", "A4 소회의실 = 4층 소회의실", "비어 있는 아주 긴 이름의 회의실 이름"], skip: [] });
+await call("/admin/rooms", "PUT", { rooms: ["A604호", "A4 소회의실 = 4층 소회의실", "비어 있는 아주 긴 이름의 회의실 이름", "A501", "A602", "B204"], skip: [], info: [{ name: "A604호", floor: 6, monitor: "yes", seats: "40명 이상", note: "빔프로젝터" }, { name: "A4 소회의실", floor: 4, monitor: "no", seats: "12명", note: "화이트보드 있음, 아주 긴 비고를 적었을 때도 화면 밖으로 넘치지 않는지 보는 시험" }, { name: "A501", monitor: "check", seats: "", note: "미방문" }, { name: "B204", monitor: "yes", seats: "20명 이상 30명까지도 가능함", note: "" }] });
 const setMenu = (steps) => call("/admin/vol-menu", "PUT", { menu: ["home", "schedule", "training", "notices", "wbs", "req", "in", "out", "recovery", "moves2", ...(steps ? ["steps2"] : [])] });
 
 /* ---- 볼 화면: 주소와 눌러 열 것(글자) ---- */

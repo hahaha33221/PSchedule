@@ -682,7 +682,12 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST -d '{"word":"라마","room":"가나다"}' $B/admin/rooms/word)" = 400
           curl -fs -H "$H" -XPUT -d '{"rooms":["A604호"]}' $B/admin/rooms | grep -qF '"rooms":["A604호"],"skip":["바사"]'
           curl -fs -H "$(bearer "$A1")" $B/me | grep -qF '"roomSkip":["바사"]'
-          if curl -fs -H "$VH" $B/me | grep -q 'roomSkip\|"rooms"'; then echo "봉사자 응답에 회의실 설정이 있어요"; exit 1; fi
+          # 방 정보: 목록에 있는 방만, 값 검사, 안 보내면 그대로, 빈 것은 지움
+          curl -fs -H "$H" -XPUT -d '{"rooms":["A604호","B204"],"info":[{"name":"a604 호","floor":6,"monitor":"yes","seats":"40명 이상","note":"빔 "},{"name":"B204","floor":"","monitor":"","seats":"","note":""},{"name":"없는방","floor":1}]}' $B/admin/rooms | grep -qF '"info":[{"name":"A604호","floor":6,"monitor":"yes","seats":"40명 이상","note":"빔"}]'
+          curl -fs -H "$H" -XPUT -d '{"rooms":["A604호"]}' $B/admin/rooms | grep -qF '"monitor":"yes"'
+          for BI_ in '{"name":"A604호","floor":"육"}' '{"name":"A604호","floor":0}' '{"name":"A604호","monitor":"maybe"}' '{"name":"A604호","seats":"123456789012345678901"}'; do test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"rooms":["A604호"],"info":['"$BI_"']}' $B/admin/rooms)" = 400; done
+          curl -fs -H "$(bearer "$A1")" $B/me | grep -qF '"roomInfo":[{"name":"A604호"'
+          if curl -fs -H "$VH" $B/me | grep -q 'roomInfo\|roomSkip\|"rooms"'; then echo "봉사자 응답에 회의실 설정이 있어요"; exit 1; fi
           if curl -fs -H "$VH" $B/volunteer/stock/$VL | grep -q '"history"'; then echo "봉사자 응답에 수정 기록이 있어요"; exit 1; fi
           HN=$(curl -fs -H "$H" $B/stock/$VL | node -pe 'JSON.parse(require("fs").readFileSync(0)).history.length')
           J="{\"qty\":{\"$VO\":8}}"; curl -fs -H "$VH" -XPATCH -d "$J" $B/volunteer/stock-moves/$VM >/dev/null

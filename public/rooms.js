@@ -72,8 +72,25 @@
     return { name: tidy(name), alias: [...new Set(rest.join(",").split(/[,，]/).map(tidy).filter(Boolean))] };
   }
 
+  // 방 이름 → 층 (모르면 null): 번호 첫 자리 · 'n층'(지하는 음수) · A4 소회의실은 4층
+  function floorOf(name) {
+    const k = key(name);
+    if (k === key(A4)) return 4;
+    const f = k.match(/(지하|b)?(\d{1,2})층/);
+    if (f) return (f[1] ? -1 : 1) * Number(f[2]);
+    const n = k.match(/(?:^|\D)(\d)\d{2}(?!\d)/);
+    return n ? Number(n[1]) : null;
+  }
+  // 층 → 번호 → 앞 글자 → 목록 순서. 번호 없는 방은 그 층의 뒤, 층을 모르는 방은 맨 뒤
+  function sortRooms(names, floors) {
+    const info = names.map((name, i) => { const m = key(name).match(/([a-z]?)(\d{3})(?!\d)/); return { name, i, f: floors(name) ?? floorOf(name), n: m ? Number(m[2]) : Infinity, l: m ? m[1] : "" }; });
+    const cmp = (a, b) => (a === b ? 0 : a < b ? -1 : 1);
+    return info.sort((a, b) => cmp(a.f ?? Infinity, b.f ?? Infinity) || cmp(a.n, b.n) || cmp(a.l, b.l) || a.i - b.i).map((x) => x.name);
+  }
+
   // 설정 → 읽개. rooms: 줄 목록, skip: '회의실 아님'으로 기억한 표기
-  function makeReader(rooms, skip) {
+  // info: 방 정보 [{ name, floor, monitor, seats, note }]. 이름은 목록에 적은 이름이나 별명
+  function makeReader(rooms, skip, info) {
     const rows = (rooms || []).map(parseLine).filter((r) => r.name);
     const skipSet = new Set((skip || []).map(key));
     const alias = new Map();   // 비교용 이름 → 보여 줄 방 이름
@@ -167,7 +184,7 @@
       const listedNames = [...new Set(listed.map((l) => fix(l.name)))];
       for (const n of listedNames) shown.set(key(n), n);
       const found = [...new Set([...shown.values()])].filter((n) => !listedNames.includes(n)).sort((a, b) => isCode(b) - isCode(a) || a.localeCompare(b, "ko"));
-      const rooms = [...listedNames, ...found], byRoom = new Map(rooms.map((r) => [r, []]));
+      const rooms = sortRooms([...listedNames, ...found], (n) => infoOf(n)?.floor ?? null), byRoom = new Map(rooms.map((r) => [r, []]));
       const used = new Set(), unread = new Map();
       for (const r of reads) {
         for (const n of new Set(r.rooms.map((x) => shown.get(key(fix(x)))))) { byRoom.get(n).push(r.e); used.add(r.e); }
@@ -179,7 +196,11 @@
       };
     }
 
-    return { read, board, listed: listed.map((l) => l.name) };
+    const infoBy = new Map();
+    for (const x of info || []) { const c = classify(x.name); infoBy.set(key(alias.get(key(x.name)) || aliasName(c.code || c.room || x.name)), x); }
+    const infoOf = (name) => infoBy.get(key(name)) || null;
+
+    return { read, board, infoOf, listed: listed.map((l) => l.name) };
   }
 
   const toMin = (t) => { const m = /^(\d{1,2}):(\d{2})/.exec(t || ""); return m ? Number(m[1]) * 60 + Number(m[2]) : null; };
@@ -217,5 +238,5 @@
   // 부재·휴가 캘린더: 제목에 무엇이 있든 방을 찾지 않음
   const isAbsenceCalendar = (name) => /부재|휴가|연차|근태|오프\s*알림/.test(String(name || ""));
 
-  root.PSRooms = { A4, key, classify, parseLine, makeReader, overlaps, isAbsenceCalendar };
+  root.PSRooms = { A4, key, classify, floorOf, sortRooms, parseLine, makeReader, overlaps, isAbsenceCalendar };
 })(globalThis);

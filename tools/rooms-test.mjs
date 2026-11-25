@@ -55,8 +55,17 @@ assert.deepEqual(b.rooms, ["A501", "A502", "본관 5층"]);
 assert.deepEqual([b.events, b.usedRooms, b.byRoom.get("A501").length, b.byRoom.get("본관 5층").length], [4, 3, 2, 2]);
 assert.deepEqual(b.unread, [{ name: "명동사제관", n: 1 }]);
 const b2 = R.makeReader(["A603", "A501"], []).board([E("[501] 가", "10:00", "11:00")]);
-assert.deepEqual([b2.rooms, b2.usedRooms, b2.events], [["A603", "A501"], 1, 1]);
+assert.deepEqual([b2.rooms, b2.usedRooms, b2.events], [["A501", "A603"], 1, 1]);
 for (const [x, w] of [["부재 알림", true], ["휴가", true], ["팀 일정", false], ["", false]]) assert.equal(R.isAbsenceCalendar(x), w);
+
+// 층 → 번호 → 앞 글자. 번호 없는 방은 그 층 뒤, 층을 모르면 맨 뒤, 관리자가 적은 층이 먼저
+for (const [x, w] of [["A501", 5], ["A 602호", 6], ["501", 5], ["A4 소회의실", 4], ["4A소회의실", null], ["본관 5층", 5], ["지하1층", -1], ["B동 401호", 4], ["소401", 4], ["4층미팅룸", 4], ["경당", null], ["소4", null], ["커뮤회의실", null], ["A1004", null]]) { n++; assert.equal(R.floorOf(x), w, x); }
+assert.deepEqual(R.sortRooms(["경당", "A303", "B301", "A4 소회의실", "A301", "B204", "본관 5층", "A501", "B501", "지하1층", "커뮤회의실"], () => null), ["지하1층", "B204", "A301", "B301", "A303", "A4 소회의실", "A501", "B501", "본관 5층", "경당", "커뮤회의실"]);
+assert.deepEqual(R.sortRooms(["경당", "A303", "A501"], (x) => ({ 경당: 4, A501: 2 })[x] ?? null), ["A501", "A303", "경당"]);
+// 방 정보: 목록에 적은 이름·별명으로 이어지고, 층은 정렬에 씀
+const inf = R.makeReader(["A604호", "A4소 = 4층 소회의실", "유리방 = 교구본관5층", "A301"], [], [{ name: "A604호", floor: null, monitor: "yes", seats: "40명 이상", note: "빔" }, { name: "A4소", floor: 4, monitor: "check", seats: "", note: "" }, { name: "유리방", floor: 5, monitor: "no", seats: "10명", note: "" }]);
+assert.deepEqual([inf.infoOf("A604").seats, inf.infoOf("A4 소회의실").monitor, inf.infoOf("유리방").floor, inf.infoOf("A301"), inf.infoOf("A602")], ["40명 이상", "check", 5, null, null]);
+assert.deepEqual(inf.board([E("[교구본관5층] 가", "", ""), E("[A4소] 나", "", ""), E("[A602] 다", "", "")]).rooms, ["A301", "A4 소회의실", "유리방", "A602", "A604"]);
 
 // 겹침
 const ov = (...l) => { const r = R.overlaps(l, "2026-01-05"); return [r.clash, r.dup, l.map((e) => r.of.get(e) || "")]; };

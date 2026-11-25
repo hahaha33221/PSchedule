@@ -209,6 +209,7 @@
     home: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11l8-6.5 8 6.5V20H4z"/><path d="M10 20v-5h4v5"/></svg>',
     grid: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2.5"/><path d="M4 10h16M9 3v4M15 3v4"/></svg>',
     check: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="3.5"/><path d="M8.5 12.5l2.5 2.5 4.5-5"/></svg>',
+    monitor: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="11" rx="1.5"/><path d="M12 16v3M8.5 19.5h7"/></svg>',
     people: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.5 19c.8-3 3-4.6 5.5-4.6s4.7 1.6 5.5 4.6"/><circle cx="16.5" cy="9.5" r="2.5"/><path d="M15.5 14.6c2.3-.2 4.2 1.2 5 3.9"/></svg>',
     note: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3.5h8.5L19 8v12.5H6z"/><path d="M14 3.5V8h5M9 12.5h7M9 16h5"/></svg>',
     bell: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/></svg>',
@@ -2168,13 +2169,16 @@
       const away = r.absences || { on: false, results: [], excluded: 0 };
       const AWAY_SHOW = 8;
       const awayBox = () => {
+        const awayOpen = store.get("ps.awayOpen", "0") === "1"; // 처음에는 접힘, 펼친 상태는 이 기기에서 기억
         const all = store.get("ps.awayAll", "0") === "1", list = all ? away.results : away.results.slice(0, AWAY_SHOW);
         return h("section", { class: "today-away", "aria-label": "부재 알림" }, [
-          h("h3", {}, ["부재 알림", h("span", { class: "muted small", text: ` ${away.results.length}건${away.excluded ? ` (제외 ${away.excluded})` : ""}` })]),
-          away.results.length ? h("ul", { class: "today-away__list" }, list.map((x) => h("li", {}, h("button", { class: "today-away__row", type: "button", "data-peek": `ext:${x.id}`, onclick: () => openPeek("ext", x.id) }, [
+          h("h3", {}, h("button", { class: "today-away__toggle", type: "button", "aria-expanded": String(awayOpen), onclick: (ev) => { const b = ev.currentTarget.closest(".today-away"); store.set("ps.awayOpen", awayOpen ? "0" : "1"); const nb = awayBox(); b.replaceWith(nb); nb.querySelector(".today-away__toggle").focus(); } }, [
+            h("span", { class: "today-find__chev" + (awayOpen ? " is-open" : ""), html: ICON.right }), "부재 알림", h("span", { class: "muted small", text: ` ${away.results.length}건${away.excluded ? ` (제외 ${away.excluded})` : ""}` }), h("span", { class: "muted small today-away__hint", text: awayOpen ? "접기" : "펼치기" })
+          ])),
+          !awayOpen ? null : away.results.length ? h("ul", { class: "today-away__list" }, list.map((x) => h("li", {}, h("button", { class: "today-away__row", type: "button", "data-peek": `ext:${x.id}`, onclick: () => openPeek("ext", x.id) }, [
             h("span", { class: "today-find__kind is-absence", text: "부재" }), editTag(x), awayTitle(x), h("span", { class: "today-find__time", text: awayWhen(x) })
           ])))) : h("p", { class: "muted small", text: away.excluded ? "제외어로 모두 빠졌어요." : "이 날 부재가 없어요." }),
-          away.results.length > AWAY_SHOW ? h("button", { class: "link-btn", type: "button", "aria-expanded": String(all), text: all ? "접기" : `모두 보기 (${away.results.length}건)`, onclick: (ev) => { store.set("ps.awayAll", all ? "0" : "1"); ev.currentTarget.closest(".today-away").replaceWith(awayBox()); } }) : null
+          awayOpen && away.results.length > AWAY_SHOW ? h("button", { class: "link-btn", type: "button", "aria-expanded": String(all), text: all ? "접기" : `모두 보기 (${away.results.length}건)`, onclick: (ev) => { store.set("ps.awayAll", all ? "0" : "1"); ev.currentTarget.closest(".today-away").replaceWith(awayBox()); } }) : null
         ]);
       };
       const open = store.get("ps.findOpen", "1") === "1"; // 처음에는 펼친 상태
@@ -2191,7 +2195,7 @@
           open && !hasMe ? h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => save([...r.mine, me]) }, [icon("search"), `내 이름(${me})으로 찾기`]) : null
         ]),
         open ? h("div", { class: "today-find__chips" }, [...r.common.map((k) => chip(k, false)), ...r.mine.map((k) => chip(k, true)), add]) : null,
-        open ? h("div", { class: "today-find__chips today-find__chips--ex" }, [h("span", { class: "muted small", text: "제외" }), ...r.excludes.map(exChip), exAdd, r.excludes.length ? null : h("span", { class: "muted small", text: "이 말이 들어간 것은 결과에서 빼요" })]) : null,
+        open ? h("div", { class: "today-find__chips today-find__chips--ex" }, [h("span", { class: "muted small", text: "제외" }), ...r.excludes.map(exChip), exAdd, h("span", { class: "muted small today-find__exhint", text: "이 말이 제목·내용에 들어간 일정·할 일·메모와 부재는 '이름으로 모아 보기'에서만 빼요. 나에게만 적용되고 다른 화면에는 그대로 보여요." })]) : null,
         open ? h("div", { class: "today-find__groups" }, r.groups.map((g) => { const { list, clashes } = withClashes(g.results); return h("div", { class: "today-find__group" + (clashes ? " has-clash" : "") }, [
           h("h3", {}, [g.keyword, h("span", { class: "muted small", text: ` ${g.results.length}건${g.excluded ? ` (제외 ${g.excluded}${g.excludedAbsences ? `, 그중 부재 ${g.excludedAbsences}` : ""})` : ""}` }), clashes ? h("span", { class: "today-find__clashsum", text: `시간 겹침 ${clashes}건` }) : null]),
           g.results.length ? h("ul", { class: "today-find__list" }, list.map((x) => row({ ...x, keyword: g.keyword }))) : h("p", { class: "muted small", text: g.excluded ? "제외어로 모두 빠졌어요." : "이 날 걸린 것이 없어요." })
@@ -2207,7 +2211,7 @@
     // 부재 캘린더(관리자가 켠 것, 안 정했으면 이름에 '부재')와 휴가·연차 캘린더는 방을 찾지 않음
     const noRoom = (e) => { const c = e.ext && state.calendars.find((x) => x.id === e.calendarId); return c ? c.absence || PSR.isAbsenceCalendar(c.name.replace(/부재/g, "")) : PSR.isAbsenceCalendar(e.calendarName || e.sourceName); };
     let roomEvents = [], roomNames = [];
-    function setRooms(r) { state.rooms = r.rooms; state.roomSkip = r.skip; drawRooms(roomEvents); }
+    function setRooms(r) { state.rooms = r.rooms; state.roomSkip = r.skip; if (r.info) state.roomInfo = r.info; drawRooms(roomEvents); }
     const unreadChips = (list, done) => h("div", { class: "rooms__unread" }, list.map((u) => h("button", { type: "button", class: "chip-add rooms__word", onclick: () => roomWordDialog(u.name, done) }, [u.name, u.n > 1 ? h("span", { class: "muted", text: ` ${u.n}건` }) : null])));
     // 읽지 못한 표기 하나: 방 별명에 넣거나 '회의실 아님'으로
     function roomWordDialog(word, done) {
@@ -2247,9 +2251,36 @@
       const ok = h("button", { class: "btn btn--primary", type: "submit", text: "저장" });
       const lines = (x) => x.value.split("\n").map((y) => y.trim()).filter(Boolean);
       const unreadBox = h("div", { class: "stack" }, h("p", { class: "muted small", text: "찾는 중…" }));
+      // 방 정보: 위 목록의 방마다. 목록을 고치고 벗어나면 줄을 다시 맞춤 (적던 값은 지킴)
+      const infoVals = new Map((state.roomInfo || []).map((x) => [PSR.key(x.name), { ...x }]));
+      const infoList = h("ul", { class: "rooms__infolist" });
+      const infoBox = h("details", { class: "rooms__more" }, [h("summary", {}, "방 정보 (층·모니터·수용 인원·비고)"), h("p", { class: "muted small", text: "방 이름 아래에 모니터와 수용 인원이 보이고, 비고는 방 이름을 누르면 보여요. 층을 비우면 방 번호나 'n층'에서 읽어요." }), infoList]);
+      const drawInfo = () => {
+        const names = [...new Map(lines(ta).map((l) => PSR.parseLine(l).name).filter(Boolean).map((n) => [PSR.key(n), n])).entries()];
+        infoList.replaceChildren(...(names.length ? names.map(([k, n]) => {
+          const v = infoVals.get(k) || { floor: null, monitor: "", seats: "", note: "" };
+          infoVals.set(k, v); v.name = n;
+          const guess = PSR.floorOf(n);
+          const floor = h("input", { type: "number", min: "-10", max: "99", step: "1", inputmode: "numeric", value: v.floor ?? "", placeholder: guess == null ? "모름" : String(guess), "aria-label": `${n} 층` });
+          const mon = h("select", { "aria-label": `${n} 모니터` }, [["", "모름"], ["yes", "있음"], ["no", "없음"], ["check", "확인 필요"]].map(([x, t]) => h("option", { value: x, text: t })));
+          mon.value = v.monitor || "";
+          const seats = h("input", { maxlength: "20", value: v.seats || "", placeholder: "예: 15명", "aria-label": `${n} 수용 인원` });
+          const note = h("input", { maxlength: "100", value: v.note || "", placeholder: "예: 화이트보드, 빔프로젝터", "aria-label": `${n} 비고` });
+          floor.addEventListener("input", () => { v.floor = floor.value === "" ? null : Number(floor.value); });
+          mon.addEventListener("change", () => { v.monitor = mon.value; });
+          seats.addEventListener("input", () => { v.seats = seats.value; });
+          note.addEventListener("input", () => { v.note = note.value; });
+          return h("li", { class: "rooms__inforow" }, [h("strong", { text: n }), h("div", { class: "rooms__infogrid" }, [field("층", floor), field("모니터", mon), field("수용 인원", seats), field("비고", note)])]);
+        }) : [h("li", { class: "muted small", text: "위 목록에 회의실을 적으면 여기에 나와요." })]));
+      };
+      ta.addEventListener("change", drawInfo);
+      drawInfo();
+      const infoOut = () => [...infoVals.values()].filter((v) => v.name).map(({ name, floor, monitor, seats, note }) => ({ name, floor, monitor, seats, note }));
+      const infoBefore = JSON.stringify(infoOut());
       const form = h("form", { class: "stack" }, [
-        h("p", { class: "muted small", text: "회의실은 일정 제목의 [A602] 같은 표기로 자동으로 잡혀요. 여기에 적은 회의실은 이 순서대로 맨 앞에, 예약이 없는 날에도 보여요. 30개까지예요." }),
+        h("p", { class: "muted small", text: "회의실은 일정 제목의 [A602] 같은 표기로 자동으로 잡혀요. 여기에 적은 회의실은 예약이 없는 날에도 보여요. 화면에서는 층 → 번호 → 앞 글자 순서로 놓여요. 30개까지예요." }),
         field("회의실 목록", ta, "같은 방을 다르게 적는 표기가 있으면 '방 이름 = 다른 표기, 다른 표기'로 적어 주세요. 그 표기가 이 방으로 모여요."),
+        infoBox,
         h("details", { class: "rooms__more" }, [h("summary", {}, ["회의실 아님으로 기억한 표기 ", h("span", { class: "muted", text: `${(state.roomSkip || []).length}개` })]), field("한 줄에 하나씩 (지우면 다시 찾아요)", skip)]),
         err, h("div", { class: "actions" }, [h("button", { class: "btn btn--ghost", type: "button", text: "취소", "data-close": true }), ok]),
         h("div", { class: "rooms__unreadbox" }, [h("h3", { class: "card__title", text: "회의실로 읽지 못한 표기" }), unreadBox])
@@ -2257,7 +2288,7 @@
       form.addEventListener("submit", (e) => {
         e.preventDefault();
         busy(ok, async () => {
-          try { setRooms(await api("/admin/rooms", { method: "PUT", body: { rooms: lines(ta), skip: lines(skip) } })); closeDialog(); toast("회의실 목록을 저장했어요."); }
+          try { setRooms(await api("/admin/rooms", { method: "PUT", body: { rooms: lines(ta), skip: lines(skip), info: infoOut() } })); closeDialog(); toast("회의실 목록을 저장했어요."); }
           catch (ex) { showError(err, ex.message); }
         });
       });
@@ -2265,7 +2296,7 @@
       // 앞뒤 일정에서 읽지 못한 표기를 모아 보여 줌 (고치다 만 글이 있으면 먼저 저장하도록)
       api(`/events?from=${shiftYmd(day, -30)}&to=${shiftYmd(day, 60)}`).then((ev) => {
         const b = PSR.makeReader(state.rooms, state.roomSkip).board(dedupeImported(allEvents(ev).filter((e) => !e.sourceGone)), { noRoom });
-        const dirty = () => ta.value !== ta.defaultValue || skip.value !== skip.defaultValue;
+        const dirty = () => ta.value !== ta.defaultValue || skip.value !== skip.defaultValue || JSON.stringify(infoOut()) !== infoBefore;
         const chips = unreadChips(b.unread.slice(0, 60), roomsDialog);
         chips.addEventListener("click", (e) => { if (dirty() && e.target.closest("button")) { e.stopPropagation(); showError(err, "고친 목록을 먼저 저장해 주세요."); } }, true);
         unreadBox.replaceChildren(
@@ -2274,11 +2305,18 @@
           b.unread.length > 60 ? h("p", { class: "muted small", text: `많이 나온 60개만 보여요. 모두 ${b.unread.length}개예요.` }) : "");
       }).catch(() => unreadBox.replaceChildren(h("p", { class: "muted small", text: "불러오지 못했어요." })));
     }
+    const MONITOR = { yes: ["○", "모니터 있음"], no: ["✕", "모니터 없음"], check: ["?", "모니터 확인 필요"] };
+    const monitorMark = (info) => { const [t, label] = MONITOR[info?.monitor] || ["-", "모니터 정보 없음"]; return h("span", { class: `rooms__mon is-${info?.monitor || "none"}`, role: "img", "aria-label": label, title: label, text: t }); };
+    const infoRows = (r, info) => { const f = info.floor ?? PSR.floorOf(r); return [["층", f == null ? "" : f < 0 ? `지하 ${-f}층` : `${f}층`], ["모니터", { yes: "○ 있음", no: "✕ 없음", check: "? 확인 필요" }[info.monitor] || ""], ["수용 인원", info.seats], ["비고", info.note]].filter((x) => x[1]); };
+    const infoText = (r, info) => [r, ...infoRows(r, info).map((x) => x.join(": "))].join("\n");
+    function roomInfoPop(anchor, r, info) {
+      popover(anchor, h("div", { class: "rooms__pop" }, [h("strong", { text: r }), h("dl", {}, infoRows(r, info).flatMap(([k, v]) => [h("dt", { text: k }), h("dd", { text: v })]))]));
+    }
     // all: 그날 일정 전부(분류와 상관없이). 왼쪽 '내 캘린더'에서 끈 것은 빼고 그리되, 빠진 예약이 있으면 알려 줌
     function drawRooms(all) {
       roomEvents = all;
       if (!PSR) return fill(roomBox, h("h2", { class: "card__title", text: "회의실 예약 현황" }), h("p", { class: "muted", text: "새 버전이 나왔어요. 화면을 새로 고치면 보여요." }));
-      const reader = PSR.makeReader(state.rooms, state.roomSkip);
+      const reader = PSR.makeReader(state.rooms, state.roomSkip, state.roomInfo);
       const events = dedupeImported(all.filter(showEv));
       const { rooms, byRoom, events: used, usedRooms, unread } = reader.board(events, { noRoom });
       roomNames = rooms;
@@ -2313,6 +2351,8 @@
       const unreadNote = isAdmin() && unread.length ? h("div", { class: "rooms__unreadbox" }, [h("p", { class: "muted small" }, [adminBadge(), ` 회의실로 읽지 못한 표기 ${unread.length}개 · 눌러서 방을 정하거나 회의실이 아니라고 기억해요.`]), unreadChips(unread)]) : null;
       if (!rooms.length) return fill(roomBox, head, offNote, h("p", { class: "muted", text: offNote ? "보이는 일정 가운데 회의실 예약이 없어요." : "이 날은 회의실 예약이 없어요. 일정 제목 앞에 [A602]처럼 회의실을 적으면 여기에 보여요." }), unreadNote);
       const axis = h("div", { class: "rooms__axis", style: `height:${H}px` }, Array.from({ length: endH - startH }, (_, i) => h("span", { style: `top:${i * RH}px`, text: `${pad(startH + i)}:00` })));
+      // 방 정보 (관리자가 적은 방이 하나라도 있으면 두 줄을 보임)
+      const hasInfo = rooms.some((r) => reader.infoOf(r));
       const FLAG = { clash: "시간 겹침", dup: "중복일 수 있음" };
       const col = (r) => {
         const list = byRoom.get(r), ov = over.get(r);
@@ -2330,8 +2370,11 @@
           }, [f || editTag(it.e) ? h("span", { class: "rooms__evflags" }, [f ? h("em", { class: "rooms__evflag", text: FLAG[f] }) : null, editTag(it.e)]) : null, h("strong", { text: it.e.title }), h("span", { text: timeRange(it.e).replace(/^[^·]*·\s*/, "") })]); })
         ]);
         const flag = ov.clash ? "clash" : ov.dup ? "dup" : "";
+        const info = reader.infoOf(r);
         return h("div", { class: "rooms__col" + (lanes > 1 ? " is-wide" : "") }, [
-          h("div", { class: "rooms__name" + (flag ? ` is-${flag}` : "") }, [h("strong", { text: r, title: r }), h("span", { class: "muted small" }, [list.length ? `${list.length}건` : "비어 있음", flag ? h("b", { text: ` · ${FLAG[flag]}` }) : null])]),
+          h("div", { class: "rooms__name" + (flag ? ` is-${flag}` : "") }, [info ? h("button", { class: "rooms__namebtn", type: "button", title: infoText(r, info), "aria-label": `${r} 회의실 정보 보기`, text: r, onclick: (ev) => roomInfoPop(ev.currentTarget, r, info) }) : h("strong", { text: r, title: r }), h("span", { class: "muted small" }, [list.length ? `${list.length}건` : "비어 있음", flag ? h("b", { text: ` · ${FLAG[flag]}` }) : null])]),
+          hasInfo ? h("div", { class: "rooms__info" }, monitorMark(info)) : null,
+          hasInfo ? h("div", { class: "rooms__info" }, h("span", { class: "rooms__seats", "aria-label": `수용 인원 ${info?.seats || "정보 없음"}`, title: info?.seats || null, text: info?.seats || "-" })) : null,
           allDay.length ? h("div", { class: "rooms__allday" }, allDay.map((e) => h("button", { type: "button", class: `rooms__chip c${evColor(e)}`, onclick: () => openEv(e) }, [editTag(e), `종일 · ${e.title}`]))) : h("div", { class: "rooms__allday" }),
           body
         ]);
@@ -2339,7 +2382,10 @@
       const cols = rooms.map(col);
       fill(roomBox, head, offNote,
         h("div", { class: "rooms__scroll" }, h("div", { class: "rooms__grid", style: `grid-template-columns:52px ${cols.map((c, i) => (c.classList.contains("is-wide") ? "minmax(270px, 1.4fr)" : rooms[i].length > 9 ? "minmax(180px, 1fr)" : "minmax(130px, 1fr)")).join(" ")}` }, [
-          h("div", { class: "rooms__axiswrap" }, [h("div", { class: "rooms__name rooms__name--blank" }), h("div", { class: "rooms__allday" }), axis]),
+          h("div", { class: "rooms__axiswrap" }, [h("div", { class: "rooms__name rooms__name--blank" }),
+            hasInfo ? h("div", { class: "rooms__info rooms__info--head", role: "img", "aria-label": "모니터(화면) 여부", title: "모니터(화면) 여부", html: ICON.monitor }) : null,
+            hasInfo ? h("div", { class: "rooms__info rooms__info--head", role: "img", "aria-label": "수용 인원", title: "수용 인원", html: ICON.people }) : null,
+            h("div", { class: "rooms__allday" }), axis]),
           ...cols
         ])),
         unreadNote,
@@ -2357,7 +2403,7 @@
         api(`/events?from=${day}&to=${day}`), api(`/tasks?date=${day}&today=${today()}`), api(`/memos?date=${day}`)
       ]);
       const sig = JSON.stringify([ev, tk, mm]);
-      if (auto && (sig === lastSig || !calm())) return;
+      if (auto && (sig === lastSig || !calm() || taskBusy)) return;
       lastSig = sig;
       const inCat = catFilter();
       // 원본이 지워진 일정은 '오늘의 일정'과 회의실에는 그리지 않음 (달력·목록·이름으로 모아 보기에는 '원본 지워짐'으로 남음)
@@ -2377,13 +2423,13 @@
     function calm() {
       if (dialog.open || openPop) return false;
       const at = document.activeElement;
-      if (/INPUT|TEXTAREA|SELECT/.test(at.tagName) && at.type !== "checkbox" && [findBox, roomBox, timelineBox, tasksBox, memoList].some((b) => b.contains(at))) return false;
-      return ![findBox, tasksBox].some((b) => [...b.querySelectorAll("input, textarea")].some((x) => x.type !== "checkbox" && x.value.trim()));
+      if (/INPUT|TEXTAREA|SELECT/.test(at.tagName) && at.type !== "checkbox" && [findBox, roomBox, timelineBox, taskList, memoList].some((b) => b.contains(at))) return false;
+      return ![findBox].some((b) => [...b.querySelectorAll("input, textarea")].some((x) => x.type !== "checkbox" && x.value.trim()));
     }
     async function autoLoad() {
       if (page?.reload !== load || document.visibilityState !== "visible" || !calm()) return;
       // 자정이 지나면 '오늘'을 새 날짜로
-      if (day0 !== today() && day === day0 && /^#\/today\/?$/.test(location.hash || "#/today")) return pageToday();
+      if (day0 !== today() && day === day0 && /^#\/today\/?$/.test(location.hash || "#/today")) { if (!taskInput.value.trim() && !layout.main.querySelector(".quickmemo__text")?.value.trim()) return pageToday(); }
       await load(true);
       await loadFind(true);
     }
@@ -2472,10 +2518,36 @@
       scroller.addEventListener("scroll", () => { timelineBox.dataset.top = String(scroller.scrollTop); });
     }
 
+    // 할 일 등록 칸(댓글처럼): 목록을 다시 그려도 이 칸은 그대로 두어 적던 글이 남음
+    const taskHead = h("div", { class: "card__head" }), taskTabs = h("div", { class: "tabs-line", role: "tablist" }), taskList = h("div", { class: "today-tasks__list" });
+    const taskInput = h("input", { class: "today-tasks__input", maxlength: "80", placeholder: "할 일을 적고 등록", "aria-label": "할 일 바로 등록" });
+    const taskOk = h("button", { class: "btn btn--primary btn--sm", type: "submit", text: "등록" });
+    const taskWhere = h("p", { class: "muted small today-tasks__where" });
+    const taskFormEl = h("form", { class: "comment-form today-tasks__form", novalidate: true }, [taskInput, taskOk]);
+    let taskBusy = false;
+    taskInput.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.isComposing || e.keyCode === 229)) e.preventDefault(); }); // 한글 조합 중 엔터
+    taskFormEl.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const title = taskInput.value.trim();
+      if (!title) return taskInput.focus();
+      if (taskBusy) return;
+      taskBusy = true; taskOk.disabled = true;
+      let made = null;
+      try { made = (await act(() => api("/tasks", { method: "POST", body: { title, startDate: day, dueDate: day, assigneeId: state.user.id, categoryId: state.cat } }))).task; } catch (ex) { /* 알림은 act 가, 적은 글은 그대로 */ }
+      taskBusy = false; taskOk.disabled = false;
+      if (!made) return taskInput.focus();
+      if (taskInput.value.trim() === title) taskInput.value = ""; // 그사이 이어 적은 글은 지우지 않음
+      if (!state.show.task) toast("등록했어요. 할 일이 꺼져 있어 목록에는 안 보여요.");
+      else if (taskTab === "meeting") toast("'개인 업무'에 등록했어요.");
+      await quiet(load());
+      const row = taskList.querySelector(`[data-peek="task:${made.id}"]`);
+      if (row) { row.classList.add("is-new"); row.scrollIntoView({ block: "nearest" }); }
+      taskInput.focus({ preventScroll: true });
+    });
     function drawTasks(all) {
       const shown = state.show.task ? all : [];
       const groups = { all: shown, meeting: shown.filter((t) => t.meetingId), personal: shown.filter((t) => !t.meetingId) };
-      const tabs = h("div", { class: "tabs-line", role: "tablist" }, [["all", "전체"], ["meeting", "회의 관련"], ["personal", "개인 업무"]].map(([k, label]) => h("button", {
+      taskTabs.replaceChildren(...[["all", "전체"], ["meeting", "회의 관련"], ["personal", "개인 업무"]].map(([k, label]) => h("button", {
         type: "button", role: "tab", "aria-selected": String(k === taskTab), onclick: () => { taskTab = k; store.set("ps.todayTab", k); drawTasks(all); }
       }, [label, h("span", { class: "count", text: String(groups[k].length) })])));
       const list = groups[taskTab].map((t) => h("li", { class: "ttask" + (t.status === "done" ? " is-done" : ""), "data-peek": `task:${t.id}` }, [
@@ -2486,13 +2558,12 @@
         ]),
         h("span", { class: "ttask__meta" }, [dueBadge(t), ...tagChips(t.tagIds).slice(0, 2), t.assigneeId && t.assigneeId !== state.user.id ? avatar(t.assigneeId, "sm") : null])
       ]));
-      tasksBox.replaceChildren(
-        h("div", { class: "card__head" }, [h("h2", { class: "card__title" }, [relDay(day) === "오늘" ? "오늘의 할 일 " : "할 일 ", h("span", { class: "count count--lg", text: String(shown.filter((t) => t.status !== "done").length) })]),
-          h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => quickAdd("task") }, [icon("plus"), "추가"])]),
-        tabs,
-        adder("할 일 추가 후 Enter", (v) => act(() => api("/tasks", { method: "POST", body: { title: v, startDate: day, dueDate: day, assigneeId: state.user.id, categoryId: state.cat } })).then(() => load())),
-        list.length ? h("ul", { class: "ttasks" }, list) : h("p", { class: "muted small task-empty", text: state.show.task ? "할 일이 없어요." : "왼쪽 '내 캘린더'에서 할 일이 꺼져 있어요." })
-      );
+      fill(taskHead, h("h2", { class: "card__title" }, [relDay(day) === "오늘" ? "오늘의 할 일 " : "할 일 ", h("span", { class: "count count--lg", text: String(shown.filter((t) => t.status !== "done").length) })]),
+        h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => quickAdd("task") }, [icon("plus"), "추가"]));
+      fill(taskList, list.length ? h("ul", { class: "ttasks" }, list) : h("p", { class: "muted small task-empty", text: state.show.task ? "할 일이 없어요." : "왼쪽 '내 캘린더'에서 할 일이 꺼져 있어요." }));
+      taskWhere.textContent = !state.show.task ? "할 일이 꺼져 있어 등록해도 목록에는 안 보여요. 왼쪽 '내 캘린더'에서 켜면 보여요."
+        : `${dateLabel(day)} · 담당 나${state.cat ? ` · ${catLabel(state.cat)}` : ""}${taskTab === "meeting" ? " · 회의와 이어지지 않은 '개인 업무'에 등록돼요" : "로 등록돼요"}. 등록한 뒤 눌러서 고칠 수 있어요.`;
+      if (taskFormEl.parentElement !== tasksBox) tasksBox.replaceChildren(taskHead, taskTabs, taskList, taskFormEl, taskWhere);
     }
 
     page = { name: "today", reload: load, auto: autoLoad };
@@ -3142,7 +3213,7 @@
 
   async function reloadTeam() {
     const me = await api("/me");
-    state.user = me.user; state.team = me.team; state.units = me.units || []; state.tags = me.tags; state.categories = me.categories || []; state.calendars = me.calendars || []; state.rooms = me.rooms || []; state.roomSkip = me.roomSkip || [];
+    state.user = me.user; state.team = me.team; state.units = me.units || []; state.tags = me.tags; state.categories = me.categories || []; state.calendars = me.calendars || []; state.rooms = me.rooms || []; state.roomSkip = me.roomSkip || []; state.roomInfo = me.roomInfo || [];
   }
 
   function showIssued(title, p) {
@@ -8965,7 +9036,7 @@
   async function boot() {
     app.replaceChildren(loading(true));
     const r = await api("/me");
-    state.user = r.user; state.team = r.team; state.units = r.units || []; state.tags = r.tags; state.calendars = r.calendars || []; state.rooms = r.rooms || []; state.roomSkip = r.roomSkip || []; state.unreadNotices = r.unreadNotices || 0;
+    state.user = r.user; state.team = r.team; state.units = r.units || []; state.tags = r.tags; state.calendars = r.calendars || []; state.rooms = r.rooms || []; state.roomSkip = r.roomSkip || []; state.roomInfo = r.roomInfo || []; state.unreadNotices = r.unreadNotices || 0;
     setCategories(r.categories);
     layout.main = null;
     render();
