@@ -2263,7 +2263,7 @@
       openDialog("회의실 관리", form, { admin: true });
       // 앞뒤 일정에서 읽지 못한 표기를 모아 보여 줌 (고치다 만 글이 있으면 먼저 저장하도록)
       api(`/events?from=${shiftYmd(day, -30)}&to=${shiftYmd(day, 60)}`).then((ev) => {
-        const b = PSR.makeReader(state.rooms, state.roomSkip).board(dedupeImported(allEvents(ev)), { noRoom });
+        const b = PSR.makeReader(state.rooms, state.roomSkip).board(dedupeImported(allEvents(ev).filter((e) => !e.sourceGone)), { noRoom });
         const dirty = () => ta.value !== ta.defaultValue || skip.value !== skip.defaultValue;
         const chips = unreadChips(b.unread.slice(0, 60), roomsDialog);
         chips.addEventListener("click", (e) => { if (dirty() && e.target.closest("button")) { e.stopPropagation(); showError(err, "고친 목록을 먼저 저장해 주세요."); } }, true);
@@ -2359,11 +2359,13 @@
       if (auto && (sig === lastSig || !calm())) return;
       lastSig = sig;
       const inCat = catFilter();
-      const events = dedupeImported(allEvents(ev).filter((e) => showEv(e) && inCat(e)));
+      // 원본이 지워진 일정은 '오늘의 일정'과 회의실에는 그리지 않음 (달력·목록·이름으로 모아 보기에는 '원본 지워짐'으로 남음)
+      const alive = allEvents(ev).filter((e) => !e.sourceGone);
+      const events = dedupeImported(alive.filter((e) => showEv(e) && inCat(e)));
       const keep = roomBox.querySelector(".rooms__scroll")?.scrollLeft || 0;
       drawTimeline(events, (ev.moved || []).filter((l) => showEv(l) && inCat(l)));
       // 회의실 예약은 분류 거르기와 관계없이 그날 일정 전부로 (끈 캘린더는 안에서 빼고 알려 줌)
-      drawRooms(allEvents(ev));
+      drawRooms(alive);
       const rs = roomBox.querySelector(".rooms__scroll");
       if (rs && keep) rs.scrollLeft = keep;
       drawTasks(tk.tasks.filter(inCat));
