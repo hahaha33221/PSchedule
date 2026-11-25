@@ -279,20 +279,24 @@
   }
   const evColor = (e) => (e.ext ? e.color : teamColor(e.unitId) ?? KIND[e.kind].color);
   // 구글 캘린더에서 우리 소속으로 넣은 일정: 'WYD 캘린더 백업' 표시 (원본은 달력·검색에서 숨김)
-  const srcTag = (e, short) => (e.sourceName ? h("span", { class: "src-tag", title: `${e.sourceName} 캘린더 백업 (구글 캘린더에서 가져온 일정)`, text: short ? e.sourceName : `${e.sourceName} 캘린더 백업` }) : null);
-  // 수정된 일정: '수정됨'(날짜가 바뀌면 함께), 우리 소속으로 넣은 일정은 '원본 수정됨·원본 취소됨'
+  // 원본이 지워졌으면 그 자리에 '원본 지워짐' 하나만 (goneTag)
+  const GONE_HINT = "구글 캘린더 원본이 지워졌어요. 이 일정은 그대로 남아 있어요.";
+  const goneTag = (e, cls) => (e.sourceGone ? h("span", { class: "gone-tag" + (cls ? " " + cls : ""), title: GONE_HINT, role: "img", "aria-label": "원본 지워짐" }, [h("i", { text: "원본 " }), "지워짐"]) : null); // 좁은 칸에서는 '지워짐'만
+  const srcTag = (e, short) => (e.sourceName && !e.sourceGone ? h("span", { class: "src-tag", title: `${e.sourceName} 캘린더 백업 (구글 캘린더에서 가져온 일정)`, text: short ? e.sourceName : `${e.sourceName} 캘린더 백업` }) : null);
+  // 수정된 일정: '수정됨'(날짜가 바뀌면 함께), 우리 소속으로 넣은 일정은 '원본 수정됨'. 원본이 지워졌으면 그 표시만
   const changeLine = (c) => `${c.label} ${c.from} → ${c.to}`;
   function editTag(e, cls) {
-    const x = e.edited || e.sourceEdited;
+    if (e.sourceGone) return goneTag(e, cls);
+    const x = e.edited || (e.sourceEdited?.gone ? null : e.sourceEdited);
     if (!x) return null;
-    const word = e.edited ? "수정됨" : x.gone ? "원본 취소됨" : "원본 수정됨";
+    const word = e.edited ? "수정됨" : "원본 수정됨";
     const moved = x.changes.some((c) => c.kind === "date");
     return h("span", { class: "edit-tag" + (cls ? " " + cls : ""), title: x.changes.map(changeLine).join("\n") || null, text: word + (moved ? " · 날짜 바뀜" : "") });
   }
   function editBox(e) {
-    return [["edited", e.edited], ["source", e.sourceEdited]].filter((x) => x[1]).map(([k, x]) => h("div", { class: "edit-box" }, [
-      h("div", { class: "edit-box__head" }, [h("strong", { text: k === "edited" ? "수정됨" : x.gone ? "원본 취소됨" : "원본 수정됨" }), h("span", { class: "muted small", text: `${ago(x.at)} ${e.ext || k === "source" ? "알게 됨" : "고침"}` })]),
-      k === "source" ? h("p", { class: "muted small", text: x.gone ? "구글 캘린더에서 지워졌어요. 이 일정은 그대로예요." : "구글 캘린더에서 바뀌었어요. 이 일정에는 아직 옮기지 않았어요." }) : null,
+    return [["edited", e.edited], ["source", e.sourceEdited]].filter((x) => x[1] && !x[1].gone).map(([k, x]) => h("div", { class: "edit-box" }, [
+      h("div", { class: "edit-box__head" }, [h("strong", { text: k === "edited" ? "수정됨" : "원본 수정됨" }), h("span", { class: "muted small", text: `${ago(x.at)} ${e.ext || k === "source" ? "알게 됨" : "고침"}` })]),
+      k === "source" ? h("p", { class: "muted small", text: "구글 캘린더에서 바뀌었어요. 이 일정에는 아직 옮기지 않았어요." }) : null,
       x.changes.length ? h("ul", {}, x.changes.map((c) => h("li", {}, [h("span", { class: "edit-box__label", text: c.label }), h("span", { class: "edit-box__val" }, [h("s", { text: c.from }), h("span", { "aria-label": "에서", text: " → " }), h("b", { text: c.to })])]))) : null
     ]));
   }
@@ -1282,7 +1286,7 @@
 
     const title = inlineText(e.title, { cls: "inline--title", label: "제목", max: 80, required: true, onSave: (v) => patch({ title: v }) });
     const st = meetingState(e);
-    const head = [h("div", { class: "peek__kind" }, [evDot(e), h("span", { text: KIND[e.kind].label }), isMeeting ? h("span", { class: `status status--${st}`, text: MEETING_STATE[st] }) : null]), title];
+    const head = [h("div", { class: "peek__kind" }, [evDot(e), h("span", { text: KIND[e.kind].label }), isMeeting ? h("span", { class: `status status--${st}`, text: MEETING_STATE[st] }) : null, goneTag(e)]), title];
     const tools = [
       h("button", { class: "btn btn--ghost btn--sm", type: "button", onclick: () => editEvent(e) }, [icon("edit"), "수정"]),
       e.canDelete ? h("button", { class: "icon-btn", type: "button", "aria-label": "삭제", title: "삭제", html: ICON.trash, onclick: () => confirmDialog("삭제", `'${e.title}' 을(를) 지울까요? 연결된 할 일과 메모는 남고 연결만 풀려요.`, "삭제", async () => {
@@ -1374,13 +1378,14 @@
     const body = [
       facts,
       ...editBox(e),
-      e.source ? h("div", { class: "srcbox" + (e.source.status !== "same" ? " is-warn" : "") }, [
+      e.source ? h("div", { class: "srcbox" + (e.source.status !== "same" || e.source.moved ? " is-warn" : "") }, [
         h("span", {}, [icon("cal"), h("strong", { text: `${e.source.calendarName} 캘린더 백업` }), " · 구글 캘린더에서 가져온 일정이라 원본은 달력에서 숨겨요"]),
-        e.source.status === "changed" ? h("span", { class: "srcbox__msg" }, [`원본이 바뀌었어요 (${e.source.changed.join(", ")})`,
+        e.source.status === "changed" || e.source.moved ? h("span", { class: "srcbox__msg" }, [e.source.changed.length ? `원본이 바뀌었어요 (${e.source.changed.join(", ")})` : "원본의 반복이 나뉘었어요 (내용은 같아요)",
           h("button", { class: "btn btn--ghost btn--sm", type: "button", text: "원본대로 맞추기", onclick: (ev) => busy(ev.currentTarget, async () => {
             await act(() => api(`/events/${e.id}/source-sync`, { method: "POST" }), "원본대로 맞췄어요."); refresh();
           }) })]) : null,
-        e.source.status === "deleted" ? h("span", { class: "srcbox__msg", text: "원본에서 지워졌어요" }) : null,
+        e.source.status === "deleted" ? h("span", { class: "srcbox__msg", text: "원본에서 지워졌어요" + (e.sourceEdited?.gone ? ` (${ago(e.sourceEdited.at)} 알게 됨)` : "") }) : null,
+        e.source.status === "unknown" ? h("span", { class: "srcbox__msg", text: { lost: "원본의 이 회차를 찾지 못했어요 (옮겼거나 지웠을 수 있어요)", out: "원본이 가져오는 기간 밖이라 확인할 수 없어요", unlinked: "원본 캘린더 연결이 끊겨서 확인할 수 없어요" }[e.source.reason] || "원본을 아직 확인하지 못했어요" }) : null,
         ...(e.sameSource || []).map((x) => h("button", { class: "link-btn", type: "button", onclick: () => openPeek("event", x.eventId) }, `${teamName(x.unitId)}에도 있어요 → 열기`))
       ]) : null,
       important.length ? h("div", { class: "keybox" }, [h("div", { class: "keybox__head" }, [icon("star"), "중요 메모"]), h("ul", {}, important.map((m) => h("li", { text: m.body })))]) : null,
@@ -1649,7 +1654,7 @@
       const imp = d ? d.memos.filter((m) => m.important).slice(0, 3) : [];
       const open = d ? d.tasks.filter((t) => t.status !== "done") : [];
       return h("li", {}, h("button", { class: "daycard", type: "button", onclick: () => openEv(e) }, [
-        h("div", { class: "daycard__top" }, [evDot(e), h("span", { class: "daycard__time", text: timeRange(e) }), h("strong", { text: e.title }), e.ext ? h("small", { class: "muted", text: e.calendarName }) : null]),
+        h("div", { class: "daycard__top" }, [evDot(e), h("span", { class: "daycard__time", text: timeRange(e) }), goneTag(e), h("strong", { text: e.title }), e.ext ? h("small", { class: "muted", text: e.calendarName }) : null]),
         d && d.event.agenda.length ? h("ol", { class: "daycard__agenda" }, [...d.event.agenda.slice(0, 3).map((a) => h("li", { text: a })), d.event.agenda.length > 3 ? h("li", { class: "muted", text: `외 ${d.event.agenda.length - 3}개` }) : null]) : null,
         imp.length ? h("ul", { class: "daycard__imp" }, imp.map((m) => h("li", {}, [icon("star"), h("span", { text: m.body })]))) : null,
         open.length ? h("div", { class: "daycard__tasks" }, [icon("check"), `남은 할 일 ${open.length}개`]) : null
@@ -2730,7 +2735,7 @@
           h("span", { class: "sr-title" + (done ? " is-done" : "") }, inTitle ? marked(r.text, r.hl) : [r.title]),
           inTitle ? null : h("span", { class: "sr-snip" }, [`${r.field}: `, ...marked(r.text, r.hl)]),
           r.type === "memo" && r.meetingTitle ? h("span", { class: "sr-snip" }, `회의: ${r.meetingTitle}`) : r.ext ? h("span", { class: "sr-snip", text: label }) : null,
-          srcTag(r)
+          goneTag(r), srcTag(r)
         ])
       ]));
     }
@@ -2753,17 +2758,19 @@
         const day = ymd(d);
         const { ev, tk, n } = itemsOn(day);
         const chips = [
-          ...ev.map((e) => h("button", { class: `chip c${evColor(e)}` + (e.startDate !== e.endDate ? " chip--span" : "") + (e.ext ? " is-ext" : ""), type: "button", "data-peek": evKey(e), title: `${e.title} · ${whenLabel(e)}${e.ext ? ` · ${e.calendarName}` : ""}`, onclick: (x) => { x.stopPropagation(); openEv(e); } },
-            [h("i", { class: "chip__dot" }), srcTag(e, true), h("span", { text: (e.startTime && e.startDate === day ? e.startTime + " " : "") + e.title })])),
+          ...ev.map((e) => h("button", { class: `chip c${evColor(e)}` + (e.startDate !== e.endDate ? " chip--span" : "") + (e.ext ? " is-ext" : ""), type: "button", "data-peek": evKey(e), title: `${e.sourceGone ? "[원본 지워짐] " : ""}${e.title} · ${whenLabel(e)}${e.ext ? ` · ${e.calendarName}` : ""}`, onclick: (x) => { x.stopPropagation(); openEv(e); } },
+            [h("i", { class: "chip__dot" }), goneTag(e), srcTag(e, true), h("span", { text: (e.startTime && e.startDate === day ? e.startTime + " " : "") + e.title })])),
           ...tk.map((x) => h("button", { class: `chip chip--task c${KIND.task.color}` + (x.status === "done" ? " is-done" : ""), type: "button", "data-peek": `task:${x.id}`, title: `할 일 · ${x.title}`, onclick: (y) => { y.stopPropagation(); openPeek("task", x.id); } },
             [h("i", { class: "chip__box" }), h("span", { text: x.title })]))
         ];
+        const gone = ev.filter((e) => e.sourceGone).length, goneMore = ev.slice(MAX_CHIPS).filter((e) => e.sourceGone).length;
         const cell = h("div", {
           class: "cal-day" + (d.getMonth() !== m ? " is-out" : "") + (day === t ? " is-today" : "") + (d.getDay() === 0 ? " is-sun" : d.getDay() === 6 ? " is-sat" : ""),
-          role: "gridcell", tabindex: "0", "data-peek": `day:${day}`, "aria-label": `${dateLabel(day)}${n ? `, ${n}개` : ""}`
+          role: "gridcell", tabindex: "0", "data-peek": `day:${day}`, "aria-label": `${dateLabel(day)}${n ? `, ${n}개` : ""}${gone ? `, 원본 지워짐 ${gone}건` : ""}`
         }, [
           h("span", { class: "cal-num", text: d.getDate() }),
-          h("div", { class: "cal-chips" }, [...chips.slice(0, MAX_CHIPS), chips.length > MAX_CHIPS ? h("span", { class: "cal-more", text: `+${chips.length - MAX_CHIPS}개 더보기` }) : null]),
+          h("div", { class: "cal-chips" }, [...chips.slice(0, MAX_CHIPS), chips.length > MAX_CHIPS ? h("span", { class: "cal-more", text: `+${chips.length - MAX_CHIPS}개 더보기` }) : null, goneMore ? h("span", { class: "gone-tag", title: GONE_HINT, text: `원본 지워짐 ${goneMore}` }) : null]),
+          gone ? h("span", { class: "cal-gone", "aria-hidden": "true", title: `원본 지워짐 ${gone}건`, text: "지워짐" }) : null,
           h("div", { class: "cal-dots", "aria-hidden": "true" }, [...ev.slice(0, 3).map((e) => h("i", { class: `c${evColor(e)}` })), ...tk.slice(0, 2).map(() => h("i", { class: `c${KIND.task.color}` }))])
         ]);
         cell.addEventListener("click", () => openPeek("day", day));
@@ -2842,7 +2849,7 @@
     return h("li", {}, h("button", { class: "mrow", type: "button", "data-peek": evKey(e), onclick: () => openEv(e) }, [
       h("span", { class: "mrow__time" }, [hideDate ? null : h("small", { text: relDay(e.startDate) || shortDate(e.startDate) }), timeRange(e)]),
       evDot(e),
-      h("span", { class: "mrow__title" }, [h("strong", { text: e.title }), e.ext ? h("span", { class: "ext-badge", text: e.calendarName }) : null, srcTag(e),
+      h("span", { class: "mrow__title" }, [goneTag(e), h("strong", { text: e.title }), e.ext ? h("span", { class: "ext-badge", text: e.calendarName }) : null, srcTag(e),
         (e.alsoIn || []).length ? h("span", { class: "ext-badge", title: `같은 WYD 일정이 ${e.alsoIn.map((x) => teamName(x.unitId)).join(", ")}에도 있어요`, text: `+${e.alsoIn.map((x) => teamName(x.unitId)).join(", ")}` }) : null, catChip(e.categoryId), ...tagChips(e.tagIds).slice(0, 2),
         e.openTasks ? h("span", { class: "mini-badge" }, [icon("check"), `할 일 ${e.openTasks}`]) : null,
         e.importantMemos ? h("span", { class: "mini-badge mini-badge--star" }, [icon("star"), String(e.importantMemos)]) : null]),

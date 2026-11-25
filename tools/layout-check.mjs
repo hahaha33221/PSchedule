@@ -100,6 +100,11 @@ for (const d of [1, 2]) for (let i = 0; i < (d === 1 ? 5 : 20); i++) {
   else if (i === 2) abs(d, i, "Fr. 시험파하 휴가", { from: 0, to: 0 }); else if (i === 3) abs(d, i, "[시험]나눌 수 없는 아주 긴 제목의 부재 알림 한 줄-어디어디 다녀옴(09~18)"); else abs(d, i, `시험사람${"가나다라"[i % 4]}_오전반차`, i === 4 ? { a: "06:00", b: "08:00" } : {});
 }
 db.prepare("UPDATE calendar_events SET start_date = ?, end_date = ? WHERE uid = 'ab2-2'").run(day(2), day(4));
+// 구글 원본이 지워진 일정: 오늘·내일, 시각 있음·종일·겹침·짧음
+for (const [d, t, a, b] of [[0, "[A204] 원본이 지워진 아주 긴 이름의 회의라서 좁은 칸에서는 잘려야 하는 시험", "20:00", "21:00"], [0, "이재호 원본 지워진 종일", null, null], [1, "[A204] 원본이 지워진 아주 긴 이름의 회의라서 잘려야 함", "13:00", "14:00"], [1, "[A205] 짧게 지워짐", "08:00", "08:20"], [1, "[A205] 겹친 짧은 것", "08:00", "08:20"], [1, "이재호 원본 지워진 종일", null, null]]) {
+  const x = (await post("/events", { kind: "meeting", title: t, startDate: day(d), endDate: day(d), startTime: a, endTime: b, unitId: unit, attendeeIds: [ids.staff] })).event.id;
+  if (!t.includes("겹친")) db.prepare("UPDATE events SET src_calendar_id = ?, src_uid = ?, src_inst = 'x', src_state = 'gone', src_snapshot = ? WHERE id = ?").run(cal, "gone" + x, JSON.stringify({ calendarName: "WYD" }), x);
+}
 // 수정된 일정: 수정됨·날짜 바뀜, 시간 겹침과 함께, 옮김·취소 줄
 const evs = (await call(`/events?from=${day(0)}&to=${day(0)}`)).events, evId = (t) => evs.find((e) => e.title.includes(t)).id;
 await call(`/events/${evId("두 번째 시험")}`, "PATCH", { location: "본관 5층" });

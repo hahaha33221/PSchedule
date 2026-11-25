@@ -107,6 +107,7 @@ export function createCalendarSync(db, opts = {}) {
           for (const e of list) {
             q.add.run(id, e.uid, e.key, e.title, e.startDate, e.endDate, e.startTime, e.endTime, e.location, e.description.slice(0, 5000), e.recur);
           }
+          opts.sources?.synced(cur, urlMark(cal.url), old, feed, range);
           q.ok.run(list.length, urlMark(cal.url), id);
           db.exec("COMMIT");
         } catch (err) { db.exec("ROLLBACK"); throw err; }

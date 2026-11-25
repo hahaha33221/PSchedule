@@ -55,6 +55,9 @@ jobs:
       - name: 부재 제목 검사
         run: node tools/absence-test.mjs
 
+      - name: 구글 원본이 지워졌는지 판단 검사
+        run: node --disable-warning=ExperimentalWarning tools/source-test.mjs
+
       - name: API 서버 동작 확인
         run: |
           mkdir -p /tmp/ps
@@ -619,6 +622,27 @@ jobs:
           TS "$H" 2032-05-03 | node -e 'if(JSON.parse(require("fs").readFileSync(0)).absences.results.length!==4)process.exit(1)'
           curl -fs -H "$H" -XPATCH -d '{"absence":null}' $B/admin/calendars/$AB | grep -q '"absence":false,"absenceSet":null'
           curl -fs -H "$H" -XDELETE $B/admin/calendars/$AB; curl -fs -H "$H" -XDELETE $B/events/$AE
+          # 원본 지워짐: 캘린더를 읽을 때 정한 값만 목록·모아 보기·검색·자세히 보기에. 모르면 지워짐이 아님, 캘린더 연결을 끊으면 사라짐, 못 보는 사람에게는 안 나감, 회차가 바뀐 원본에 다시 이을 수 있음
+          SC=$(SQ "INSERT INTO calendars (name, url) VALUES ('원본 시험', 'https://example.com/sc.ics')")
+          SX=$(SQ "INSERT INTO calendar_events (calendar_id, uid, inst, title, start_date, end_date, start_time, end_time) VALUES ($SC, 's1', 'i1', '권구택 원본', '2033-04-05', '2033-04-05', '10:00', '11:00')")
+          SE=$(curl -fs -H "$H" -XPOST -d "{\"ids\":[$SX],\"unitId\":$LG}" $B/external/import | node -pe 'JSON.parse(require("fs").readFileSync(0)).created[0].eventId')
+          SG() { curl -fs -H "$H" "$B/events?from=2033-04-05&to=2033-04-05" | node -pe 'const e=JSON.parse(require("fs").readFileSync(0)).events.find(x=>x.id==='$SE');e?!!e.sourceGone:"없음"'; }
+          ST() { curl -fs -H "$H" $B/events/$SE | node -pe 'const s=JSON.parse(require("fs").readFileSync(0)).event.source;s.status+"/"+(s.reason||"")+"/"+!!s.moved'; }
+          test "$(SG) $(ST)" = "false same//false"
+          SQ "DELETE FROM calendar_events WHERE id = $SX" >/dev/null; test "$(SG) $(ST)" = "false unknown/unchecked/false"
+          SQ "UPDATE events SET src_state = 'out' WHERE id = $SE" >/dev/null; test "$(SG) $(ST)" = "false unknown/out/false"
+          SQ "UPDATE events SET src_state = 'gone' WHERE id = $SE" >/dev/null; test "$(SG) $(ST)" = "true deleted//false"
+          curl -fs -H "$H" "$B/today-search?date=2033-04-05" | grep -q '"sourceGone":true'
+          curl -fs -H "$H" -G --data-urlencode 'q=권구택 원본' $B/search | grep -q '"sourceGone":true'
+          curl -fs -H "$(bearer "$A2")" "$B/events?from=2033-04-05&to=2033-04-05" | grep -q '"sourceGone":true'
+          if curl -fs -H "$(bearer "$A1")" "$B/events?from=2033-04-05&to=2033-04-05" | grep -q "권구택 원본"; then echo "못 볼 일정이 보여요"; exit 1; fi
+          test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPOST $B/events/$SE/source-sync)" = 400
+          SY=$(SQ "INSERT INTO calendar_events (calendar_id, uid, inst, title, start_date, end_date, start_time, end_time) VALUES ($SC, 's1', 'i2', '권구택 원본', '2033-04-05', '2033-04-05', '14:00', '15:00')")
+          SQ "UPDATE events SET src_state = 'moved', src_row = $SY WHERE id = $SE" >/dev/null; test "$(SG) $(ST)" = "false changed//true"
+          curl -fs -H "$H" -XPOST $B/events/$SE/source-sync | grep -q '"startTime":"14:00"'; test "$(SG) $(ST)" = "false same//false"
+          SQ "DELETE FROM calendar_events WHERE id = $SY" >/dev/null; SQ "UPDATE events SET src_state = 'gone' WHERE id = $SE" >/dev/null
+          curl -fs -H "$H" -XDELETE $B/admin/calendars/$SC; test "$(SG) $(ST)" = "false unknown/unlinked/false"
+          curl -fs -H "$H" -XDELETE $B/events/$SE
           # 방 별명과 '회의실 아님': 두 줄에 같은 표기는 거절, skip 을 안 보내면 그대로, 봉사자에게는 안 나감, 표기 하나씩도 관리자만
           curl -fs -H "$H" -XPUT -d '{"rooms":["A604호"," A4 소회의실 =A4소, 4A소,, A4소 ,4층 소회의실"],"skip":["A4소","가나다"," 가 나다 "]}' $B/admin/rooms | grep -qF '"rooms":["A604호","A4 소회의실 = A4소, 4A소, 4층 소회의실"],"skip":["가나다"]'
           test "$(curl -s -o /dev/null -w '%{http_code}' -H "$H" -XPUT -d '{"rooms":["A604호","A4 소회의실 = A 604호"]}' $B/admin/rooms)" = 400

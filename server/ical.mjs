@@ -296,7 +296,7 @@ export function expandCalendar(icsText, range, feed) {
   }
 
   const out = [];
-  const uids = feed ? (feed.uids = new Set()) : null, cancelled = feed ? (feed.cancelled = new Set()) : null;
+  const uids = feed ? (feed.uids = new Set()) : null, recurring = feed ? (feed.recurring = new Set()) : null, cancelled = feed ? (feed.cancelled = new Set()) : null;
   const cut = (uid) => uid.slice(0, 500);
   // recur: 0 단발 · 1 반복 · 2 UID 가 없어 다음에 읽을 때 이어 볼 수 없음
   const push = (p, uid, key, startUtc, len, allDay, recur) => {
@@ -319,6 +319,7 @@ export function expandCalendar(icsText, range, feed) {
     if (!start) continue;
     const uid = text(p, "UID") || `${text(p, "SUMMARY")}@${ds.value}`;
     uids?.add(cut(uid));
+    if (first(p, "RRULE") || first(p, "RDATE")) recurring?.add(cut(uid));
     const len = eventLength(p, start);
     const rr = first(p, "RRULE");
     if (!rr) {

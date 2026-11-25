@@ -2332,3 +2332,17 @@ button.tl-moved__title { cursor: pointer; }
 .today-away__row:hover, .today-away__row.is-peeked { background: var(--away-soft); }
 .today-away .today-find__title { font-size: 13.5px; }
 .today-away .today-find__time { flex: 0 1 auto; min-width: 0; }
+
+/* 구글 원본이 지워진 일정 */
+.gone-tag { flex: none; display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 6px; border: 1px dashed var(--danger); border-radius: 4px; background: var(--surface); color: var(--danger); font-size: 10.5px; font-weight: 700; line-height: 15px; }
+.rooms__chip .gone-tag, .tl-allday .gone-tag { margin-right: 4px; }
+.cal-chips > .gone-tag { align-self: flex-start; }
+.gone-tag i { font-style: normal; white-space: pre; }
+.cal-day .chip .gone-tag { padding: 0 3px; }
+.cal-day .chip .gone-tag i, .rooms__ev.is-short .gone-tag i { display: none; }
+@media (max-width: 640px) { .tl__ev.is-short .gone-tag i { display: none; } }
+.sr-main .gone-tag { align-self: flex-start; }
+.tl__ev.is-short:has(.gone-tag) .tl__meta { flex-wrap: nowrap; overflow: hidden; min-width: 0; white-space: nowrap; }
+.cal-gone { display: none; }
+@media (max-width: 640px) { .cal-gone { display: block; max-width: 100%; overflow: hidden; border-radius: 3px; background: var(--danger); color: #fff; font-size: 9px; font-weight: 700; line-height: 13px; padding: 0 2px; white-space: nowrap; } }
+@media (max-width: 640px) and (prefers-color-scheme: dark) { .cal-gone { color: #1b1e26; } }

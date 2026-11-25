@@ -21,6 +21,7 @@ import { actor, setActor } from "./ctx.mjs";
 import { KEEP_DAYS, TOPICS, makeChanges } from "./changes.mjs";
 import { createCalendarSync, checkUrl, maskUrl } from "./calendars.mjs";
 import { createEventEdits, isAbsence } from "./event-edits.mjs";
+import { createEventSources } from "./event-source.mjs";
 import { parseAbsence } from "./absence.mjs";
 import { startAutoBackup, listBackups, backupNow, pruneBackups } from "./backup.mjs";
 import { vapidKeys, sendPush, pushEndpointOk } from "./push.mjs";
@@ -74,7 +75,8 @@ const extV = (v) => ({ admin: v.admin, units: v.units });
 const created = ensureAdmin(db);
 if (created) console.log(`관리자 계정을 만들었어요 → 아이디 ${created.login} / 비밀번호 ${created.password} (로그인 후 바로 바꿔 주세요)`);
 const eventEdits = createEventEdits(db);
-const calendarSync = createCalendarSync(db, { edits: eventEdits });
+const eventSources = createEventSources(db);
+const calendarSync = createCalendarSync(db, { edits: eventEdits, sources: eventSources });
 calendarSync.start(process.env.CALENDAR_SYNC_MINUTES);
 startAutoBackup(db, { dir: BACKUP_DIR, keepDays: BACKUP_KEEP_DAYS, hour: BACKUP_HOUR });
 
@@ -210,8 +212,11 @@ const q = {
   // 구글 캘린더 일정 → 우리 소속 일정 (원본 연결)
   importedFrom: db.prepare(`SELECT e.id, e.unit_id FROM events e WHERE e.src_calendar_id = :cal AND e.src_uid = :uid_ AND e.src_inst = :inst AND ${EV_VIS("e")}`),
   importedAny: db.prepare("SELECT id, unit_id FROM events WHERE src_calendar_id = ? AND src_uid = ? AND src_inst = ?"),
+  // 회차 키가 바뀐 원본 (단발의 시각을 옮겼거나 반복을 나눈 것): event-source.mjs 가 이어 둔 줄
+  sourceRow: db.prepare("SELECT x.*, c.name AS calendar_name FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id WHERE x.id = ? AND x.calendar_id = ?"),
+  relinkEvent: db.prepare("UPDATE events SET src_uid = ?, src_inst = ?, src_state = 'ok' WHERE id = ?"),
   sourceNow: db.prepare("SELECT x.*, c.name AS calendar_name FROM calendar_events x JOIN calendars c ON c.id = x.calendar_id WHERE x.calendar_id = ? AND x.uid = ? AND x.inst = ?"),
-  setEventSource: db.prepare("UPDATE events SET src_calendar_id = ?, src_uid = ?, src_inst = ?, src_snapshot = ? WHERE id = ?"),
+  setEventSource: db.prepare("UPDATE events SET src_calendar_id = ?, src_uid = ?, src_inst = ?, src_snapshot = ?, src_state = 'ok', src_row = NULL, src_base = (SELECT edit_base FROM calendars WHERE id = ?) WHERE id = ?"),
   setEventFromSource: db.prepare(`UPDATE events SET title = ?, start_date = ?, end_date = ?, start_time = ?, end_time = ?, location = ?, src_snapshot = ?, updated_at = datetime('now') WHERE id = ?`),
   setTaskUnit: db.prepare("UPDATE tasks SET unit_id = ? WHERE id = ?"),
   setMemoUnit: db.prepare("UPDATE memos SET unit_id = ? WHERE id = ?"),
@@ -887,17 +892,19 @@ function sourceName(e) {
   if (!e.src_calendar_id) return null;
   try { return JSON.parse(e.src_snapshot || "{}").calendarName || "구글 캘린더"; } catch { return "구글 캘린더"; }
 }
-// 넣은 일정의 원본 상태: 같음 / 바뀜(무엇이) / 원본에서 지워짐
+// 원본에서 지워짐 (목록에서도 씀: 일정 줄에 적힌 값이라 따로 조회하지 않음)
+const sourceGone = (e) => !!e.src_calendar_id && e.src_state === "gone";
+// 넣은 일정의 원본 상태: 같음 / 바뀜(무엇이) / 원본에서 지워짐 / 모름(회차를 못 찾음·기간 밖·캘린더 연결이 없음). 지워짐은 캘린더를 제대로 읽었을 때 정한 것만
 function sourceInfo(e) {
   if (!e.src_calendar_id) return null;
   let snap = {};
   try { snap = JSON.parse(e.src_snapshot || "{}"); } catch {}
-  const now = q.sourceNow.get(e.src_calendar_id, e.src_uid, e.src_inst);
+  const now = q.sourceNow.get(e.src_calendar_id, e.src_uid, e.src_inst) || (e.src_row ? q.sourceRow.get(e.src_row, e.src_calendar_id) : null);
   const calendarName = now?.calendar_name || snap.calendarName || "구글 캘린더";
-  if (!now) return { calendarName, status: "deleted" };
+  if (!now) return { calendarName, ...(sourceGone(e) ? { status: "deleted" } : { status: "unknown", reason: q.calendar.get(e.src_calendar_id) ? (["lost", "out"].includes(e.src_state) ? e.src_state : "unchecked") : "unlinked" }) };
   const cur = sourceValues(now);
   const changed = SOURCE_FIELDS.filter((k) => (cur[k] || "") !== (snap[k] || ""));
-  return { calendarName, status: changed.length ? "changed" : "same", changed: changed.map((k) => SOURCE_LABEL[k]), current: cur, externalId: now.id };
+  return { calendarName, status: changed.length ? "changed" : "same", changed: changed.map((k) => SOURCE_LABEL[k]), current: cur, externalId: now.id, moved: now.inst !== e.src_inst || now.uid !== e.src_uid ? { uid: now.uid, inst: now.inst } : null };
 }
 // 이 팀에 넣을 수 있는지: 관리자는 아무 팀, 멤버는 볼 수 있는 팀(내 소속과 그 아래) 또는 팀 없음
 const canUseUnit = (user, v, unitId) => user.role === "admin" || !unitId || JSON.parse(v.units).includes(unitId);
@@ -980,7 +987,7 @@ function eventsOut(rows, user) {
   return rows.map((e) => ({
     id: e.id, kind: e.kind, title: e.title, startDate: e.start_date, endDate: e.end_date, startTime: e.start_time, endTime: e.end_time,
     location: e.location, categoryId: e.category_id, unitId: e.unit_id, tagIds: tags.get(e.id), attendeeIds: att.get(e.id), guestNames: guests.get(e.id), author: e.author, createdBy: e.created_by,
-    openTasks: e.open_tasks, importantMemos: e.important_memos, comments: e.comments, fromCalendar: !!e.src_calendar_id, sourceName: sourceName(e),
+    openTasks: e.open_tasks, importantMemos: e.important_memos, comments: e.comments, fromCalendar: !!e.src_calendar_id, sourceName: sourceName(e), ...(sourceGone(e) ? { sourceGone: true } : {}),
     sourceKey: e.src_calendar_id ? `${e.src_calendar_id}|${e.src_uid}|${e.src_inst}` : null,
     canDelete: user.role === "admin" || e.created_by === user.id
   }));
@@ -1083,7 +1090,7 @@ function itemUnit(b, user, cur, meetingId) {
 /* ----- 검색 (대시보드): 회의·일정·할 일·메모·가져온 일정의 안쪽 내용까지, 전체 기간 ----- */
 const SEARCH_LIMIT = 300;
 const searchQ = {
-  events: db.prepare("SELECT id, kind, title, start_date, end_date, start_time, end_time, location, description, agenda, category_id, unit_id, created_by, src_calendar_id, src_uid, src_inst, src_snapshot FROM events"),
+  events: db.prepare("SELECT id, kind, title, start_date, end_date, start_time, end_time, location, description, agenda, category_id, unit_id, created_by, src_calendar_id, src_uid, src_inst, src_snapshot, src_state FROM events"),
   attendees: db.prepare("SELECT a.event_id, a.user_id, u.name FROM event_attendees a JOIN users u ON u.id = a.user_id"),
   eventTags: db.prepare("SELECT x.event_id, t.name FROM event_tags x JOIN tags t ON t.id = x.tag_id"),
   links: db.prepare("SELECT event_id, title, url FROM event_links"),
@@ -1166,7 +1173,7 @@ function runSearch(q, kind, v, day, away) {
         ["분류", cats.get(e.category_id)], ...(att.get(e.id) || []).map((x) => ["참석자", x.name]), ...(guests.get(e.id) || []).map((x) => ["외부 참석자", x])];
       const off = e.src_calendar_id && away?.has(e.src_calendar_id);
       const h = hit(off ? [["제목", e.title]] : fields);
-      if (h) out.push({ type: e.kind, id: e.id, title: e.title, date: e.start_date, endDate: e.end_date, time: e.start_time, endTime: e.end_time, sourceName: sourceName(e),
+      if (h) out.push({ type: e.kind, id: e.id, title: e.title, date: e.start_date, endDate: e.end_date, time: e.start_time, endTime: e.end_time, sourceName: sourceName(e), ...(sourceGone(e) ? { sourceGone: true } : {}),
         categoryId: e.category_id, unitId: e.unit_id, createdBy: e.created_by, attendeeIds: (att.get(e.id) || []).map((x) => x.user_id), ...(ed?.event(e.id) ? { edited: ed.event(e.id) } : ed?.source(e) ? { sourceEdited: ed.source(e) } : {}), ...(off ? absenceMark(e.title) : {}), ...h });
     }
     const imported = new Set(searchQ_vis.imported.all(v).map((k) => `${k.cal}|${k.uid_}|${k.inst}`));
@@ -3916,10 +3923,10 @@ async function api(req, res, path) {
     if (em[2] === "source-sync") {
       if (method !== "POST") return send(res, 405, { error: "Method not allowed" });
       const info = sourceInfo(e);
-      if (!info || info.status === "deleted") throw bad("원본 일정을 찾을 수 없어요.");
+      if (!info || !info.current) throw bad("원본 일정을 찾을 수 없어요.");
       const c = info.current;
       const m = eventEdits.mark(e);
-      inTx(() => { q.setEventFromSource.run(c.title, c.startDate, c.endDate, c.startTime, c.endTime, c.location, JSON.stringify(c), e.id); eventEdits.edited(m); });
+      inTx(() => { q.setEventFromSource.run(c.title, c.startDate, c.endDate, c.startTime, c.endTime, c.location, JSON.stringify(c), e.id); if (info.moved) q.relinkEvent.run(info.moved.uid, info.moved.inst, e.id); eventEdits.edited(m); });
       return send(res, 200, eventDetail(q.event.get(e.id), user, V));
     }
     // 외부 참석자 넣기 (회의를 볼 수 있는 사람 누구나, 회의록을 함께 채우듯)
@@ -3982,7 +3989,7 @@ async function api(req, res, path) {
         const input = eventInput({ kind, title: v.title, startDate: v.startDate, endDate: v.endDate, startTime: v.startTime, endTime: v.endTime, location: v.location, description: (x.description || "").slice(0, LIMITS.description), categoryId: x.category_id ?? null });
         const id = Number(q.addEvent.run(...input, user.id).lastInsertRowid);
         q.setEventUnit.run(unit, id);
-        q.setEventSource.run(x.calendar_id, x.uid, x.inst, JSON.stringify(v), id);
+        q.setEventSource.run(x.calendar_id, x.uid, x.inst, JSON.stringify(v), x.calendar_id, id);
         saveEventRelations(id, { attendeeIds: has(b, "attendeeIds") ? b.attendeeIds : [user.id] });
         created.push({ externalId: x.id, eventId: id });
       }
@@ -4660,7 +4667,7 @@ async function api(req, res, path) {
         return send(res, 200, { calendar: calendarAdminOut(q.calendar.get(c.id)), sync, warn });
       }
       if (!calm[2] && method === "DELETE") {
-        q.delCalendar.run(c.id); // 가져온 일정도 함께 지워짐
+        inTx(() => { eventSources.forget(c.id); q.delCalendar.run(c.id); }); // 가져온 일정도 함께 지워짐
         console.log(`[admin] ${user.login} → 외부 캘린더 #${c.id} 삭제`);
         return send(res, 204);
       }

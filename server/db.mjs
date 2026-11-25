@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import crypto from "node:crypto";
 import { htmlToText } from "./ical.mjs";
 import { addEventEditTables } from "./event-edits.mjs";
+import { addEventSourceColumns } from "./event-source.mjs";
 
 export function openDb(file) {
   mkdirSync(dirname(file), { recursive: true });
@@ -257,6 +258,7 @@ export function openDb(file) {
   seedTags(db);
   addOpsTables(db);
   addEventEditTables(db);
+  addEventSourceColumns(db);
   return db;
 }
 
