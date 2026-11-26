@@ -294,6 +294,15 @@
     const moved = x.changes.some((c) => c.kind === "date");
     return h("span", { class: "edit-tag" + (cls ? " " + cls : ""), title: x.changes.map(changeLine).join("\n") || null, text: word + (moved ? " · 날짜 바뀜" : "") });
   }
+  // 바뀐 내용 한 줄 (상세를 열지 않아도 보이게): 2개까지, 나머지는 '외 N'
+  function changeSummary(e, cls) {
+    if (e.sourceGone) return h("span", { class: "chg-line is-gone" + (cls ? " " + cls : ""), text: "구글 캘린더 원본이 없어졌어요. 이 일정은 남아 있어요." });
+    const x = e.edited || (e.sourceEdited?.gone ? null : e.sourceEdited);
+    if (!x || !x.changes.length) return null;
+    const all = x.changes.map(changeLine), more = all.length - 2;
+    return h("span", { class: "chg-line" + (cls ? " " + cls : ""), title: all.join("\n") }, [h("b", { text: e.edited ? "바뀜" : "원본 바뀜" }), ` ${all.slice(0, 2).join(" · ")}${more > 0 ? ` 외 ${more}` : ""}`]);
+  }
+  const isChanged = (e) => !!(e.sourceGone || e.edited?.changes?.length || (e.sourceEdited && !e.sourceEdited.gone && e.sourceEdited.changes?.length));
   function editBox(e) {
     return [["edited", e.edited], ["source", e.sourceEdited]].filter((x) => x[1] && !x[1].gone).map(([k, x]) => h("div", { class: "edit-box" }, [
       h("div", { class: "edit-box__head" }, [h("strong", { text: k === "edited" ? "수정됨" : "원본 수정됨" }), h("span", { class: "muted small", text: `${ago(x.at)} ${e.ext || k === "source" ? "알게 됨" : "고침"}` })]),
@@ -2184,7 +2193,8 @@
           editTag(x),
           x.absence ? awayTitle(x) : h("span", { class: "today-find__title", text: x.title }),
           extra ? h("span", { class: "today-find__plus", "aria-label": `${x.field}에서 찾음`, text: "+" }) : null,
-          kind.when ? h("span", { class: "today-find__time", text: when }) : null
+          kind.when ? h("span", { class: "today-find__time", text: when }) : null,
+          changeSummary(x, "today-find__chg")
         ]));
       };
       // 부재: '이름 · 종류'(나눌 수 없으면 제목 그대로), 여러 날이면 기간과 며칠째인지
@@ -2210,11 +2220,16 @@
           awayOpen && away.results.length > AWAY_SHOW ? h("button", { class: "link-btn", type: "button", "aria-expanded": String(all), text: all ? "접기" : `모두 보기 (${away.results.length}건)`, onclick: (ev) => { store.set("ps.awayAll", all ? "0" : "1"); ev.currentTarget.closest(".today-away").replaceWith(awayBox()); } }) : null
         ]);
       };
+      // 제목 줄 요약(접어도 보임): 이름마다 센 시간 겹침, 바뀐 일정은 같은 일정을 한 번만
+      const sumClash = r.groups.reduce((n, g) => n + withClashes(g.results).clashes, 0);
+      const sumChg = new Set(r.groups.flatMap((g) => g.results.filter(isChanged).map((x) => `${x.ext ? "x" : x.type}:${x.id}`))).size;
       const open = store.get("ps.findOpen", "1") === "1"; // 처음에는 펼친 상태
       const toggle = h("button", { class: "today-find__toggle", type: "button", "aria-expanded": String(open), onclick: () => { store.set("ps.findOpen", open ? "0" : "1"); quiet(loadFind()); } }, [
         h("span", { class: "today-find__chev" + (open ? " is-open" : ""), html: ICON.right }),
         h("h2", { class: "card__title", text: "이름으로 모아 보기" }),
-        h("span", { class: "muted small", text: `${r.groups.reduce((n, g) => n + g.results.length, 0)}건${away.on ? ` · 부재 ${away.results.length}건` : ""}` })
+        h("span", { class: "muted small", text: `${r.groups.reduce((n, g) => n + g.results.length, 0)}건${away.on ? ` · 부재 ${away.results.length}건` : ""}` }),
+        sumClash ? h("span", { class: "today-find__clashsum today-find__headsum", text: `시간 겹침 ${sumClash}건` }) : null,
+        sumChg ? h("span", { class: "today-find__chgbadge", text: `변경 ${sumChg}건` }) : null
       ]);
       findBox.classList.toggle("is-folded", !open);
       fill(findBox,
@@ -2226,7 +2241,7 @@
         open ? h("div", { class: "today-find__chips" }, [...r.common.map((k) => chip(k, false)), ...r.mine.map((k) => chip(k, true)), add]) : null,
         open ? h("div", { class: "today-find__chips today-find__chips--ex" }, [h("span", { class: "muted small", text: "제외" }), ...r.excludes.map(exChip), exAdd, h("span", { class: "muted small today-find__exhint", text: "이 말이 제목·내용에 들어간 일정·할 일·메모와 부재는 '이름으로 모아 보기'에서만 빼요. 나에게만 적용되고 다른 화면에는 그대로 보여요." })]) : null,
         open ? h("div", { class: "today-find__groups" }, r.groups.map((g) => { const { list, clashes } = withClashes(g.results); return h("div", { class: "today-find__group" + (clashes ? " has-clash" : "") }, [
-          h("h3", {}, [g.keyword, h("span", { class: "muted small", text: ` ${g.results.length}건${g.excluded ? ` (제외 ${g.excluded}${g.excludedAbsences ? `, 그중 부재 ${g.excludedAbsences}` : ""})` : ""}` }), clashes ? h("span", { class: "today-find__clashsum", text: `시간 겹침 ${clashes}건` }) : null]),
+          h("h3", {}, [g.keyword, h("span", { class: "muted small", text: ` ${g.results.length}건${g.excluded ? ` (제외 ${g.excluded}${g.excludedAbsences ? `, 그중 부재 ${g.excludedAbsences}` : ""})` : ""}` }), clashes ? h("span", { class: "today-find__clashsum", text: `시간 겹침 ${clashes}건` }, list.some((x) => x.clash && isChanged(x)) ? h("span", { class: "today-find__chgsum", text: ` · 그중 변경 ${list.filter((x) => x.clash && isChanged(x)).length}건` }) : null) : null]),
           g.results.length ? h("ul", { class: "today-find__list" }, list.map((x) => row({ ...x, keyword: g.keyword }))) : h("p", { class: "muted small", text: g.excluded ? "제외어로 모두 빠졌어요." : "이 날 걸린 것이 없어요." })
         ]); })) : null,
         open && away.on ? awayBox() : null,

@@ -2408,3 +2408,13 @@ button.tl-moved__title { cursor: pointer; }
 .today-away ul, .today-away > p { margin-top: 6px; }
 .today-find__exhint { flex: 1 1 220px; }
 .rooms__infogrid .field:last-child { grid-column: 1 / -1; }
+
+/* 이름으로 모아 보기: 바뀐 내용 한 줄과 제목 줄 요약 */
+.chg-line { display: block; min-width: 0; color: var(--edit); font-size: 12.5px; line-height: 1.4; overflow-wrap: anywhere; }
+.chg-line b { font-weight: 700; }
+.chg-line.is-gone { color: var(--danger); }
+.today-find__chg { flex: 1 1 100%; }
+.today-find__chgsum { color: var(--edit); }
+.today-find__headsum { margin-left: 0; }
+.today-find__chgbadge { flex: none; padding: 1px 7px; border: 1px solid var(--edit); border-radius: 999px; background: var(--edit-soft); color: var(--edit); font-size: 11.5px; font-weight: 700; }
+.today-find__toggle { flex-wrap: wrap; min-width: 0; text-align: left; }

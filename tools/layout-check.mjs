@@ -1,5 +1,6 @@
 // 반응형 검사: 역할마다 화면·입력 판을 360·390·768·1024·1440px 로 열어 화면 밖으로 넘치거나 잘리는 것이 있는지 봄
-//   node tools/layout-check.mjs [--shots=폴더] [--role=dept] [--only=글자] [--widths=360,390]
+//   node tools/layout-check.mjs [--shots=폴더] [--role=dept] [--only=글자] [--widths=360,390] [--focus=css] [--ls=키=값]
+//   --focus: 찍기 전에 그 칸이 보이게 내림 · --ls: 찍기 전에 이 기기 설정(localStorage)을 넣음 (예: ps.findOpen=0)
 // 크롬(headless)이 있어야 함. 임시 DB 에 지어낸 긴 글자 자료를 넣고 검사한 뒤 지움 (운영·내 개발 DB 는 건드리지 않음)
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -8,9 +9,9 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-const opt = (k) => process.argv.find((a) => a.startsWith(`--${k}=`))?.split("=")[1];
+const opt = (k) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3);
 const WIDTHS = (opt("widths") || "360,390,768,1024,1440").split(",").map(Number);
-const SHOTS = opt("shots"), ONLY = opt("only"), ROLE = opt("role"); // --role=dept (예전 화면은 dept0)
+const SHOTS = opt("shots"), ONLY = opt("only"), ROLE = opt("role"), FOCUS = opt("focus"), LS = opt("ls"); // --role=dept (예전 화면은 dept0)
 const CHROME = [process.env.CHROME_PATH, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"].find((p) => p && existsSync(p));
 if (!CHROME) { console.error("크롬을 찾을 수 없어요. CHROME_PATH 로 알려 주세요."); process.exit(2); }
 const ROOT = resolve(import.meta.dirname, ".."), TMP = mkdtempSync(join(tmpdir(), "ps-layout-"));
@@ -116,6 +117,12 @@ for (const [t, a, b, p2] of [["[A501] 겹치고 고친 회의 이름이 아주 �
   const x = (await post("/events", { kind: "meeting", title: t, startDate: day(1), endDate: day(1), startTime: a, endTime: b, unitId: unit })).event.id;
   if (p2) await call(`/events/${x}`, "PATCH", p2);
 }
+// 이름으로 모아 보기(내일): 시간이 겹치고 고친 일정(바뀐 것 3가지 → '외 1'), 겹치지 않고 고친 일정
+for (const t of [admin, tok.staff]) await call("/today-keywords", "PUT", { keywords: ["시험검색"] }, t);
+for (const [t, a, b, p2] of [["시험검색 겹치고 고친 회의", "15:30", "16:30", { startTime: "16:30", endTime: "17:30", location: "본관 시험실", title: "시험검색 겹치고 고친 회의 제목 바꿈 잘려야 함" }], ["시험검색 겹친 다른 회의", "17:00", "18:00"], ["시험검색 따로 고친 회의", "08:00", "09:00", { location: "별관" }]]) {
+  const x = (await post("/events", { kind: "meeting", title: t, startDate: day(1), endDate: day(1), startTime: a, endTime: b, unitId: unit })).event.id;
+  if (p2) await call(`/events/${x}`, "PATCH", p2);
+}
 await mv("[A103] 내일로 옮겨 온 이재호 회의", day(5), { startDate: day(1), endDate: day(1) });
 await mv("내일에서 다른 날로 옮긴 아주 긴 제목의 회의 이름이 두 줄로 넘어가는지 보는 시험", day(1), { startDate: day(3), endDate: day(3) });
 await mv("내일 취소한 회의 시험", day(1));
@@ -181,12 +188,12 @@ const FIND = `(() => {
 const settle = async () => { let prev = ""; for (let i = 0; i < 25; i++) { await sleep(90); const cur = await ev(`document.querySelector("main")?.querySelector(".loading, .spinner") ? "..." + Math.random() : String(document.querySelector("main")?.innerHTML.length || 0)`); if (cur === prev && cur !== "0") return; prev = cur; } };
 const problems = new Map(); let views = 0, dialogs = 0, clicks = 0;
 const note = (key, w, list) => { for (const p of new Set(list)) { const k = `${key} │ ${p.replace(/밖으로 -?\\d+~-?\\d+/, "밖으로")}`; problems.set(k, [...(problems.get(k) || []), w]); } };
-const shot = async (file) => { if (!SHOTS) return; mkdirSync(SHOTS, { recursive: true }); const r = await cdp("Page.captureScreenshot", { format: "jpeg", quality: 60 }); writeFileSync(join(SHOTS, `${file.replace(/[^\w가-힣.-]+/g, "_")}.jpg`), Buffer.from(r.data, "base64")); };
+const shot = async (file) => { if (!SHOTS) return; mkdirSync(SHOTS, { recursive: true }); if (FOCUS) { await ev(`document.querySelector(${JSON.stringify(FOCUS)})?.scrollIntoView({ block: "start" }); scrollBy(0, -64); 1`); await sleep(150); } const r = await cdp("Page.captureScreenshot", { format: "jpeg", quality: 60 }); writeFileSync(join(SHOTS, `${file.replace(/[^\w가-힣.-]+/g, "_")}.jpg`), Buffer.from(r.data, "base64")); };
 for (const [role, steps, list] of RUNS) {
   if (ROLE && ROLE !== role + (steps ? "" : "0")) continue;
   await setMenu(steps);
   await cdp("Page.navigate", { url: `${B}/manifest.webmanifest` }); await sleep(150);
-  await ev(`localStorage.clear(); sessionStorage.clear(); localStorage.setItem("ps.token", ${JSON.stringify(tok[role])}); 1`);
+  await ev(`localStorage.clear(); sessionStorage.clear(); localStorage.setItem("ps.token", ${JSON.stringify(tok[role])}); ${LS ? `localStorage.setItem(${JSON.stringify(LS.split("=")[0])}, ${JSON.stringify(LS.split("=").slice(1).join("="))});` : ""} 1`);
   for (const w of WIDTHS) {
     await cdp("Emulation.setDeviceMetricsOverride", { width: w, height: w < 600 ? 800 : 900, deviceScaleFactor: 1, mobile: w < 600 });
     await cdp("Page.navigate", { url: `${B}/` }); await sleep(500);
