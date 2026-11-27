@@ -5613,7 +5613,7 @@
                 !open && here ? h("span", { class: "n3-grp__here", text: "지금 여기" }) : null]),
               h("div", { class: "side__kids n3-grp__kids", id: kidsId, hidden: !open }, g.kids.map(([k, l, ic]) => {
                 const on = k === tab;
-                return h("a", { class: "side__link side__link--sub n3-leaf" + (on ? " is-active" : ""), href: `#/${k}`, "aria-current": on ? "page" : null, title: `${g.name} › ${l}`, onclick: () => toggleNav(false) }, [icon(ic), h("span", { class: "side__text", text: l }), N3_SOON[k] ? h("span", { class: "n3-soon-tag", text: "준비 중" }) : chgBadge(k.startsWith("n3-") ? null : chgN(k))]);
+                return h("a", { class: "side__link side__link--sub n3-leaf" + (on ? " is-active" : ""), href: `#/${k}`, "aria-current": on ? "page" : null, title: `${g.name} › ${l}`, onclick: () => toggleNav(false) }, [icon(ic), h("span", { class: "side__text", text: l }), N3_SOON[k] ? h("span", { class: "n3-soon-tag", text: "준비 중" }) : chgBadge(k.startsWith("n3-") && !k.endsWith("-ins") ? null : chgN(k))]);
               }))
             ]);
           })
@@ -5624,8 +5624,8 @@
           team ? link("tcal", "캘린더", "cal") : null,
           ...(nav3 && !team ? n3Nav() : stepCats(team ? "team" : "dept").map((cat) => group(cat.icon, cat.name, cat.steps.map(([k, l], i) => stepLink(k, l, i + 1))))),
           group("chat", "소통", team
-            ? [sub("vschedule", "일정", "cal"), sub("tissues", "이슈", "note"), sub("vboard", "게시판", "chat"), sub("vnotices", "공지", "bell", state.unreadNotices)]
-            : [sub("vcontacts", "연락·문의 기록", "phone"), sub("vtraining", "기본 교육", "check"), sub("vissues", "이슈", "note"), sub("vboard", "게시판", "chat"), sub("vnotices", "공지", "bell", state.unreadNotices)])
+            ? [sub("vschedule", "일정", "cal"), nav3 ? null : sub("tissues", "이슈", "note"), sub("vboard", "게시판", "chat"), sub("vnotices", "공지", "bell", state.unreadNotices)]
+            : [sub("vcontacts", "연락·문의 기록", "phone"), sub("vtraining", "기본 교육", "check"), nav3 ? null : sub("vissues", "이슈", "note"), sub("vboard", "게시판", "chat"), sub("vnotices", "공지", "bell", state.unreadNotices)])
         ].filter(Boolean));
       }
       if (team) return navBox.replaceChildren(
@@ -7770,13 +7770,23 @@
         h("span", { class: "small " + (idx >= 0 ? "ops-home__todo" : "muted"), text: idx >= 0 ? `처리할 일 ${c[k]}건` : "지금 처리할 일이 없어요. 1단계부터 둘러볼 수 있어요." })
       ]);
     };
+    // 새 메뉴(nav3) 부서: 재료 › 입고 · 재료 › 출고 · 완제품 › 묵주 · 완제품 › 손십자가 · 택배 순서로, 묶음마다 처리할 일이 있는 화면(없으면 첫 화면)
+    const n3Cards = () => N3_DEPT.flatMap((cat) => (cat.kids ? cat.kids.map((g) => ({ path: `${cat.name} › ${g.name}`, icon: cat.icon, list: g.kids })) : [{ path: cat.name, icon: cat.icon, list: cat.links }])).map((g) => {
+      const live = g.list.filter(([k]) => !N3_SOON[k]), todo = live.find(([k]) => c[k]);
+      const [k, label] = todo || live[0];
+      return h("a", { class: "card ops-home__card" + (todo ? " is-todo" : ""), href: `#/${k}` }, [
+        h("span", { class: "ops-home__cat" }, [icon(g.icon), g.path]),
+        h("strong", { text: label }),
+        h("span", { class: "small " + (todo ? "ops-home__todo" : "muted"), text: todo ? `처리할 일 ${c[k]}건` : live.map((x) => x[1]).join(" · ") })
+      ]);
+    });
     const tc = team ? await teamHomeCards() : null; // 팀 봉사자: 다가오는 교육 → 봉사 가능 신청 → 오늘 할 일
     return [
       tc ? h("div", { class: "stack ops-home__team" }, [tc.eduCard, tc.availCard]) : null,
       h("h1", { class: "vol__hello", text: "오늘 할 일" }),
-      h("p", { class: "muted small", text: "카테고리마다 지금 할 단계를 모았어요. 누르면 그 단계로 가고, 단계를 마치면 [다음 단계 →]가 보여요." }),
+      h("p", { class: "muted small", text: !team && nav3On() ? "메뉴 묶음마다 지금 할 화면을 모았어요. 처리할 일이 없으면 그 묶음의 첫 화면으로 가요." : "카테고리마다 지금 할 단계를 모았어요. 누르면 그 단계로 가고, 단계를 마치면 [다음 단계 →]가 보여요." }),
       c.followups ? h("a", { class: "card ops-home__card is-todo", href: "#/vcontacts" }, [h("span", { class: "ops-home__cat" }, [icon("bell"), "연락 후속 조치"]), h("strong", { text: `기한이 된 후속 조치 ${c.followups}건` }), h("span", { class: "small ops-home__todo", text: "연락 기록에서 처리해요" })]) : null,
-      h("div", { class: "ops-home" }, cats.map(card))
+      h("div", { class: "ops-home" }, !team && nav3On() ? n3Cards() : cats.map(card))
     ];
   }
   // ---- 작은 도구: 숫자 칸 · 카드 목록 · 아래에서 올라오는 입력 판 · 고르기

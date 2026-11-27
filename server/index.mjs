@@ -3506,6 +3506,11 @@ function changeView(user, role) {
     const t = TOPICS[c.topic];
     if (!t) return null;
     let menu = vol && !steps ? t[`${role}0`] : t[role];
+    // 새 메뉴(nav3)의 부서 '완제품 › 묵주·손십자가 › 검수': 검수 기록의 묶음으로 나눔 (관리자 미리보기도)
+    if (role === "dept" && (r.admin || menuOn.includes("nav3")) && (c.topic === "inspect" || c.topic === "defect")) {
+      const gid = c.scope_id || row("SELECT item_id FROM inspections WHERE id = ?", c.ref_id)?.item_id;
+      menu = gid && row("SELECT name FROM project_items WHERE id = ?", gid)?.name === "손십자가" ? "n3-c-ins" : "n3-r-ins";
+    }
     if (!menu || (t.perm && !r.can(t.perm, "v"))) return null;
     const link = role === "admin" ? t.link : role === "staff" ? t.staffLink || t.link : null;
     const out = (m, l) => ({ menu: m, link: l || m });
@@ -3572,7 +3577,7 @@ async function changesRoute(req, res, user, path, method, url) {
   // 메뉴를 열었음: 그 사람의 그 메뉴 숫자만 사라짐. '*' 는 모두 읽음
   if (path === "/api/changes/seen" && method === "POST") {
     const b = await readJson(req), menu = text(b.menu, 60, "메뉴", true);
-    const known = new Set(["alarm", ...Object.values(TOPICS).flatMap((t) => [t.dept, t.team, t.dept0, t.team0, t.staff, t.admin]), "df2", "vp/cross/recovery", ...["in", "out", "req", "recovery"].map((k) => `vp/rosary/${k}`)].filter(Boolean));
+    const known = new Set(["alarm", ...Object.values(TOPICS).flatMap((t) => [t.dept, t.team, t.dept0, t.team0, t.staff, t.admin]), "df2", "n3-r-ins", "n3-c-ins", "vp/cross/recovery", ...["in", "out", "req", "recovery"].map((k) => `vp/rosary/${k}`)].filter(Boolean));
     const menus = menu === "*" ? ["alarm", ...Object.keys(changesOut(user, role).counts)] : [menu];
     const last = db.prepare("SELECT coalesce(max(id), 0) AS n FROM changes").get().n;
     for (const m of menus.filter((x) => known.has(x))) // 변경이 없는 메뉴(홈·공지 등)는 남기지 않음

@@ -2443,3 +2443,5 @@ button.tl-moved__title { cursor: pointer; }
 .n3-soon__list { margin: 6px 0 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13.5px; }
 @media (max-width: 900px) { .n3-leaf, .n3-grp__row { min-height: 40px; } }
 @media (min-width: 901px) { .side-mini .n3-grp__row { display: none; } .side-mini .n3-leaf { padding-left: 0; } }
+/* 검수 목록 필터(팀·부서·관리자 같은 틀): 넓은 화면에서는 '시작일 ~ 끝일'을 한 줄로. 휴대폰은 그대로 (한 줄씩) */
+@media (min-width: 641px) { .filters input[type="date"] { width: auto; flex: 0 0 auto; height: 32px; font-size: 13px; border-radius: 8px; } }

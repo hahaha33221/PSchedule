@@ -139,12 +139,12 @@ const sfx = (steps) => (steps === "nav3" ? "3" : steps ? "" : "0"), tag = (steps
 
 /* ---- 볼 화면: 주소와 눌러 열 것(글자) ---- */
 const TEAM = ["thome", "alerts", "tcal", "tedu1", "tedu2", "tmake1", "tmake2", "tins1", "tins2", "tins3", "tins4", "tins5", "vschedule", "tissues", "vboard", `vboard/${bp}`, "vnotices", "vcontacts"];
-const DEPT3 = ["vhome", "n3-thread-in", "n3-cut-in", "n3-cross-in", "ds1", "n3-thread-out", "n3-cut-out", "n3-cross-out", "df1", "n3-r-ins", "n3-r-ins/bad", "n3-r-pack", "n3-r-out", "df2", "n3-c-ins", "n3-c-ins/bad", "n3-c-pack", "n3-c-out", "dr1", "ds3", "dr2", "ds2", "vcontacts"];
+const DEPT3 = ["vhome", "n3-thread-in", "n3-cut-in", "n3-cross-in", "ds1", "n3-thread-out", "n3-cut-out", "n3-cross-out", "df1", "n3-r-ins", "n3-r-ins/bad", "n3-r-pack", "n3-r-out", "df2", "n3-c-ins", "n3-c-ins/bad", "n3-c-pack", "n3-c-out", "dr1", "ds3", "dr2", "ds2", "vcontacts", "vissues"]; // vissues: 새 메뉴에는 없지만 주소로는 열림
 const DEPT = ["vhome", "alerts", "dr1", "dr2", "ds1", "ds2", "ds3", "df1", "df2", "vcontacts", "vtraining", "vissues", "vboard", "vnotices"];
 const OPS = ["dash", "mon", "ship-in", "ship-out", "stock", "cut", "buy", "contacts", "groups", "criteria", "duties"].map((k) => `ops/${k}`);
 const STAFF = ["today", `today/${day(1)}`, `today/${day(2)}`, `today/${day(6)}`, "dashboard", "tasks", "meetings", "memos", "projects", `projects/${pj}`, "stock", `stock/${led.ledger.id}`, "alerts", "notices", "orgchart", "contacts"];
 const RUNS = [
-  ["leader", true, TEAM], ["team", true, ["tedu1", "tedu2", "tmake2", "tins1"]], ["dept", true, DEPT], ["dept", "nav3", DEPT3], ["leader", "nav3", ["thome", "tedu1", "tmake1", "tins3", "tins5"]],
+  ["leader", true, TEAM], ["team", true, ["tedu1", "tedu2", "tmake2", "tins1"]], ["dept", true, DEPT], ["dept", "nav3", DEPT3], ["leader", "nav3", ["thome", "tedu1", "tmake1", "tins3", "tins5", "tissues"]],
   ["admin", true, ["alerts", "members", "org", "backup", "board", "volunteers", ...["edu", "roster", "issue", "training", "stock", "records", "inspect", "team", "wbs", "menu"].map((k) => `volunteers/${k}`), ...OPS, "ops/perms", ...STAFF.slice(0, 9)]],
   ["staff", true, [...STAFF, ...OPS.slice(0, 5)]],
   ["leader", false, ["thome", "alerts", "torgs", "trecov", "tinsp/records", "tinsp/shifts", "tissues", "tinsp/guide"]],
@@ -202,6 +202,12 @@ const note = (key, w, list) => { for (const p of new Set(list)) { const k = `${k
   await setMenu("nav3");
   const on = [await st("/team/inspections"), await st("/team/inspections", "POST", {}), await st("/team/daily")];
   if (off.some((x) => x !== 403)) note("부서 봉사자 검수 API(새 메뉴 꺼짐)", 0, [`막히지 않음 ${off}`]);
+  // 손십자가 검수: 부서도 적을 수 있고, 변경 숫자는 부서 '완제품 › 손십자가 › 검수'(n3-c-ins)에, 묵주는 n3-r-ins 에
+  const mineCross = await st("/team/inspections", "POST", { itemId: cross, stage: 3, date: day(0), source: "시험 손십자가 검수", checkedQty: 40, defects: {} });
+  await post("/admin/inspections", { itemId: cross, stage: 3, date: day(0), source: "관리자 손십자가 검수", checkedQty: 20, defects: {} });
+  await post("/admin/inspections", { itemId: gid, stage: 3, date: day(0), source: "관리자 묵주 검수", checkedQty: 20, defects: {} });
+  const cnt = (await call("/changes", "GET", null, tok.dept)).counts;
+  if (mineCross !== 201 || !cnt["n3-c-ins"] || !cnt["n3-r-ins"]) note("부서 봉사자 손십자가 검수(새 메뉴)", 0, [`적기 ${mineCross} · 숫자 손십자가 ${cnt["n3-c-ins"] || 0} · 묵주 ${cnt["n3-r-ins"] || 0}`]);
   if (on[0] !== 200 || on[1] !== 400 || on[2] !== 403) note("부서 봉사자 검수 API(새 메뉴 켬)", 0, [`보기 ${on[0]} · 적기 ${on[1]}(빈 값이면 400) · 다른 팀 API ${on[2]}`]);
 }
 const shot = async (file) => { if (!SHOTS) return; mkdirSync(SHOTS, { recursive: true }); if (FOCUS) { await ev(`document.querySelector(${JSON.stringify(FOCUS)})?.scrollIntoView({ block: "start" }); scrollBy(0, -64); 1`); await sleep(150); } const r = await cdp("Page.captureScreenshot", { format: "jpeg", quality: 60 }); writeFileSync(join(SHOTS, `${file.replace(/[^\w가-힣.-]+/g, "_")}.jpg`), Buffer.from(r.data, "base64")); };
