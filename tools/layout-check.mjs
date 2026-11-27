@@ -117,6 +117,9 @@ for (const [t, a, b, p2] of [["[A501] 겹치고 고친 회의 이름이 아주 �
   const x = (await post("/events", { kind: "meeting", title: t, startDate: day(1), endDate: day(1), startTime: a, endTime: b, unitId: unit })).event.id;
   if (p2) await call(`/events/${x}`, "PATCH", p2);
 }
+// 오늘의 일정: 긴 장소 이름(넓은 칸·짧은 칸, 오늘·내일) — 칸 안에서 … 로 줄어야 함
+for (const d of [0, 1]) for (const [t, a, b] of [["장소 긴 시험", "21:30", "23:00"], ["장소 긴 짧은 시험", "23:00", "23:15"]])
+  await post("/events", { kind: "meeting", title: t, startDate: day(d), endDate: day(d), startTime: a, endTime: b, unitId: unit, location: "본관 아주긴이름의시험용건물 지하1층 대강당 옆 작은 회의실과 그 옆방" });
 // 이름으로 모아 보기(내일): 시간이 겹치고 고친 일정(바뀐 것 3가지 → '외 1'), 겹치지 않고 고친 일정
 for (const t of [admin, tok.staff]) await call("/today-keywords", "PUT", { keywords: ["시험검색"] }, t);
 for (const [t, a, b, p2] of [["시험검색 겹치고 고친 회의", "15:30", "16:30", { startTime: "16:30", endTime: "17:30", location: "본관 시험실", title: "시험검색 겹치고 고친 회의 제목 바꿈 잘려야 함" }], ["시험검색 겹친 다른 회의", "17:00", "18:00"], ["시험검색 따로 고친 회의", "08:00", "09:00", { location: "별관" }]]) {

@@ -597,6 +597,11 @@ li:hover > .row-del, li:focus-within > .row-del { opacity: 1; }
 .tl__meta { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); }
 .tl__meta > span { display: inline-flex; align-items: center; gap: 3px; white-space: nowrap; }
 .tl__meta svg { width: 13px; height: 13px; }
+/* 긴 장소·캘린더 이름은 칸 너비에서 … 로 줄임 (전체는 마우스를 올리거나 눌러서 상세에서) */
+.tl__meta > .tl__long { min-width: 0; max-width: 100%; }
+.tl__meta > .tl__long svg { flex: none; }
+.tl__long > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl__ev.is-short .tl__meta { min-width: 0; flex-wrap: nowrap; overflow: hidden; }
 .tl__now { position: absolute; left: 48px; right: 0; height: 0; border-top: 2px solid var(--primary); z-index: 2; pointer-events: none; }
 .tl__now::before { content: ""; position: absolute; left: -5px; top: -6px; width: 10px; height: 10px; border-radius: 50%; background: var(--primary); }
 .tl__now span { position: absolute; left: -48px; top: -9px; font-size: 11px; font-weight: 700; color: var(--primary); background: var(--surface); }

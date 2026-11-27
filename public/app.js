@@ -2521,8 +2521,8 @@
           h("div", { class: "tl__evtop" }, [editTag(e), h("strong", { text: e.title }), h("span", { class: "tl__tags" }, [srcTag(e, true), ...tagChips(e.tagIds)])]),
           h("div", { class: "tl__meta" }, [
             h("span", { text: timeRange(e) }),
-            e.location ? h("span", {}, [icon("place"), e.location]) : null,
-            e.ext ? h("span", {}, [icon("cal"), e.calendarName]) : null,
+            e.location ? h("span", { class: "tl__long", title: e.location }, [icon("place"), h("span", { text: e.location })]) : null,
+            e.ext ? h("span", { class: "tl__long", title: e.calendarName }, [icon("cal"), h("span", { text: e.calendarName })]) : null,
             e.kind === "meeting" && (e.attendeeIds.length || (e.guestNames || []).length) ? h("span", { title: (e.guestNames || []).length ? `외부: ${e.guestNames.join(", ")}` : null }, [icon("people"), `${e.attendeeIds.length + (e.guestNames || []).length}명`]) : null,
             e.openTasks ? h("span", {}, [icon("check"), `${e.openTasks}`]) : null
           ])
