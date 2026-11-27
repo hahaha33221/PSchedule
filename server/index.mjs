@@ -2256,7 +2256,7 @@ const PERM_DEFAULT = {
   duties: { v: ["staff", "dept", "team"], e: [] },
   criteria: { v: ["staff", "dept", "team"], e: ["team"] },
   groups: { v: ["staff", "dept", "team"], e: ["team"] },
-  inspect: { v: ["staff", "dept", "team"], e: ["team"] },
+  inspect: { v: ["staff", "dept", "team"], e: ["dept", "team"] }, // 부서 봉사자는 새 메뉴(nav3)를 켰을 때 팀과 같은 검수 기록을 함께 씀
   cutting: { v: ["staff", "dept", "team"], e: ["staff", "dept", "team"] },
   shipments: { v: ["staff", "dept", "team"], e: ["staff", "dept"] },
   stock: { v: ["staff", "dept", "team"], e: ["staff", "dept"] },
@@ -3309,7 +3309,7 @@ function inspectInput(v, label) {
   return n;
 }
 // 봉사자에게 보일 메뉴 (관리자가 단계적으로 엶). 저장 안 했으면 입고·출고 중심
-const VOL_MENU_KEYS = ["home", "schedule", "training", "notices", "wbs", "req", "in", "out", "recovery", "moves2", "steps2"]; // moves2: 새 입고·출고 화면 (기본은 꺼 둠, 관리자가 켬) // 원자재 보유물량(material)은 없앰
+const VOL_MENU_KEYS = ["home", "schedule", "training", "notices", "wbs", "req", "in", "out", "recovery", "moves2", "steps2", "nav3"]; // nav3: 묵주 관리 분류의 새 메뉴(재료·완제품, 기본은 꺼 둠) // moves2: 새 입고·출고 화면 (기본은 꺼 둠, 관리자가 켬) // 원자재 보유물량(material)은 없앰
 const VOL_MENU_DEFAULT = ["home", "notices", "in", "out"];
 // 회의실 목록 (관리자가 등록). 일정 장소 글자에 이름이 들어 있으면 그 회의실 예약으로 봄
 const meetingRooms = () => { try { const v = JSON.parse(q.setting.get("meeting_rooms")?.value || "[]"); return Array.isArray(v) ? v.filter((x) => typeof x === "string") : []; } catch { return []; } };
@@ -3495,7 +3495,7 @@ function volGroupNameOf(itemId) {
 }
 // 지금 권한으로 이 변경을 볼 메뉴 (없으면 안 보임). role 은 보는 화면: dept · team · staff · admin
 function changeView(user, role) {
-  const r = opsRole(user), steps = user.role === "admin" || volMenu().includes("steps2"), menuOn = volMenu(), memo = new Map();
+  const r = opsRole(user), steps = user.role === "admin" || volMenu().includes("steps2") || volMenu().includes("nav3"), menuOn = volMenu(), memo = new Map();
   const once = (k, f) => { if (!memo.has(k)) memo.set(k, f()); return memo.get(k); };
   const row = (sql, id) => once(sql + id, () => db.prepare(sql).get(id));
   const vol = role === "dept" || role === "team";
@@ -3686,7 +3686,11 @@ async function api(req, res, path) {
       if (path.startsWith("/api/team/")) { if (await teamRoute(req, res, user, path, method)) return; return send(res, 404, { error: "찾을 수 없어요." }); }
       if (path.startsWith("/api/volunteer/")) return send(res, 403, { error: "팀 봉사자 계정으로는 볼 수 없어요." });
     } else if (path.startsWith("/api/team/issue")) { if (await teamRoute(req, res, user, path, method)) return; return send(res, 404, { error: "찾을 수 없어요." }); } // 이슈는 부서 봉사자도 (단계형 메뉴 '소통')
-    else if (path.startsWith("/api/team/")) return send(res, 403, { error: "부서 봉사자 계정으로는 볼 수 없어요." });
+    else if (/^\/api\/team\/inspection(s|-photos)(\/|$)/.test(path) && volMenu().includes("nav3")) { // 새 메뉴(nav3) '완제품 › 검수': 팀과 같은 검수 기록 (권한표의 검수 조회·등록을 따름)
+      if (!opsRole(user).can("inspect", method === "GET" ? "v" : "e")) return send(res, 403, { error: "검수 기록을 적을 수 없는 계정이에요." });
+      if (await inspectionRoute(req, res, user, path, method, "/api/team")) return;
+      return send(res, 404, { error: "찾을 수 없어요." });
+    } else if (path.startsWith("/api/team/")) return send(res, 403, { error: "부서 봉사자 계정으로는 볼 수 없어요." });
     if (path.startsWith("/api/volunteer/") && await volunteerRoute(req, res, user, path, method, url)) return;
     if (path === "/api/me" && method === "GET") return send(res, 200, { user: publicUser(user), team: [], units: [], tags: [], categories: [], calendars: [], unreadNotices: unreadOf(user) });
     // 공지: 봉사자에게 공개된 것만 읽기 (댓글·작성자 이름 없음)

@@ -11,7 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 
 const opt = (k) => process.argv.find((a) => a.startsWith(`--${k}=`))?.slice(k.length + 3);
 const WIDTHS = (opt("widths") || "360,390,768,1024,1440").split(",").map(Number);
-const SHOTS = opt("shots"), ONLY = opt("only"), ROLE = opt("role"), FOCUS = opt("focus"), LS = opt("ls"); // --role=dept (예전 화면은 dept0)
+const SHOTS = opt("shots"), ONLY = opt("only"), ROLE = opt("role"), FOCUS = opt("focus"), LS = opt("ls"); // --role=dept (예전 화면은 dept0, 새 메뉴는 dept3)
 const CHROME = [process.env.CHROME_PATH, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/usr/bin/chromium", "/usr/bin/chromium-browser"].find((p) => p && existsSync(p));
 if (!CHROME) { console.error("크롬을 찾을 수 없어요. CHROME_PATH 로 알려 주세요."); process.exit(2); }
 const ROOT = resolve(import.meta.dirname, ".."), TMP = mkdtempSync(join(tmpdir(), "ps-layout-"));
@@ -133,15 +133,18 @@ await mv("[A103] 옮겨 온 이재호 회의", day(2), { startDate: day(0), endD
 await mv("다른 날로 옮긴 아주 긴 제목의 회의 이름이 두 줄로 넘어가는지 보는 시험", day(0), { startDate: day(3), endDate: day(3) }, { startTime: "23:00", endTime: "23:50" });
 await mv("취소한 회의 시험", day(0), null, { startTime: "23:00", endTime: "23:50" });
 await call("/admin/rooms", "PUT", { rooms: ["A604호", "A4 소회의실 = 4층 소회의실", "비어 있는 아주 긴 이름의 회의실 이름", "A501", "A602", "B204"], skip: [], info: [{ name: "A604호", floor: 6, monitor: "yes", seats: "40명 이상", note: "빔프로젝터" }, { name: "A4 소회의실", floor: 4, monitor: "no", seats: "12명", note: "화이트보드 있음, 아주 긴 비고를 적었을 때도 화면 밖으로 넘치지 않는지 보는 시험" }, { name: "A501", monitor: "check", seats: "", note: "미방문" }, { name: "B204", monitor: "yes", seats: "20명 이상 30명까지도 가능함", note: "" }] });
-const setMenu = (steps) => call("/admin/vol-menu", "PUT", { menu: ["home", "schedule", "training", "notices", "wbs", "req", "in", "out", "recovery", "moves2", ...(steps ? ["steps2"] : [])] });
+// steps: true 단계형 메뉴 · false 예전 메뉴 · "nav3" 새 메뉴(묵주 관리 분류)
+const setMenu = (steps) => call("/admin/vol-menu", "PUT", { menu: ["home", "schedule", "training", "notices", "wbs", "req", "in", "out", "recovery", "moves2", ...(steps ? ["steps2"] : []), ...(steps === "nav3" ? ["nav3"] : [])] });
+const sfx = (steps) => (steps === "nav3" ? "3" : steps ? "" : "0"), tag = (steps) => (steps === "nav3" ? "(새 메뉴)" : steps ? "" : "(예전)");
 
 /* ---- 볼 화면: 주소와 눌러 열 것(글자) ---- */
 const TEAM = ["thome", "alerts", "tcal", "tedu1", "tedu2", "tmake1", "tmake2", "tins1", "tins2", "tins3", "tins4", "tins5", "vschedule", "tissues", "vboard", `vboard/${bp}`, "vnotices", "vcontacts"];
+const DEPT3 = ["vhome", "n3-thread-in", "n3-cut-in", "n3-cross-in", "ds1", "n3-thread-out", "n3-cut-out", "n3-cross-out", "df1", "n3-r-ins", "n3-r-ins/bad", "n3-r-pack", "n3-r-out", "df2", "n3-c-ins", "n3-c-ins/bad", "n3-c-pack", "n3-c-out", "dr1", "ds3", "dr2", "ds2", "vcontacts"];
 const DEPT = ["vhome", "alerts", "dr1", "dr2", "ds1", "ds2", "ds3", "df1", "df2", "vcontacts", "vtraining", "vissues", "vboard", "vnotices"];
 const OPS = ["dash", "mon", "ship-in", "ship-out", "stock", "cut", "buy", "contacts", "groups", "criteria", "duties"].map((k) => `ops/${k}`);
 const STAFF = ["today", `today/${day(1)}`, `today/${day(2)}`, `today/${day(6)}`, "dashboard", "tasks", "meetings", "memos", "projects", `projects/${pj}`, "stock", `stock/${led.ledger.id}`, "alerts", "notices", "orgchart", "contacts"];
 const RUNS = [
-  ["leader", true, TEAM], ["team", true, ["tedu1", "tedu2", "tmake2", "tins1"]], ["dept", true, DEPT],
+  ["leader", true, TEAM], ["team", true, ["tedu1", "tedu2", "tmake2", "tins1"]], ["dept", true, DEPT], ["dept", "nav3", DEPT3], ["leader", "nav3", ["thome", "tedu1", "tmake1", "tins3", "tins5"]],
   ["admin", true, ["alerts", "members", "org", "backup", "board", "volunteers", ...["edu", "roster", "issue", "training", "stock", "records", "inspect", "team", "wbs", "menu"].map((k) => `volunteers/${k}`), ...OPS, "ops/perms", ...STAFF.slice(0, 9)]],
   ["staff", true, [...STAFF, ...OPS.slice(0, 5)]],
   ["leader", false, ["thome", "alerts", "torgs", "trecov", "tinsp/records", "tinsp/shifts", "tissues", "tinsp/guide"]],
@@ -191,9 +194,19 @@ const FIND = `(() => {
 const settle = async () => { let prev = ""; for (let i = 0; i < 25; i++) { await sleep(90); const cur = await ev(`document.querySelector("main")?.querySelector(".loading, .spinner") ? "..." + Math.random() : String(document.querySelector("main")?.innerHTML.length || 0)`); if (cur === prev && cur !== "0") return; prev = cur; } };
 const problems = new Map(); let views = 0, dialogs = 0, clicks = 0;
 const note = (key, w, list) => { for (const p of new Set(list)) { const k = `${key} │ ${p.replace(/밖으로 -?\\d+~-?\\d+/, "밖으로")}`; problems.set(k, [...(problems.get(k) || []), w]); } };
+// 부서 봉사자의 검수 기록: 새 메뉴(nav3)를 켰을 때만 팀과 같은 검수 기록을 보고 적음
+{
+  const st = async (path, method = "GET", body) => (await fetch(`${B}/api${path}`, { method, headers: { Authorization: `Bearer ${tok.dept}`, "content-type": "application/json" }, body: body ? JSON.stringify(body) : undefined })).status;
+  await setMenu(true);
+  const off = [await st("/team/inspections"), await st("/team/inspections", "POST", {})];
+  await setMenu("nav3");
+  const on = [await st("/team/inspections"), await st("/team/inspections", "POST", {}), await st("/team/daily")];
+  if (off.some((x) => x !== 403)) note("부서 봉사자 검수 API(새 메뉴 꺼짐)", 0, [`막히지 않음 ${off}`]);
+  if (on[0] !== 200 || on[1] !== 400 || on[2] !== 403) note("부서 봉사자 검수 API(새 메뉴 켬)", 0, [`보기 ${on[0]} · 적기 ${on[1]}(빈 값이면 400) · 다른 팀 API ${on[2]}`]);
+}
 const shot = async (file) => { if (!SHOTS) return; mkdirSync(SHOTS, { recursive: true }); if (FOCUS) { await ev(`document.querySelector(${JSON.stringify(FOCUS)})?.scrollIntoView({ block: "start" }); scrollBy(0, -64); 1`); await sleep(150); } const r = await cdp("Page.captureScreenshot", { format: "jpeg", quality: 60 }); writeFileSync(join(SHOTS, `${file.replace(/[^\w가-힣.-]+/g, "_")}.jpg`), Buffer.from(r.data, "base64")); };
 for (const [role, steps, list] of RUNS) {
-  if (ROLE && ROLE !== role + (steps ? "" : "0")) continue;
+  if (ROLE && ROLE !== role + sfx(steps)) continue;
   await setMenu(steps);
   await cdp("Page.navigate", { url: `${B}/manifest.webmanifest` }); await sleep(150);
   await ev(`localStorage.clear(); sessionStorage.clear(); localStorage.setItem("ps.token", ${JSON.stringify(tok[role])}); ${LS ? `localStorage.setItem(${JSON.stringify(LS.split("=")[0])}, ${JSON.stringify(LS.split("=").slice(1).join("="))});` : ""} 1`);
@@ -201,13 +214,13 @@ for (const [role, steps, list] of RUNS) {
     await cdp("Emulation.setDeviceMetricsOverride", { width: w, height: w < 600 ? 800 : 900, deviceScaleFactor: 1, mobile: w < 600 });
     await cdp("Page.navigate", { url: `${B}/` }); await sleep(500);
     for (const path of list) {
-      const key = `${role}${steps ? "" : "(예전)"} ${path}`;
+      const key = `${role}${tag(steps)} ${path}`;
       if (ONLY && !key.includes(ONLY)) continue;
       await ev(`location.hash = "#/${path}"; document.querySelector(".push-ask")?.remove(); 1`); await settle();
       await ev(`for (const d of document.querySelectorAll("main details")) d.open = true; 1`); await sleep(120); // 접힌 칸도 펼쳐서
       views++;
       note(key, w, await ev(FIND));
-      await shot(`${role}${steps ? "" : "0"}-${path}-${w}`);
+      await shot(`${role}${sfx(steps)}-${path}-${w}`);
       // 입력 판: 이 화면의 적기·추가 단추와 첫 줄·첫 카드를 눌러 봄 (저장하지 않고 닫음)
       const pick = `(() => { const m = document.querySelector("main"); if (!m) return 0; const b = [...m.querySelectorAll("button")].filter((x) => x.getClientRects().length && !x.disabled && !x.matches(".pick-tile, .vm-card, .alert, [role=tab]") && /회의실 관리|^읽지못하는|적기|추가|등록|만들기|기록$|배분$|요청$|올리기|고치기|입력$|알려|물량 배정/.test(x.textContent.trim()) && !/지우기|모두 읽음|사진 올리기/.test(x.textContent)).slice(0, 4); const r = [...m.querySelectorAll("tr.stock-row, button.vm-card, li.stock-row")].filter((x) => x.getClientRects().length).slice(0, 2); window.__t = [...new Set([...b, ...r])]; return window.__t.length; })()`; // 다시 그려지면 단추가 바뀌므로 누를 때마다 다시 찾음
       const n = await ev(pick);
@@ -217,14 +230,14 @@ for (const [role, steps, list] of RUNS) {
         if (!label) continue;
         await sleep(160);
         const open = await ev(`!!document.querySelector("dialog[open]")`);
-        if (open) { dialogs++; note(`${key} › '${label}'`, w, await ev(FIND)); await shot(`${role}${steps ? "" : "0"}-${path}-${w}-창${i}`); }
+        if (open) { dialogs++; note(`${key} › '${label}'`, w, await ev(FIND)); await shot(`${role}${sfx(steps)}-${path}-${w}-창${i}`); }
         await ev(`(() => { document.querySelector("dialog[open]")?.close(); return 1; })()`);
         await sleep(60);
         if ((await ev("location.hash")) !== `#/${path}`) break;
       }
     }
   }
-  if (!ONLY) for (const g of GONE[role] || []) { await ev(`location.hash = "#/${g}"; 1`); await sleep(700); const at = await ev("location.hash"); if (at !== HOME[role]) note(`${role}${steps ? "" : "(예전)"} 없앤 주소 ${g}`, 360, [`${at} 로 감`]); }
+  if (!ONLY) for (const g of GONE[role] || []) { await ev(`location.hash = "#/${g}"; 1`); await sleep(700); const at = await ev("location.hash"); if (at !== HOME[role]) note(`${role}${tag(steps)} 없앤 주소 ${g}`, 360, [`${at} 로 감`]); }
   // 알림을 눌러 그 기록까지 가는지: 종류마다 하나씩 (지운 기록은 안내만)
   if (!ONLY || ONLY === "alerts") {
     await cdp("Emulation.setDeviceMetricsOverride", { width: 1024, height: 900, deviceScaleFactor: 1, mobile: false });
@@ -237,14 +250,14 @@ for (const [role, steps, list] of RUNS) {
       if (!ok) break;
       let r; for (let k = 0; k < 60; k++) { await sleep(150); r = await ev(`({ hash: location.hash, open: !!document.querySelector("dialog[open]"), flash: !!document.querySelector(".is-flash"), toast: [...document.querySelectorAll(".toast")].map((x) => x.textContent).join("/") })`); if (r.open || r.flash || /찾을 수/.test(r.toast)) break; if (k > 8 && (!c.refId || ["board", "proj", "ledger", "stockops", "criteria", "need"].includes(c.topic) || c.action === "delete" || c.link.startsWith("projects/"))) break; }
       clicks++;
-      if (opt("verbose")) console.log(`${role}${steps ? "" : "0"} 알림 ${c.label}(${c.topic}·${c.action}) '${c.title}' → ${r.hash} ${r.open ? "창" : r.flash ? "표시" : ""} ${r.toast}`);
-      if (/찾을 수/.test(r.toast) || r.hash === "#/alerts" || (c.refId && !r.open && !r.flash && !r.toast && !["board", "proj", "ledger", "stockops", "criteria", "need"].includes(c.topic) && !c.link.startsWith("projects/"))) note(`${role}${steps ? "" : "(예전)"} 알림 '${c.label}' ${c.topic} → ${r.hash}`, 1024, [r.toast || "기록이 안 열림"]);
+      if (opt("verbose")) console.log(`${role}${sfx(steps)} 알림 ${c.label}(${c.topic}·${c.action}) '${c.title}' → ${r.hash} ${r.open ? "창" : r.flash ? "표시" : ""} ${r.toast}`);
+      if (/찾을 수/.test(r.toast) || r.hash === "#/alerts" || (c.refId && !r.open && !r.flash && !r.toast && !["board", "proj", "ledger", "stockops", "criteria", "need"].includes(c.topic) && !c.link.startsWith("projects/"))) note(`${role}${tag(steps)} 알림 '${c.label}' ${c.topic} → ${r.hash}`, 1024, [r.toast || "기록이 안 열림"]);
     }
     await ev(`sessionStorage.removeItem("ps.volPreview"); document.querySelector("dialog[open]")?.close(); 1`); await cdp("Page.reload"); await sleep(600);
   }
   // 왼쪽 메뉴 서랍 (휴대폰)
   if (!ONLY) { await cdp("Emulation.setDeviceMetricsOverride", { width: 360, height: 800, deviceScaleFactor: 1, mobile: true }); await ev(`document.querySelector(".mobilebar .icon-btn")?.click(); 1`); await sleep(350);
-    note(`${role}${steps ? "" : "(예전)"} 메뉴`, 360, await ev(`(() => { const s = document.querySelector(".side"); const W = innerWidth; return [...s.querySelectorAll(".side__link, .nav-badge")].filter((e) => e.getClientRects().length && e.getBoundingClientRect().right > Math.min(W, s.getBoundingClientRect().right) + 1).map((e) => "메뉴 밖으로 '" + e.innerText.slice(0, 14) + "'"); })()`)); await shot(`${role}${steps ? "" : "0"}-메뉴-360`); }
+    note(`${role}${tag(steps)} 메뉴`, 360, await ev(`(() => { const s = document.querySelector(".side"); const W = innerWidth; return [...s.querySelectorAll(".side__link, .nav-badge")].filter((e) => e.getClientRects().length && e.getBoundingClientRect().right > Math.min(W, s.getBoundingClientRect().right) + 1).map((e) => "메뉴 밖으로 '" + e.innerText.slice(0, 14) + "'"); })()`)); await shot(`${role}${sfx(steps)}-메뉴-360`); }
 }
 for (const e of new Set(errors)) console.log(`오류 │ ${e.split("\n").slice(0, 2).join(" ")}`);
 for (const [k, w] of problems) console.log(`${k} │ ${[...new Set(w)].join("·")}px`);

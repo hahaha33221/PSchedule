@@ -937,6 +937,7 @@
     state.navOpen = open;
     app.querySelector(".shell").classList.toggle("nav-open", open);
     if (open) requestAnimationFrame(drawTagsNav); // 서랍을 열면 태그 줄 다시 계산
+    if (open) requestAnimationFrame(() => app.querySelector(".side__nav .side__link.is-active")?.scrollIntoView({ block: "nearest" })); // 메뉴가 길면 지금 화면이 보이게
   }
 
   function drawNav(active) {
@@ -5557,10 +5558,11 @@
     const team = preview ? preview === "team" : state.user.volKind === "team"; // 팀 봉사자(교육·검수): 같은 틀에 다른 메뉴
     if (!state.volMenu) { api("/ops/menu").then((r) => { state.volMenu = r.menu; render(); }).catch(() => { state.volMenu = VOL_MENU_DEFAULT; render(); }); }
     const steps = stepsOn(); // 단계형 메뉴 (미리보기는 늘, 봉사자는 '메뉴 공개'에서 켜면)
+    const nav3 = steps && nav3On(); // 새 메뉴 (묵주 관리 분류)
     layout.main = null;
     const seq = ++volSeq;
     const { name, id } = route();
-    const teamSteps = STEP_CATS.team.flatMap((c) => c.steps.map((x) => x[0])), deptSteps = STEP_CATS.dept.flatMap((c) => c.steps.map((x) => x[0]));
+    const teamSteps = STEP_CATS.team.flatMap((c) => c.steps.map((x) => x[0])), deptSteps = [...STEP_CATS.dept.flatMap((c) => c.steps.map((x) => x[0])), ...(nav3 ? N3_TABS : [])];
     // 합친 단계의 예전 주소 → 새 화면 (교육 결과 → 교육 일정·결과, 회수 받기 → 회수)
     if (team && steps && { tedu3: 1, tmake3: 1 }[name]) return location.replace({ tedu3: "#/tedu2", tmake3: "#/tmake2" }[name]);
     if (["tdocs", "vdeadlines"].includes(name)) return location.replace(team ? "#/thome" : "#/vhome"); // 없앤 화면(자료실·역할, 데드라인 일정)의 예전 주소
@@ -5600,11 +5602,27 @@
           h("span", { class: "side__stepnum", text: String(n) }), h("span", { class: "side__text", text: label }), chgBadge(chgN(k))]);
         const group = (ic, name, kids) => h("div", { class: "side__group side__cat" }, [h("div", { class: "side__catlabel" }, [icon(ic), h("span", { class: "side__text", text: name })]), ...kids.filter(Boolean)]);
         const sub = (id, label, ic, badge) => link(id, label, ic, true, null, badge);
+        // 새 메뉴(부서): 재료·완제품 › 입고·출고·묵주·손십자가(접고 펴기) › 화면. 지금 화면이 든 묶음은 늘 펼침
+        const n3Nav = () => N3_DEPT.map((c) => group(c.icon, c.name, [
+          ...(c.links || []).map(([k, l, ic]) => sub(k, l, ic)),
+          ...(c.kids || []).map((g) => {
+            const here = g.kids.some(([k]) => k === tab), sk = "ps.n3." + g.key, open = store.get(sk, "1") !== "0", kidsId = `n3-kids-${g.key}`;
+            return h("div", { class: "side__group n3-grp" + (here ? " is-here" : "") }, [
+              h("button", { class: "side__link side__link--sub n3-grp__row", type: "button", "aria-expanded": String(open), "aria-controls": kidsId, title: `${c.name} › ${g.name}`, onclick: () => { store.set(sk, open ? "0" : "1"); drawVolNav(); } }, [
+                h("span", { class: "n3-grp__chev" + (open ? " is-open" : ""), html: ICON.right, "aria-hidden": "true" }), h("span", { class: "side__text", text: g.name }),
+                !open && here ? h("span", { class: "n3-grp__here", text: "지금 여기" }) : null]),
+              h("div", { class: "side__kids n3-grp__kids", id: kidsId, hidden: !open }, g.kids.map(([k, l, ic]) => {
+                const on = k === tab;
+                return h("a", { class: "side__link side__link--sub n3-leaf" + (on ? " is-active" : ""), href: `#/${k}`, "aria-current": on ? "page" : null, title: `${g.name} › ${l}`, onclick: () => toggleNav(false) }, [icon(ic), h("span", { class: "side__text", text: l }), N3_SOON[k] ? h("span", { class: "n3-soon-tag", text: "준비 중" }) : chgBadge(k.startsWith("n3-") ? null : chgN(k))]);
+              }))
+            ]);
+          })
+        ]));
         return navBox.replaceChildren(...[
           link(team ? "thome" : "vhome", "홈 (오늘 할 일)", "home"),
           link("alerts", "알림", "clock"),
           team ? link("tcal", "캘린더", "cal") : null,
-          ...STEP_CATS[team ? "team" : "dept"].map((cat) => group(cat.icon, cat.name, cat.steps.map(([k, l], i) => stepLink(k, l, i + 1)))),
+          ...(nav3 && !team ? n3Nav() : stepCats(team ? "team" : "dept").map((cat) => group(cat.icon, cat.name, cat.steps.map(([k, l], i) => stepLink(k, l, i + 1))))),
           group("chat", "소통", team
             ? [sub("vschedule", "일정", "cal"), sub("tissues", "이슈", "note"), sub("vboard", "게시판", "chat"), sub("vnotices", "공지", "bell", state.unreadNotices)]
             : [sub("vcontacts", "연락·문의 기록", "phone"), sub("vtraining", "기본 교육", "check"), sub("vissues", "이슈", "note"), sub("vboard", "게시판", "chat"), sub("vnotices", "공지", "bell", state.unreadNotices)])
@@ -5623,10 +5641,11 @@
         volOn("notices") ? link("vnotices", "공지", "bell", false, null, state.unreadNotices) : null
       ].filter(Boolean));
     };
+    if (nav3) for (const c of N3_DEPT) for (const g of c.kids || []) if (g.kids.some(([k]) => k === tab)) store.set("ps.n3." + g.key, "1"); // 들어온 화면의 묶음은 펼침 (그 뒤 접을 수 있음)
     drawVolNav();
     state.drawVolNav = drawVolNav;
     // 이 메뉴를 열었으니 이 메뉴의 '새 변경' 숫자는 지움 (알림 화면은 '알림' 숫자)
-    seeMenu(tab === "alerts" ? "alarm" : tab === "vp" ? `vp/${id}/${vpView}` : tab);
+    seeMenu(tab === "alerts" ? "alarm" : tab === "vp" ? `vp/${id}/${vpView}` : n3Menu(tab));
     const account = h("button", { class: "side__account", type: "button", "aria-label": "내 계정" }, [
       h("span", { class: `avatar c${state.user.id % 6}`, text: state.user.name.replace(/\s/g, "").slice(-2) }),
       h("span", { class: "side__who" }, [h("strong", { text: state.user.name }), h("small", { text: (preview ? "관리자 미리보기 · " : "") + (team ? "팀 봉사자" : "부서 봉사자") })])
@@ -5670,8 +5689,9 @@
           brand(),
           kindBtn()
         ]),
-        preview ? h("div", { class: "preview-bar", role: "status" }, [h("span", {}, [icon("lock"), ` 관리자 미리보기 · ${team ? "팀" : "부서"} 봉사자 화면 · 적은 내용은 실제로 저장돼요`]),
-          h("span", { class: "actions" }, [h("button", { class: "btn btn--ghost btn--sm", type: "button", text: team ? "부서 화면 보기" : "팀 화면 보기", onclick: () => startVolPreview(team ? "dept" : "team") }), h("button", { class: "btn btn--sm btn--primary", type: "button", text: "미리보기 끝내기", onclick: endVolPreview })])]) : null,
+        preview ? h("div", { class: "preview-bar", role: "status" }, [h("span", {}, [icon("lock"), ` 관리자 미리보기 · ${team ? "팀" : "부서"} 봉사자 화면${nav3 ? " (새 메뉴)" : ""} · 적은 내용은 실제로 저장돼요`]),
+          h("span", { class: "actions" }, [h("button", { class: "btn btn--ghost btn--sm", type: "button", title: nav3 ? "봉사자에게 지금 공개된 메뉴로 봐요" : "'메뉴 공개'의 새 메뉴(묵주 관리 분류)로 봐요", text: nav3 ? "지금 공개된 메뉴로" : "새 메뉴로", onclick: () => { state.volNavOld = nav3; try { sessionStorage.setItem("ps.volNavOld", nav3 ? "1" : ""); } catch (e) { /* 이번만 */ } const to = team ? "#/thome" : "#/vhome"; if (location.hash !== to) location.hash = to; else render(); } }),
+            h("button", { class: "btn btn--ghost btn--sm", type: "button", text: team ? "부서 화면 보기" : "팀 화면 보기", onclick: () => startVolPreview(team ? "dept" : "team") }), h("button", { class: "btn btn--sm btn--primary", type: "button", text: "미리보기 끝내기", onclick: endVolPreview })])]) : null,
         main
       ])
     ]));
@@ -5689,7 +5709,7 @@
         try { state.opsCounts = (await api("/ops/counts")).counts; } catch (e) { return; }
         if (seq !== volSeq) return;
         drawVolNav();
-        if (stepOf(tab)) {
+        if (stepOf(tab) && !(nav3 && !team && n3Where(tab))) {
           const fresh = stepFrame(tab, [], team);
           main.querySelector(".stepbar")?.replaceWith(fresh[0]);
           main.querySelector(".stepbar__next")?.replaceWith(fresh[fresh.length - 1]);
@@ -5701,6 +5721,7 @@
         try { state.opsCounts = (await api("/ops/counts")).counts; } catch (e) { state.opsCounts = state.opsCounts || {}; }
         if (seq === volSeq) drawVolNav();
         const st = stepOf(tab);
+        if (nav3 && !team && n3Where(tab)) { const w = n3Where(tab), kids = n3Frame(tab, await n3Screen(tab, id)); if (seq === volSeq) document.title = `${w.label} · ${TITLE}`; return show(kids); }
         if (st) { document.title = `${st.cat.steps[st.i][1]} · ${TITLE}`; return show(stepFrame(tab, await stepScreen(tab), team)); }
         if (tab === (team ? "thome" : "vhome")) return show(await opsHome(team));
         if (tab === "vissues") return show(await teamIssues());
@@ -5954,6 +5975,7 @@
     ];
   }
   // 봉사자 프로젝트 관리는 묶음별: 묵주 / 손십자가
+  const ledgerKind = (l) => (/십자가/.test(l.name) ? "cross" : "thread"); // 입출고 대장: 묵주십자가 · 실타래
   const VOL_GROUPS = [{ key: "rosary", name: "묵주" }, { key: "cross", name: "손십자가", only: "recovery" }]; // only: 이 화면만 둠 (손십자가는 제품 관리만)
   async function volGroupPage(g, view, opts = {}) {
     if (g.key === "rosary") await loadRosaryWbs();
@@ -5981,7 +6003,9 @@
       if (volOn("moves2") || opts.steps) {
         const ref = ["stock_in", "stock_out"].includes(state.openRef?.topic) ? state.openRef : null; // 알림에서 온 기록 바로 열기
         if (ref) state.openRef = null;
-        return [...head(view === "in" ? "입고" : "출고"), volMovesPage(view, ledgers, { cut: view === "out" && g.key === "rosary" ? visits : null, ...(ref ? { ledgerId: ref.ledgerId, editId: ref.id } : {}) })];
+        // 새 메뉴(nav3): '실타래'·'묵주십자가'를 따로 누르면 그 대장만 (이름에 '십자가'가 있으면 십자가 대장). 맞는 대장이 없으면 모두
+        const mine = opts.ledger ? ledgers.filter((l) => ledgerKind(l) === opts.ledger) : ledgers;
+        return [...head(view === "in" ? "입고" : "출고"), volMovesPage(view, mine.length ? mine : ledgers, { cut: view === "out" && g.key === "rosary" && !opts.ledger ? visits : null, ...(ref ? { ledgerId: ref.ledgerId, editId: ref.id } : {}) })];
       }
       const moves = volMoveCard(view, ledgers, await volLedgerDetails(ledgers));
       // 묵주 출고: 1) 실타래(창고) 입출고와 2) 자른실(제작 수도회) 출고를 나눠서
@@ -5989,6 +6013,12 @@
       return [...head(view === "in" ? "입고" : "출고"), moves];
     }
     if (view === "recovery") return [...head(fgCfg(g.key).title), await volStageCard(grp.id, g.key)];
+    if (view === "cut") { // 새 메뉴 '재료 › 출고 › 자른실': 제작 수도회에 보낸 자른실 (예전 '출고'의 자른실 출고 탭과 같은 기록)
+      const cut = volCutCard(visits);
+      const t = cut.querySelector(".card__title"); if (t) t.textContent = "자른실 출고";
+      for (const p of cut.querySelectorAll("p.muted")) if (p.textContent.includes("1) 실타래 입출고")) p.textContent = "자른실은 제작 수도회에 보낸 실이에요. '고치기'를 누르면 '추가 전달 물량 › 수량 입력'으로 가요. 창고의 실타래(타래 단위)는 '재료 › 출고 › 실타래'에 적어요.";
+      return [cut];
+    }
     if (view === "material") { location.replace(`#/vp/${g.key}`); return []; } // 원자재 보유물량은 없앰 (예전 주소는 요약으로)
     // 요약
     const leaf = items.filter((i) => i.kind === "item");
@@ -7146,8 +7176,10 @@
         h("span", { class: "actions actions--start" }, h("button", { class: "btn btn--primary btn--sm", type: "button", text: "이 물량 검수 입력", onclick: () => mod.dialog(null, { recoveryId: w.id, source: w.org, checkedQty: w.qty - w.checked }) }))
       ]))))]) : null;
       const redraw = async (reload) => { if (reload && opts.waiting) waiting = (await api("/ops/inspect-waiting").catch(() => ({ waiting }))).waiting; fill(box, waitBox(), h("div", { class: "actions actions--start" }, h("button", { class: "btn btn--primary btn--sm", type: "button", onclick: () => mod.dialog(null) }, [icon("plus"), "검수 결과 입력"])), mod.view()); };
-      mod = inspModule("/team", redraw, "검수할 때마다 한 줄씩 적어요. 사진은 선택이고, 불량이 있으면 붙여 주면 좋아요. 불합격품은 수도회로 반송할지 현장에서 고칠지 골라 주세요.");
-      await mod.load(); redraw();
+      mod = inspModule("/team", redraw, opts.group ? `${opts.group} 검수를 할 때마다 한 줄씩 적어요. 팀 봉사자와 같은 검수 기록이에요. 사진은 선택이고, 불량이 있으면 붙여 주면 좋아요.` : "검수할 때마다 한 줄씩 적어요. 사진은 선택이고, 불량이 있으면 붙여 주면 좋아요. 불합격품은 수도회로 반송할지 현장에서 고칠지 골라 주세요.", opts.group);
+      await mod.load();
+      if (opts.group && !mod.only()) fill(box, h("div", { class: "card empty", text: `검수 기록에 '${opts.group}' 묶음이 아직 없어요. 봉사자 프로젝트에 '${opts.group}' 묶음이 생기면 여기서 팀 봉사자와 함께 적을 수 있어요.` }));
+      else redraw();
       openRef(["inspect", "defect"], (id) => mod.data().inspections.find((x) => x.id === id), mod.dialog);
     } else if (sub === "products") {
       const { records } = await api("/team/products");
@@ -7452,7 +7484,8 @@
   /* ---------- 봉사자 관리 (관리자): 일정·기본 교육 등록, 이수 현황 ---------- */
   // ---- 검수 기록 화면: 관리자 '봉사자 관리 › 검수 관리'와 팀 봉사자 '검수'가 같이 씀. base 는 "/admin" 또는 "/team"
   const REWORK_LABEL = { "": "정하지 않음", return: "수도회로 반송", fix: "현장 재작업", hold: "보관", discard: "폐기" };
-  function inspModule(base, redraw, intro) {
+  function inspModule(base, redraw, intro, only) { // only: 이 묶음(묵주·손십자가)만 먼저 보고 새 기록도 그 묶음으로 (새 메뉴 '완제품 › … › 검수')
+    let onlyId = null;
     let insp = null; // { groups, types, inspections }
     const inspFilter = { from: "", to: "", stage: "", item: "" };
     // ---- 검수 관리 (관리자 전용): 1차 수도회 자체 · 2차 외부 봉사자 · 3차 부서 봉사자, 불량 유형별 수량·사진, 클레임용 CSV·인쇄
@@ -7474,7 +7507,7 @@
     function inspDialog(x, preset = {}) {
       const err = errorLine();
       const group = h("select", {}, insp.groups.map((g) => h("option", { value: String(g.id), text: g.name })));
-      if (x) group.value = String(x.itemId);
+      if (x) group.value = String(x.itemId); else if (onlyId) group.value = String(onlyId);
       const stage = h("select", {}, [1, 2, 3].map((k) => h("option", { value: String(k), text: STAGE_LABEL[k] })));
       stage.value = String(x?.stage || 3);
       const date = h("input", { type: "date", value: x?.date || today() });
@@ -7586,8 +7619,9 @@
     }
     return { load: async () => {
       insp = await api(`${base}/inspections`);
+      if (only) { onlyId = insp.groups.find((g) => g.name === only)?.id || null; if (onlyId && !inspFilter.item) inspFilter.item = String(onlyId); }
       try { const [g, w] = await Promise.all([api("/ops/groups"), api("/ops/inspect-waiting")]); links = { groups: g.groups.filter((x) => x.active), waiting: w.waiting }; } catch (e) { links = null; }
-    }, view: inspView, dialog: inspDialog, data: () => insp };
+    }, view: inspView, dialog: inspDialog, data: () => insp, only: () => onlyId };
   }
   /* ---------- 봉사자 단계형 메뉴 (DB 설계 v2 1차): 카테고리 안에서 번호 매긴 단계, 한 화면에 한 가지 일 ----------
      관리자는 '봉사자 관리'에서 미리보기로 먼저 보고, 봉사자에게는 '메뉴 공개'의 '단계형 메뉴'를 켜야 보임 */
@@ -7603,12 +7637,91 @@
       { key: "fin", name: "완제품", icon: "check", steps: [["df1", "회수품 받기"], ["df2", "손십자가 제품 관리"]] }
     ]
   };
-  const STEP_TABS = [...STEP_CATS.team, ...STEP_CATS.dept].flatMap((c) => c.steps.map((s) => s[0]));
+  /* ---------- 새 메뉴 (nav3, '묵주 관리_261125' 분류 1단계) ----------
+     부서: 재료(입고·출고) · 완제품(묵주·손십자가) → 그 아래 화면, 3단계. 아직 없는 기능은 '준비 중'(만들 때 들어갈 내용을 보여 줌)
+     팀: 단계는 그대로, 묶음 이름만 두 개로 (교육 관리 · 수도원 완제품 관리)
+     봉사자에게는 '메뉴 공개'의 nav3 를 켜야 보임. 관리자 미리보기는 늘 새 메뉴 (미리보기 막대에서 '지금 공개된 메뉴'로 바꿔 볼 수 있음) */
+  const N3_DEPT = [
+    { name: "재료", icon: "db", kids: [
+      { key: "min", name: "입고", kids: [["n3-thread-in", "실타래", "list"], ["n3-cut-in", "자른실", "tag"], ["n3-cross-in", "묵주십자가", "star"]] },
+      { key: "mout", name: "출고", kids: [["ds1", "수녀원 전달 현황", "people"], ["n3-thread-out", "실타래", "list"], ["n3-cut-out", "자른실", "tag"], ["n3-cross-out", "묵주십자가", "star"]] }
+    ] },
+    { name: "완제품", icon: "check", kids: [
+      { key: "frosary", name: "묵주", kids: [["df1", "입고", "db"], ["n3-r-ins", "검수", "check"], ["n3-r-pack", "패키징", "folder"], ["n3-r-out", "출고", "arrow"]] },
+      { key: "fcross", name: "손십자가", kids: [["df2", "입고", "db"], ["n3-c-ins", "검수", "check"], ["n3-c-pack", "패키징", "folder"], ["n3-c-out", "출고", "arrow"]] }
+    ] },
+    { name: "택배", icon: "doc", links: [["dr1", "택배 수신", "doc"], ["ds3", "택배 발송", "doc"]] }
+  ];
+  const N3_TEAM = [
+    { key: "edu", name: "교육 관리", icon: "people", steps: STEP_CATS.team[0].steps },
+    { key: "fin", name: "수도원 완제품 관리", icon: "check", steps: [...STEP_CATS.team[1].steps, ...STEP_CATS.team[2].steps] }
+  ];
+  // 새 메뉴에서 그 화면의 자리: { path: ["재료", "입고"], label: "실타래" }. 예전 주소(#/dr2·#/ds2)도 가까운 자리로
+  const n3Where = (tab) => {
+    for (const c of N3_DEPT) {
+      for (const [k, l] of c.links || []) if (k === tab) return { path: [c.name], label: l };
+      for (const g of c.kids || []) for (const [k, l] of g.kids) if (k === tab) return { path: [c.name, g.name], label: l, group: g.key };
+    }
+    return { dr2: { path: ["재료", "입고"], label: "실타래 · 묵주십자가" }, ds2: { path: ["재료", "출고"], label: "실타래 · 자른실 · 묵주십자가" } }[tab] || null;
+  };
+  const N3_TABS = N3_DEPT.flatMap((c) => [...(c.links || []), ...(c.kids || []).flatMap((g) => g.kids)]).map((x) => x[0]).filter((k) => k.startsWith("n3-"));
+  // 새 메뉴 화면 → 알림 숫자를 셀 예전 메뉴 (입고·출고는 대장을 나눠 세지 않음)
+  const n3Menu = (tab) => (/^n3-(thread|cross)-in$/.test(tab) ? "dr2" : /^n3-(thread|cross|cut)-out$/.test(tab) ? "ds2" : tab);
+  const nav3On = () => (state.volPreview ? state.volNavOld !== true : volOn("nav3"));
+  const stepCats = (kind) => (kind === "team" && nav3On() ? N3_TEAM : STEP_CATS[kind]);
   const stepOf = (tab) => {
-    for (const k of ["team", "dept"]) for (const c of STEP_CATS[k]) { const i = c.steps.findIndex((s) => s[0] === tab); if (i >= 0) return { cat: c, i }; }
+    for (const k of ["team", "dept"]) for (const c of stepCats(k)) { const i = c.steps.findIndex((s) => s[0] === tab); if (i >= 0) return { cat: c, i }; }
     return null;
   };
-  const stepsOn = () => !!state.volPreview || volOn("steps2");
+  const stepsOn = () => !!state.volPreview || volOn("steps2") || volOn("nav3");
+  // 아직 없는 화면: 엑셀에 적힌, 만들 때 들어갈 내용
+  const N3_SOON = {
+    "n3-cut-in": { base: ["작업 대기 실타래 (실타래 출고에서 '내부 실 자르기'로 보낸 것)", "자른실 총 입고량 · 현 재고 (조직위 보관)", "색상별 재고 (가능하면)", "날짜별 입고 기록"], input: ["입고일", "작업한 실타래 수와 나온 자른실 수 (색상별)", "비고"] },
+    "n3-r-pack": { base: ["총 패키징 수량 (패키징 대기 수량과 함께)", "날짜별 · 수도원별 패키징 기록", "삽지 재고 · 디자인"], input: ["패키징 날짜", "수도원별 패키징 수량 (저장하면 출고 가능 수량으로)"], now: "df1" },
+    "n3-r-out": { base: ["총 출고량 · 현 출고 가능 수량", "날짜별 · 수도원별 출고 기록"], input: ["출고일", "출고 수량", "출고지"], now: "df1" },
+    "n3-c-pack": { base: ["총 패키징 수량 (패키징 대기 수량과 함께)", "날짜별 패키징 기록", "삽지 재고 · 디자인"], input: ["패키징 날짜", "패키징 수량"], now: "df2" },
+    "n3-c-out": { base: ["총 출고량 · 현 출고 가능 수량", "날짜별 출고 기록"], input: ["출고일", "출고 수량", "출고지"], now: "df2" }
+  };
+  function n3Soon(tab) {
+    const x = N3_SOON[tab] || { base: [], input: [] };
+    const list = (t, l) => h("section", { class: "card n3-soon__box" }, [h("h2", { class: "card__title", text: t }), l.length ? h("ul", { class: "n3-soon__list" }, l.map((y) => h("li", { text: y }))) : h("p", { class: "muted small", text: "정하는 중이에요." })]);
+    return [
+      h("div", { class: "card empty n3-soon" }, [h("strong", { text: "준비 중인 화면이에요" }), h("span", { class: "muted small", text: "아래 내용으로 만들 예정이에요. 먼저 메뉴 자리만 열어 두었어요." })]),
+      x.now ? h("p", { class: "muted small" }, ["지금은 ", h("a", { href: `#/${x.now}`, text: "입고 화면" }), "에서 단계를 '패키징 완료'·'출고'로 골라 적을 수 있어요."]) : null,
+      h("div", { class: "n3-soon__grid" }, [list("기본정보", x.base), list("입력", x.input)])
+    ];
+  }
+  // 완제품 › 묵주·손십자가 › 검수: 팀 봉사자와 같은 검수 기록. 탭: 검수 입력 · 불량 처리
+  async function n3Inspect(tab, sub) {
+    const group = tab === "n3-c-ins" ? "손십자가" : "묵주", bad = sub === "bad";
+    const seg = h("nav", { class: "seg ops-tabs", "aria-label": `${group} 검수` }, [["", "검수 입력"], ["bad", "불량 처리"]].map(([k, t]) => {
+      const on = (k === "bad") === bad;
+      return h("a", { class: "seg__link" + (on ? " is-active" : ""), href: `#/${tab}${k ? `/${k}` : ""}`, "aria-current": on ? "page" : null, text: t });
+    }));
+    return [seg, ...[].concat(bad ? await opsDefects({ group }) : await teamInspect("records", { bare: true, waiting: group === "묵주", group }))];
+  }
+  async function n3Screen(tab, sub) {
+    const g = VOL_GROUPS[0], st = { steps: true };
+    switch (tab) {
+      case "n3-thread-in": return volGroupPage(g, "in", { ...st, ledger: "thread" });
+      case "n3-cross-in": return volGroupPage(g, "in", { ...st, ledger: "cross" });
+      case "n3-thread-out": return volGroupPage(g, "out", { ...st, ledger: "thread" });
+      case "n3-cross-out": return volGroupPage(g, "out", { ...st, ledger: "cross" });
+      case "n3-cut-out": return volGroupPage(g, "cut", st);
+      case "n3-r-ins": case "n3-c-ins": return n3Inspect(tab, sub);
+      default: return N3_SOON[tab] ? n3Soon(tab) : stepScreen(tab);
+    }
+  }
+  // 새 메뉴 화면 틀: 위에 지금 자리(재료 › 입고), 제목
+  function n3Frame(tab, kids) {
+    const w = n3Where(tab);
+    if (!w) return kids;
+    return [
+      h("nav", { class: "n3-crumb muted small", "aria-label": "지금 위치" }, w.path.map((p, i) => h("span", {}, [i ? h("span", { class: "n3-crumb__sep", "aria-hidden": "true", text: "›" }) : null, p]))),
+      h("h1", { class: "vol__hello n3-title" }, [w.label, N3_SOON[tab] ? h("span", { class: "stock-tag", text: "준비 중" }) : null]),
+      ...[].concat(kids)
+    ];
+  }
   // 관리자 미리보기: 봉사자 화면을 관리자 계정으로 열어 봄 (이 브라우저 탭에서만)
   function startVolPreview(kind, to) {
     state.volPreview = kind; state.opsCounts = null; state.chg = null; state.chgKey = "";
@@ -7647,7 +7760,7 @@
   async function opsHome(team) {
     document.title = `오늘 할 일 · ${TITLE}`;
     const c = state.opsCounts || {};
-    const cats = STEP_CATS[team ? "team" : "dept"];
+    const cats = stepCats(team ? "team" : "dept");
     const card = (cat) => {
       const idx = cat.steps.findIndex(([k]) => c[k]);
       const [k, label] = cat.steps[idx >= 0 ? idx : 0];
@@ -8180,13 +8293,13 @@
     return [opsHint("내가 속한 검수 조와 맡은 수도회 물량을 확인하고, 검수를 시작하면 상태를 바꿔요."), box];
   }
   // ---- 불량 처리: 불량이 있는 검수 기록의 처리 방법(반송·현장 재작업) 정하기
-  async function opsDefects() {
+  async function opsDefects(opts = {}) { // opts.group: 이 묶음의 불량만 (새 메뉴)
     document.title = `불량 처리 · ${TITLE}`;
     let d = await api("/team/inspections"), view = "todo";
     const dname = (k) => d.criteria?.items?.find((i) => i.defectKey === k)?.defectName || k;
     const box = h("div", { class: "vm" });
     const draw = () => {
-      const bad = d.inspections.filter((x) => x.defectTotal > 0);
+      const bad = d.inspections.filter((x) => x.defectTotal > 0 && (!opts.group || x.group === opts.group));
       const todo = bad.filter((x) => !x.rework);
       const list = view === "todo" ? todo : bad;
       fill(box,
@@ -8930,7 +9043,7 @@
         ])))
       ])) : h("div", { class: "card empty", text: "아직 봉사자가 적은 완제품 기록이 없어요." });
       // 메뉴 공개: 고른 메뉴만 봉사자 화면에 보임 (단계적으로 엶)
-      const MENU_LABEL = { home: "대시보드", schedule: "일정", training: "기본 교육", notices: "공지", wbs: "WBS", req: "추가 전달 물량", in: "입고", out: "출고", recovery: "완제품·제품 관리", moves2: "새 입고·출고 화면 (휴대폰용)", steps2: "단계형 메뉴 (부서·팀 봉사자 새 메뉴)" };
+      const MENU_LABEL = { nav3: "새 메뉴 (묵주 관리 분류: 재료·완제품, 1단계)", home: "대시보드", schedule: "일정", training: "기본 교육", notices: "공지", wbs: "WBS", req: "추가 전달 물량", in: "입고", out: "출고", recovery: "완제품·제품 관리", moves2: "새 입고·출고 화면 (휴대폰용)", steps2: "단계형 메뉴 (부서·팀 봉사자 새 메뉴)" };
       const menuView = volMenuSet ? (() => {
         const boxes = volMenuSet.keys.map((k) => ({ k, el: h("input", { type: "checkbox", checked: volMenuSet.menu.includes(k) }) }));
         const ok = h("button", { class: "btn btn--primary", type: "button", text: "저장", onclick: () => busy(ok, async () => {
@@ -9036,7 +9149,7 @@
   /* ---------- 시작 ---------- */
   function render() {
     if (!state.user) return;
-    if (state.volPreview === undefined) { try { state.volPreview = sessionStorage.getItem("ps.volPreview") || ""; } catch (e) { state.volPreview = ""; } }
+    if (state.volPreview === undefined) { try { state.volPreview = sessionStorage.getItem("ps.volPreview") || ""; state.volNavOld = sessionStorage.getItem("ps.volNavOld") === "1"; } catch (e) { state.volPreview = ""; } }
     if (state.volPreview && !isAdmin()) state.volPreview = "";
     volunteerTheme(state.user.role === "volunteer" || !!state.volPreview, state.volPreview ? state.volPreview === "team" : state.user.volKind === "team");
     if (state.user.mustChangePassword) { layout.main = null; return renderForcedPassword(); }
